@@ -3522,6 +3522,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                       t === 'rect' ||
                       t === 'circle' ||
                       t === 'line' ||
+                      t === 'border' ||
                       t === 'table' ||
                       t === 'qr_code' ||
                       t === 'barcode'
@@ -3539,6 +3540,10 @@ export const EditorView: React.FC<EditorViewProps> = ({
                       setShowSearchBar((v) => !v);
                     } else if (t.startsWith('align_')) {
                       handleAlignSelected(t.replace('align_', '') as AlignMode);
+                    } else if (t.startsWith('distribute_')) {
+                      handleDistributeSelected(t.replace('distribute_', '') as 'horizontal' | 'vertical');
+                    } else if (t.startsWith('space_')) {
+                      handleEqualSpaceSelected(t.replace('space_', '') as 'horizontal' | 'vertical');
                     }
                   }}
                   className="px-2 py-0.5 rounded-lg border border-black/10 dark:border-white/12 glass-level-3 text-[#555555] dark:text-[#B5B5B5] hover:border-black/40 dark:hover:border-white/40 hover:text-[#101010] dark:hover:text-white capitalize transition-colors"

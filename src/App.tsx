@@ -26,6 +26,7 @@ import { SettingsView } from './components/SettingsView';
 import { SidebarNav } from './components/SidebarNav';
 import { TemplatesView } from './components/TemplatesView';
 import { WorkflowStudioView } from './components/WorkflowStudioView';
+import { UserManualView } from './components/UserManualView';
 import {
   AssetFontItem,
   AssetImageItem,
@@ -949,6 +950,10 @@ export default function App() {
                   onClearWorkspace={handleClearWorkspace}
                   onNavigate={setActiveSection}
                 />
+              )}
+
+              {activeSection === 'user-manual' && (
+                <UserManualView onNavigate={setActiveSection} />
               )}
 
               {activeSection === 'about' && (

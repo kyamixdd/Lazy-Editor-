@@ -15,6 +15,7 @@ export type NavSection =
   | 'export-center'
   | 'pdf-utilities'
   | 'settings'
+  | 'user-manual'
   | 'about';
 
 export type MeasurementUnit = 'pt' | 'mm' | 'cm' | 'in' | 'px';

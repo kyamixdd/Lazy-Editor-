@@ -1,6 +1,7 @@
 import { DocumentElement, PDFProject } from '../types/pdfStudio';
 import { base64ToUint8Array, renderPdfPagesForStudio } from './pdfRenderer';
 import { appendOperationLog } from './projectStorage';
+import { getGeminiRequestHeaders } from './geminiKey';
 
 export interface AiAnalysisResponseResult {
   ok: boolean;
@@ -40,7 +41,7 @@ export function formatFriendlyAiError(
     return {
       code: 'MISSING_API_KEY',
       message:
-        'Gemini API key is not configured in Settings > Secrets. Local PDF Scan and all editing, bulk generation, and export features remain fully active.',
+        'Gemini API key is not configured in Settings > AI & Gemini. Local PDF Scan and all editing, bulk generation, and export features remain fully active.',
     };
   }
   if (code === 'AI_REQUEST_INVALID' || status === 400) {
@@ -58,7 +59,7 @@ export function formatFriendlyAiError(
     return {
       code: 'API_KEY_INVALID',
       message:
-        'Gemini API key lacks permission or is invalid. Verify Settings > Secrets or continue editing using Local PDF Scan.',
+        'Gemini API key lacks permission or is invalid. Verify Settings > AI & Gemini or continue editing using Local PDF Scan.',
     };
   }
   return {
@@ -151,7 +152,7 @@ export async function runOptionalAiEnhancedAnalysis(
 
     const response = await fetch('/api/ai/analyze-pdf', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getGeminiRequestHeaders() },
       body: JSON.stringify({
         fileName: project.sourcePdfName || project.name,
         pages: pagesPayload,

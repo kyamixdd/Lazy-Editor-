@@ -137,6 +137,8 @@ export default function App() {
   const [batchJobs, setBatchJobs] = useState<BatchJob[]>([]);
   const [batchCheckpoints, setBatchCheckpoints] = useState<BatchCheckpoint[]>([]);
   const [blueprints, setBlueprints] = useState<ProductionBlueprint[]>([]);
+  const [commandBlueprintId, setCommandBlueprintId] = useState<string | null>(null);
+  const [commandWorkflowId, setCommandWorkflowId] = useState<string | null>(null);
   const [serialBatches, setSerialBatches] = useState<SerialBatchRecord[]>([]);
   const [passports, setPassports] = useState<DocumentIntegrityPassport[]>([]);
   const [exportProfiles, setExportProfiles] = useState<ExportNamingProfile[]>([]);
@@ -830,6 +832,7 @@ export default function App() {
                 <BlueprintStudioView
                   project={activeProject}
                   blueprints={blueprints}
+                  initialBlueprintId={commandBlueprintId}
                   onSaveBlueprint={handleSaveBlueprint}
                   onDeleteBlueprint={handleDeleteBlueprint}
                   onUpdateProject={handleSaveProject}
@@ -897,6 +900,7 @@ export default function App() {
                   profiles={automationProfiles}
                   serialBatches={serialBatches}
                   workflows={workflows}
+                  initialWorkflowId={commandWorkflowId}
                   onSaveWorkflow={handleSaveWorkflow}
                   onDeleteWorkflow={handleDeleteWorkflow}
                   onUpdateProject={handleSaveProject}
@@ -971,6 +975,15 @@ export default function App() {
           }
           onNavigate={setActiveSection}
           onOpenProject={handleOpenProject}
+          onSelectBlueprint={(blueprint) => {
+            setCommandBlueprintId(blueprint.id);
+            setActiveSection('blueprint-studio');
+          }}
+          onSelectWorkflow={(workflow) => {
+            setCommandWorkflowId(workflow.id);
+            setActiveSection('workflow-studio');
+          }}
+          onRunProfile={(profile) => handleRunProfile(profile)}
         />
       </div>
     </MotionConfig>

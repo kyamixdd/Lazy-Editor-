@@ -634,8 +634,8 @@ Instructions:
       elements: allElements,
     });
   } catch (err) {
-    console.error('AI analyze-pdf error:', err);
     const classified = classifyGeminiHttpError(err);
+    console.warn('AI analyze-pdf request failed:', classified.code);
     res.status(classified.status).json({ error: classified.error, code: classified.code });
   }
 });
@@ -772,8 +772,8 @@ Rules:
     const plan = JSON.parse((response.text || '{}').trim());
     res.json(plan);
   } catch (err) {
-    console.error('AI edit-command error:', err);
     const classified = classifyGeminiHttpError(err);
+    console.warn('AI edit-command request failed:', classified.code);
     res.status(classified.status).json({ error: classified.error, code: classified.code });
   }
 });

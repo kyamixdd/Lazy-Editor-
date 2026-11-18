@@ -1406,9 +1406,12 @@ export const EditorView: React.FC<EditorViewProps> = ({
             : el
         );
       } else if (op.action === 'delete' && op.targetId) {
-        next = next.filter((el) => el.id !== op.targetId);
+        const target = next.find((el) => el.id === op.targetId);
+        if (target && !target.locked) {
+          next = next.filter((el) => el.id !== op.targetId);
+        }
       } else if (op.action === 'duplicate' && op.targetId) {
-        const src = next.find((el) => el.id === op.targetId);
+        const src = next.find((el) => el.id === op.targetId && !el.locked);
         if (src) {
           next.push({
             ...structuredClone(src),

@@ -237,11 +237,16 @@ export default function App() {
     }
   };
 
-  const handleProjectCreated = (
+  const handleProjectCreated = async (
     project: PDFProject,
     openImmediately: boolean
   ) => {
-    void handleSaveProject(project);
+    const saved = await handleSaveProject(project);
+    if (!saved.ok) {
+      setProjects((prev) => prev.filter((item) => item.id !== project.id));
+      console.error('Project was not opened because local persistence failed:', saved.error);
+      return;
+    }
     setActiveProjIdState(project.id);
     setActiveProjectId(project.id);
     if (openImmediately) {

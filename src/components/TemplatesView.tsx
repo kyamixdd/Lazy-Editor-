@@ -3,12 +3,16 @@ import {
   Copy,
   Download,
   Edit3,
+  Fingerprint,
+  Folder,
   FolderOpen,
   History,
   Layers,
   Play,
   Plus,
+  Search,
   Star,
+  Tag,
   Trash2,
   Upload,
   Wand2,
@@ -19,8 +23,12 @@ import {
   ProjectVersionSnapshot,
   TemplateAutomationProfile,
 } from '../types/pdfStudio';
-import { buildProfileFromProject } from '../utils/templateProfileEngine';
+import {
+  buildProfileFromProject,
+  computeTemplateDna,
+} from '../utils/templateProfileEngine';
 import { GlassButton, GlassCard, GlassSegmentedControl } from './glass';
+import { TemplateDnaModal } from './TemplateDnaModal';
 import { VersionHistoryModal } from './VersionHistoryModal';
 
 interface TemplatesViewProps {
@@ -57,17 +65,46 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
   const [filter, setFilter] = useState<
     'all' | 'favorites' | 'templates' | 'projects' | 'profiles'
   >('all');
+  const [selectedFolder, setSelectedFolder] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState<string>('');
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameText, setRenameText] = useState('');
+  const [editingMetaId, setEditingMetaId] = useState<string | null>(null);
+  const [folderInput, setFolderInput] = useState('');
+  const [tagsInput, setTagsInput] = useState('');
   const [historyProjectId, setHistoryProjectId] = useState<string | null>(null);
+  const [dnaProfileId, setDnaProfileId] = useState<string | null>(null);
   const lastHistoryProjectRef = useRef<PDFProject | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
 
+  const uniqueFolders = Array.from(
+    new Set(projects.map((p) => p.folderName?.trim()).filter(Boolean) as string[])
+  ).sort();
+
+  const q = searchQuery.trim().toLowerCase();
   const filtered = projects.filter((p) => {
-    if (filter === 'favorites') return Boolean(p.isFavorite);
-    if (filter === 'templates') return p.isTemplate;
-    if (filter === 'projects') return !p.isTemplate;
+    if (filter === 'favorites' && !p.isFavorite) return false;
+    if (filter === 'templates' && !p.isTemplate) return false;
+    if (filter === 'projects' && p.isTemplate) return false;
     if (filter === 'profiles') return false;
+    if (selectedFolder !== 'all') {
+      if (selectedFolder === '__unassigned__') {
+        if (p.folderName?.trim()) return false;
+      } else if ((p.folderName || '').trim() !== selectedFolder) {
+        return false;
+      }
+    }
+    if (q) {
+      const hay = [
+        p.name,
+        p.description,
+        p.folderName || '',
+        ...(p.tags || []),
+      ]
+        .join(' ')
+        .toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
     return true;
   });
 
@@ -253,7 +290,7 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
         </div>
       </div>
 
-      {/* Filter Tabs */}
+      {/* Filter Tabs + Folder & Tag Search */}
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
         <GlassSegmentedControl
           value={filter}
@@ -274,10 +311,40 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
             },
           ]}
         />
-        <span className="text-xs text-[#888888] dark:text-[#858585] tabular-nums shrink-0">
-          {filter === 'profiles' ? automationProfiles.length : filtered.length}{' '}
-          items
-        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          {filter !== 'profiles' && (
+            <>
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[#888888]" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search name, folder, tag..."
+                  className="pl-8 pr-3 py-1.5 rounded-lg border studio-input text-xs w-48"
+                />
+              </div>
+              <select
+                value={selectedFolder}
+                onChange={(e) => setSelectedFolder(e.target.value)}
+                aria-label="Filter by folder"
+                className="px-2.5 py-1.5 rounded-lg border studio-select text-xs"
+              >
+                <option value="all">All Folders</option>
+                <option value="__unassigned__">Unassigned</option>
+                {uniqueFolders.map((f) => (
+                  <option key={f} value={f}>
+                    {f}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
+          <span className="text-xs text-[#888888] dark:text-[#858585] tabular-nums shrink-0">
+            {filter === 'profiles' ? automationProfiles.length : filtered.length}{' '}
+            items
+          </span>
+        </div>
       </div>
 
       {/* Automation Profiles View (Module 3) */}
@@ -338,6 +405,9 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
                         <div>
                           Export: {prof.exportConfig.mode.replace(/_/g, ' ')} ({prof.exportConfig.dpi} DPI)
                         </div>
+                        <div className="font-mono text-[10px] text-[#555555] dark:text-[#B5B5B5]">
+                          DNA: {(prof.dna || computeTemplateDna(prof)).fingerprintHash}
+                        </div>
                       </div>
                     </div>
 
@@ -362,6 +432,14 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
                             Apply to Active
                           </button>
                         )}
+                        <button
+                          type="button"
+                          title="Template DNA & Version Comparison"
+                          onClick={() => setDnaProfileId(prof.id)}
+                          className="p-1.5 rounded-lg text-[#555555] hover:text-[#101010] dark:text-[#B5B5B5] dark:hover:text-white hover:bg-black/[0.04] dark:hover:bg-white/[0.08]"
+                        >
+                          <Fingerprint className="w-3.5 h-3.5" />
+                        </button>
                         <button
                           type="button"
                           title="Export Profile JSON"
@@ -486,6 +564,75 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
                       <span> · </span>
                       <span>{proj.elements.length} elements</span>
                     </div>
+
+                    {(proj.folderName || (proj.tags && proj.tags.length > 0)) && (
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px]">
+                        {proj.folderName && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-black/15 dark:border-white/15 bg-black/[0.04] dark:bg-white/[0.06] text-[#101010] dark:text-white font-medium">
+                            <Folder className="w-2.5 h-2.5" />
+                            {proj.folderName}
+                          </span>
+                        )}
+                        {(proj.tags || []).slice(0, 4).map((t) => (
+                          <span
+                            key={t}
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border border-black/10 dark:border-white/12 text-[#555555] dark:text-[#B5B5B5]"
+                          >
+                            #{t}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {editingMetaId === proj.id && (
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          const nextTags = tagsInput
+                            .split(',')
+                            .map((s) => s.trim())
+                            .filter(Boolean);
+                          onSaveProject({
+                            ...proj,
+                            folderName: folderInput.trim() || undefined,
+                            tags: nextTags.length > 0 ? nextTags : undefined,
+                            updatedAt: new Date().toISOString(),
+                          });
+                          setEditingMetaId(null);
+                        }}
+                        className="mt-2.5 p-2 rounded-xl border border-black/10 dark:border-white/12 bg-[#F7F7F7] dark:bg-[#0B0B0B] space-y-1.5 text-[11px]"
+                      >
+                        <input
+                          type="text"
+                          value={folderInput}
+                          onChange={(e) => setFolderInput(e.target.value)}
+                          placeholder="Folder (e.g. Invoices / 2025)"
+                          className="w-full px-2 py-1 rounded-lg border studio-input"
+                        />
+                        <input
+                          type="text"
+                          value={tagsInput}
+                          onChange={(e) => setTagsInput(e.target.value)}
+                          placeholder="Tags comma-separated (e.g. tax, duplex)"
+                          className="w-full px-2 py-1 rounded-lg border studio-input"
+                        />
+                        <div className="flex justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setEditingMetaId(null)}
+                            className="px-2 py-1 rounded-lg text-[#888888] hover:text-[#101010] dark:hover:text-white"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="submit"
+                            className="px-2.5 py-1 rounded-lg bg-[#101010] text-white dark:bg-white dark:text-[#050505] font-medium"
+                          >
+                            Save Organization
+                          </button>
+                        </div>
+                      </form>
+                    )}
                   </div>
 
                   <div className="mt-4 pt-3 border-t border-black/10 dark:border-white/12 flex flex-wrap items-center justify-between gap-2">
@@ -502,6 +649,22 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
                     </button>
 
                     <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        title="Organize folder & tags"
+                        onClick={() => {
+                          if (editingMetaId === proj.id) {
+                            setEditingMetaId(null);
+                          } else {
+                            setEditingMetaId(proj.id);
+                            setFolderInput(proj.folderName || '');
+                            setTagsInput((proj.tags || []).join(', '));
+                          }
+                        }}
+                        className="min-h-[38px] min-w-[38px] desktop:min-h-0 desktop:min-w-0 flex items-center justify-center p-1.5 rounded-lg text-[#555555] hover:text-[#101010] dark:text-[#B5B5B5] dark:hover:text-white hover:bg-black/[0.04] dark:hover:bg-white/[0.08] touch-manipulation"
+                      >
+                        <Tag className="w-3.5 h-3.5" />
+                      </button>
                       <button
                         type="button"
                         title="Rename"
@@ -611,6 +774,15 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
           }}
         />
       )}
+
+      <TemplateDnaModal
+        isOpen={Boolean(dnaProfileId)}
+        profile={automationProfiles.find((p) => p.id === dnaProfileId) || null}
+        activeProject={activeProject}
+        onClose={() => setDnaProfileId(null)}
+        onUpdateProfile={(updated) => onSaveProfile?.(updated)}
+        onApplyToActive={onApplyProfileToActive}
+      />
     </div>
   );
 };

@@ -1,5 +1,7 @@
 import { AssetFontItem, PDFProject, ValidationIssue } from '../types/pdfStudio';
+import { validateBarcodeSpec } from './barcodeEngine';
 import { computeSheetLayout } from './geometryEngine';
+import { getMinTemplateFontPt } from './printOptimizerEngine';
 import { generateSerialPreview } from './serialEngine';
 import { computeTypographyLayout } from './typographyEngine';
 import { validatePageConfigDimensions } from './units';
@@ -239,6 +241,31 @@ export function validateProject(
       }
     }
 
+    // Barcode & QR scannability check (Module 8)
+    if (el.type === 'barcode' || el.type === 'qr_code') {
+      const bReport = validateBarcodeSpec(el);
+      for (const bErr of bReport.errors) {
+        issues.push({
+          id: `qc-barcode-err-${el.id}-${issues.length}`,
+          severity: 'error',
+          category: 'missing_field',
+          elementId: el.id,
+          pageNumber: el.pageNumber,
+          message: `Barcode/QR on Page ${el.pageNumber}: ${bErr}`,
+        });
+      }
+      for (const bWarn of bReport.warnings) {
+        issues.push({
+          id: `qc-barcode-warn-${el.id}-${issues.length}`,
+          severity: 'warning',
+          category: 'missing_field',
+          elementId: el.id,
+          pageNumber: el.pageNumber,
+          message: `Barcode/QR on Page ${el.pageNumber}: ${bWarn}`,
+        });
+      }
+    }
+
     // Flagged for manual AI review
     if (el.needsReview) {
       issues.push({
@@ -356,7 +383,7 @@ export function validateProject(
         autoFixLabel: 'Enable Fit-to-Page',
       });
     }
-    if (layout.hasClipping && layout.scalingMode !== 'fill_cell') {
+      if (layout.hasClipping && layout.scalingMode !== 'fill_cell') {
       issues.push({
         id: 'qc-imposition-overflow',
         severity: 'error',
@@ -364,6 +391,23 @@ export function validateProject(
         pageNumber: 1,
         message: `Placed content (${Math.round(layout.slots[0]?.placedWidthPt || 0)}×${Math.round(layout.slots[0]?.placedHeightPt || 0)}pt) clips or extends beyond cell/page boundaries.`,
         autoFixLabel: 'Enable Fit-to-Page',
+      });
+    }
+  }
+
+  // Scaled readability floor check (Module 5)
+  if (layout.slots.length > 0) {
+    const minScale = Math.min(...layout.slots.map((s) => s.scale));
+    const minOrigFontPt = getMinTemplateFontPt(project);
+    const minScaledFontPt = Number((minOrigFontPt * minScale).toFixed(2));
+    const minThreshold = project.printOptimization?.minReadableFontPt ?? 4.5;
+    if (minScaledFontPt < minThreshold) {
+      issues.push({
+        id: 'qc-scaled-readability',
+        severity: project.printOptimization?.minReadableFontPt ? 'error' : 'warning',
+        category: 'text_overflow',
+        pageNumber: 1,
+        message: `Smallest font (${minOrigFontPt.toFixed(1)}pt) scales to ${minScaledFontPt}pt under ${layout.columns}×${layout.rows} imposition, below ${minThreshold}pt readability minimum.`,
       });
     }
   }
@@ -511,6 +555,23 @@ export function validateProject(
         message: `Repeated field "${fKey}" has inconsistent typography (${mismatch.fontFamily} ${mismatch.fontSize}pt vs ${base.fontFamily} ${base.fontSize}pt).`,
       });
     }
+  }
+
+  // 10. Pending (un-applied) visual redactions check
+  const pendingRedactions = visibleElements.filter(
+    (e) => e.type === 'redaction' && !e.redactionApplied
+  );
+  if (pendingRedactions.length > 0) {
+    issues.push({
+      id: 'qc-pending-redactions',
+      severity: 'warning',
+      category: 'pending_redaction',
+      pageNumber: pendingRedactions[0].pageNumber,
+      elementId: pendingRedactions[0].id,
+      message: `${pendingRedactions.length} marked redaction zone(s) have not been permanently sanitized. Underlying PDF text remains extractable until True Redaction is applied.`,
+      detail: 'Click "Apply True Redactions" to strip underlying objects and burn opaque masks into the output.',
+      autoFixLabel: 'Apply True Redactions',
+    });
   }
 
   return issues;

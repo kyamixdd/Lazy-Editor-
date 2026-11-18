@@ -45,10 +45,12 @@ import {
   PenTool,
   Pencil,
   Plus,
+  QrCode,
   Redo2,
   Replace,
   Ruler,
   Save,
+  ScanBarcode,
   ScanLine,
   Search,
   ShieldAlert,
@@ -242,6 +244,8 @@ export const EditorView: React.FC<EditorViewProps> = ({
   const [findQuery, setFindQuery] = useState('');
   const [replaceQuery, setReplaceQuery] = useState('');
   const [thumbnails, setThumbnails] = useState<Record<number, string>>({});
+  const thumbnailsRef = useRef<Record<number, string>>({});
+  thumbnailsRef.current = thumbnails;
   const [pageBgUrl, setPageBgUrl] = useState<string | undefined>(
     project.originalPages[0]?.previewImageDataUrl
   );
@@ -348,7 +352,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
           );
           continue;
         }
-        if (thumbnails[p]) continue;
+        if (thumbnailsRef.current[p]) continue;
         const srcPage = meta?.sourcePdfPageNumber || p;
         const url = await renderPageThumbnail(project.sourcePdfBase64!, srcPage);
         if (!cancelled && url) {
@@ -362,13 +366,13 @@ export const EditorView: React.FC<EditorViewProps> = ({
     };
   }, [
     showPagesDrawer,
+    showMobileThumbStrip,
     editorMode,
     viewport.isMobile,
     project.id,
     project.pageCount,
     project.originalPages,
     project.sourcePdfBase64,
-    thumbnails,
   ]);
 
   // Sync page preview image when page changes (respecting duplicated sourcePdfPageNumber)
@@ -967,7 +971,15 @@ export const EditorView: React.FC<EditorViewProps> = ({
   };
 
   const addNewElement = (
-    kind: 'text' | 'rect' | 'circle' | 'line' | 'border' | 'table'
+    kind:
+      | 'text'
+      | 'rect'
+      | 'circle'
+      | 'line'
+      | 'border'
+      | 'table'
+      | 'qr_code'
+      | 'barcode'
   ) => {
     const id = `el-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const base: DocumentElement = {
@@ -981,20 +993,52 @@ export const EditorView: React.FC<EditorViewProps> = ({
           ? 'border'
           : kind === 'table'
           ? 'table'
+          : kind === 'qr_code'
+          ? 'qr_code'
+          : kind === 'barcode'
+          ? 'barcode'
           : 'shape',
       pageNumber: currentPage,
       x: 72,
       y: 90,
-      width: kind === 'table' ? 320 : kind === 'line' ? 220 : 150,
-      height: kind === 'table' ? 96 : kind === 'line' ? 12 : kind === 'text' ? 28 : 80,
+      width:
+        kind === 'table'
+          ? 320
+          : kind === 'line'
+          ? 220
+          : kind === 'barcode'
+          ? 160
+          : kind === 'qr_code'
+          ? 84
+          : 150,
+      height:
+        kind === 'table'
+          ? 96
+          : kind === 'line'
+          ? 12
+          : kind === 'text'
+          ? 28
+          : kind === 'barcode'
+          ? 54
+          : kind === 'qr_code'
+          ? 84
+          : 80,
       rotation: 0,
-      text: kind === 'text' ? 'New Text Block' : '',
+      text:
+        kind === 'text'
+          ? 'New Text Block'
+          : kind === 'qr_code'
+          ? 'https://pdfstudio.local/verify'
+          : kind === 'barcode'
+          ? 'INV-0001'
+          : '',
       fontFamily: 'Helvetica',
       fontSize: 12,
       fontWeight: 'normal',
       fontStyle: 'normal',
       color: '#111827',
-      backgroundColor: 'transparent',
+      backgroundColor:
+        kind === 'qr_code' || kind === 'barcode' ? '#FFFFFF' : 'transparent',
       borderColor: '#1E293B',
       borderWidth: 1.2,
       align: 'left',
@@ -1005,6 +1049,18 @@ export const EditorView: React.FC<EditorViewProps> = ({
       confidence: 1,
       needsReview: false,
       isUserAdded: true,
+      barcodeFormat:
+        kind === 'qr_code' ? 'qr' : kind === 'barcode' ? 'code128' : undefined,
+      barcodeValue:
+        kind === 'qr_code'
+          ? 'https://pdfstudio.local/verify'
+          : kind === 'barcode'
+          ? 'INV-0001'
+          : undefined,
+      barcodeIncludeText: kind === 'barcode' ? true : undefined,
+      qrErrorCorrection: kind === 'qr_code' ? 'M' : undefined,
+      barcodeQuietZonePt:
+        kind === 'qr_code' || kind === 'barcode' ? 6 : undefined,
       shapeKind:
         kind === 'circle' ? 'circle' : kind === 'rect' || kind === 'border' ? 'rect' : undefined,
       tableData:
@@ -1072,13 +1128,18 @@ export const EditorView: React.FC<EditorViewProps> = ({
       e.pageNumber > currentPage ? { ...e, pageNumber: e.pageNumber + 1 } : e
     );
 
-    onUpdateProject({
-      ...project,
-      pageCount: project.pageCount + 1,
-      originalPages: nextOriginalPages,
-      elements: [...shiftedElements, ...clonedPageElements],
-      updatedAt: new Date().toISOString(),
-    });
+    commitProjectChange(
+      {
+        ...project,
+        pageCount: project.pageCount + 1,
+        originalPages: nextOriginalPages,
+        elements: [...shiftedElements, ...clonedPageElements],
+      },
+      `Duplicate Page ${currentPage}`,
+      'page_structure',
+      'Duplicate Page',
+      `Duplicated Page ${currentPage} to Page ${newPageNum}`
+    );
     setCurrentPage(newPageNum);
     setSelectedIds([]);
   };
@@ -1319,18 +1380,24 @@ export const EditorView: React.FC<EditorViewProps> = ({
 
   const handleUpdatePageConfig = (patch: Partial<PageConfig>) => {
     const nextPageConfig = { ...project.pageConfig, ...patch };
-    onUpdateProject({
-      ...project,
-      pageConfig: nextPageConfig,
-      exportConfig: {
-        ...project.exportConfig,
-        ...(patch.bleedPt !== undefined ? { bleedPt: patch.bleedPt } : {}),
-        ...(patch.cropMarks !== undefined ? { cropMarks: patch.cropMarks } : {}),
-        customWidthPt: undefined,
-        customHeightPt: undefined,
+    commitProjectChange(
+      {
+        ...project,
+        pageConfig: nextPageConfig,
+        exportConfig: {
+          ...project.exportConfig,
+          ...(patch.bleedPt !== undefined ? { bleedPt: patch.bleedPt } : {}),
+          ...(patch.cropMarks !== undefined ? { cropMarks: patch.cropMarks } : {}),
+          customWidthPt: undefined,
+          customHeightPt: undefined,
+        },
       },
-      updatedAt: new Date().toISOString(),
-    });
+      'Page Configuration',
+      'page_config',
+      'Update Page Config',
+      'Updated paper size, orientation, or margins',
+      'page-cfg-inspector'
+    );
   };
 
   const fitConfig = normalizeFitConfig(project);
@@ -1340,11 +1407,17 @@ export const EditorView: React.FC<EditorViewProps> = ({
   const currentLayout = computeSheetLayout(project, currentPage);
 
   const handleUpdateFitConfig = (patch: Partial<SourceFitConfig>) => {
-    onUpdateProject({
-      ...project,
-      fitConfig: { ...fitConfig, ...patch },
-      updatedAt: new Date().toISOString(),
-    });
+    commitProjectChange(
+      {
+        ...project,
+        fitConfig: { ...fitConfig, ...patch },
+      },
+      'Source Fit & Crop',
+      'fit_config',
+      'Update Source Fit',
+      'Adjusted page fitting or crop boundaries',
+      'fit-cfg-inspector'
+    );
   };
 
   const handleChangeCropRect = (rect: RectPt) => {
@@ -2636,6 +2709,23 @@ export const EditorView: React.FC<EditorViewProps> = ({
                       <BoxSelect className="w-3.5 h-3.5" />
                       Document Block
                     </button>
+                    <div className="h-4 w-px bg-black/15 dark:bg-white/15 mx-0.5" />
+                    <button
+                      type="button"
+                      onClick={() => addNewElement('qr_code')}
+                      className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <QrCode className="w-3.5 h-3.5" />
+                      QR Code
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => addNewElement('barcode')}
+                      className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <ScanBarcode className="w-3.5 h-3.5" />
+                      Barcode
+                    </button>
                   </>
                 )}
 
@@ -3032,7 +3122,15 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   key={t}
                   type="button"
                   onClick={() => {
-                    if (t === 'text' || t === 'rect' || t === 'circle' || t === 'line' || t === 'table') {
+                    if (
+                      t === 'text' ||
+                      t === 'rect' ||
+                      t === 'circle' ||
+                      t === 'line' ||
+                      t === 'table' ||
+                      t === 'qr_code' ||
+                      t === 'barcode'
+                    ) {
                       addNewElement(t);
                     } else if (t === 'image') {
                       imageUploadRef.current?.click();
@@ -3750,8 +3848,13 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     ['Rectangle', Square, () => addNewElement('rect')],
                     ['Circle', Circle, () => addNewElement('circle')],
                     ['Line', Minus, () => addNewElement('line')],
+                    ['Arrow', ArrowUpRight, () => setActiveTool('arrow')],
                     ['Table', Table2, () => addNewElement('table')],
+                    ['QR Code', QrCode, () => addNewElement('qr_code')],
+                    ['Barcode', ScanBarcode, () => addNewElement('barcode')],
                     ['Block', BoxSelect, handleCreateDocumentBlock],
+                    ['Callout', MessageSquarePlus, () => setActiveTool('callout')],
+                    ['Sticky Note', MessageSquare, () => setActiveTool('note')],
                   ] as const
                 ).map(([label, Icon, action]) => (
                   <button
@@ -3762,7 +3865,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                       action();
                       setMobileAddSheetOpen(false);
                     }}
-                    className="min-h-[56px] p-2 rounded-2xl border glass-level-3 flex flex-col items-center justify-center gap-1 text-xs font-medium text-[#101010] dark:text-white"
+                    className="min-h-[54px] p-2 rounded-2xl border glass-level-3 flex flex-col items-center justify-center gap-1 text-xs font-medium text-[#101010] dark:text-white"
                   >
                     <Icon className="w-4 h-4 text-[#101010] dark:text-white" />
                     <span>{label}</span>
@@ -3821,6 +3924,54 @@ export const EditorView: React.FC<EditorViewProps> = ({
                 <button
                   type="button"
                   onClick={() => {
+                    setActiveTool('underline_annot');
+                    handleSelectMode('edit');
+                    setMobileAddSheetOpen(false);
+                  }}
+                  className="min-h-[44px] px-3 rounded-xl border glass-level-3 flex items-center justify-center gap-2 text-xs font-medium text-[#101010] dark:text-white"
+                >
+                  <Underline className="w-4 h-4" />
+                  Underline Annot
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTool('strikeout_annot');
+                    handleSelectMode('edit');
+                    setMobileAddSheetOpen(false);
+                  }}
+                  className="min-h-[44px] px-3 rounded-xl border glass-level-3 flex items-center justify-center gap-2 text-xs font-medium text-[#101010] dark:text-white"
+                >
+                  <Strikethrough className="w-4 h-4" />
+                  Strikeout Annot
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTool('measure');
+                    handleSelectMode('edit');
+                    setMobileAddSheetOpen(false);
+                  }}
+                  className="min-h-[44px] px-3 rounded-xl border glass-level-3 flex items-center justify-center gap-2 text-xs font-medium text-[#101010] dark:text-white"
+                >
+                  <Ruler className="w-4 h-4" />
+                  Measure Caliper
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTool('redact');
+                    handleSelectMode('edit');
+                    setMobileAddSheetOpen(false);
+                  }}
+                  className="min-h-[44px] px-3 rounded-xl border glass-level-3 flex items-center justify-center gap-2 text-xs font-medium text-[#101010] dark:text-white"
+                >
+                  <ShieldAlert className="w-4 h-4" />
+                  Mark Redaction
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
                     setSmartReplaceOpen(true);
                     setMobileAddSheetOpen(false);
                   }}
@@ -3870,8 +4021,8 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   }}
                   className="min-h-[44px] px-3 rounded-xl border glass-level-3 flex items-center justify-center gap-2 text-xs font-medium text-[#101010] dark:text-white"
                 >
-                  <ShieldAlert className="w-4 h-4" />
-                  Redaction ({pendingRedactionCount})
+                  <ShieldCheck className="w-4 h-4" />
+                  Apply Redactions ({pendingRedactionCount})
                 </button>
                 <button
                   type="button"
@@ -3883,6 +4034,48 @@ export const EditorView: React.FC<EditorViewProps> = ({
                 >
                   <History className="w-4 h-4" />
                   History
+                </button>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 pt-2 border-t border-black/10 dark:border-white/10">
+                <button
+                  type="button"
+                  onClick={() => setShowRulers((v) => !v)}
+                  className={`min-h-[38px] px-2 rounded-xl border text-xs font-medium flex items-center justify-center gap-1 ${
+                    showRulers
+                      ? 'studio-active-surface'
+                      : 'glass-level-3 text-[#555555] dark:text-[#B5B5B5]'
+                  }`}
+                >
+                  <Ruler className="w-3.5 h-3.5" />
+                  Rulers
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowGrid((v) => !v)}
+                  className={`min-h-[38px] px-2 rounded-xl border text-xs font-medium flex items-center justify-center gap-1 ${
+                    showGrid
+                      ? 'studio-active-surface'
+                      : 'glass-level-3 text-[#555555] dark:text-[#B5B5B5]'
+                  }`}
+                >
+                  <Grid className="w-3.5 h-3.5" />
+                  Grid
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSnapToGrid((v) => !v);
+                    setShowGuides((v) => !v);
+                  }}
+                  className={`min-h-[38px] px-2 rounded-xl border text-xs font-medium flex items-center justify-center gap-1 ${
+                    snapToGrid
+                      ? 'studio-active-surface'
+                      : 'glass-level-3 text-[#555555] dark:text-[#B5B5B5]'
+                  }`}
+                >
+                  <Magnet className="w-3.5 h-3.5" />
+                  Snap
                 </button>
               </div>
             </div>

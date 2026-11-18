@@ -1,5 +1,14 @@
 import React, { useState } from 'react';
-import { ArrowRight, Info, Keyboard, RotateCcw, Trash2 } from 'lucide-react';
+import {
+  ArrowRight,
+  Info,
+  Keyboard,
+  Plus,
+  RotateCcw,
+  Sliders,
+  Star,
+  Trash2,
+} from 'lucide-react';
 import {
   APP_COPYRIGHT_YEAR,
   APP_PRODUCT_NAME,
@@ -12,6 +21,7 @@ import {
   NavSection,
   PageSizePreset,
   ShortcutActionId,
+  StudioEditingPreset,
   StudioSettings,
   WorkspaceLayoutMode,
 } from '../types/pdfStudio';
@@ -77,6 +87,52 @@ function formatKeyCombo(e: React.KeyboardEvent): string | null {
   return parts.join('+');
 }
 
+const BUILTIN_EDITING_PRESETS: StudioEditingPreset[] = [
+  {
+    id: 'preset-high-precision-print',
+    name: 'High-Precision Print',
+    description: '5 pt fine grid, mm units, object snap, rulers visible',
+    gridSizePt: 5,
+    snapToObjects: true,
+    defaultUnit: 'mm',
+    showGridByDefault: false,
+    showRulersByDefault: true,
+  },
+  {
+    id: 'preset-rapid-label',
+    name: 'Rapid Label Layout',
+    description: '12 pt coarse grid, mm units, visible grid & snap',
+    gridSizePt: 12,
+    snapToObjects: true,
+    defaultUnit: 'mm',
+    showGridByDefault: true,
+    showRulersByDefault: true,
+  },
+  {
+    id: 'preset-point-forms',
+    name: 'Point-Exact Forms',
+    description: '8 pt baseline grid, pt units, visible grid & rulers',
+    gridSizePt: 8,
+    snapToObjects: true,
+    defaultUnit: 'pt',
+    showGridByDefault: true,
+    showRulersByDefault: true,
+  },
+];
+
+const FAVORITE_TOOL_CANDIDATES: Array<{ id: string; label: string }> = [
+  { id: 'text', label: 'Add Text' },
+  { id: 'rect', label: 'Rectangle' },
+  { id: 'line', label: 'Line' },
+  { id: 'table', label: 'Table' },
+  { id: 'qr_code', label: 'QR Code' },
+  { id: 'barcode', label: 'Barcode' },
+  { id: 'image', label: 'Image / Logo' },
+  { id: 'signature', label: 'Signature Stamp' },
+  { id: 'redact', label: 'Redaction' },
+  { id: 'measure', label: 'Measure' },
+];
+
 export const SettingsView: React.FC<SettingsViewProps> = ({
   settings,
   onUpdateSettings,
@@ -85,6 +141,29 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 }) => {
   const [capturingAction, setCapturingAction] =
     useState<ShortcutActionId | null>(null);
+  const [presetNameInput, setPresetNameInput] = useState('');
+
+  const allPresets = [...BUILTIN_EDITING_PRESETS, ...(settings.editingPresets || [])];
+  const favoriteTools = settings.favoriteTools || ['text', 'rect', 'qr_code', 'barcode'];
+
+  const applyEditingPreset = (preset: StudioEditingPreset) => {
+    onUpdateSettings({
+      ...settings,
+      activeEditingPresetId: preset.id,
+      gridSizePt: preset.gridSizePt,
+      snapToObjects: preset.snapToObjects,
+      defaultUnit: preset.defaultUnit,
+      showGridByDefault: preset.showGridByDefault,
+      showRulersByDefault: preset.showRulersByDefault,
+    });
+  };
+
+  const toggleFavoriteTool = (toolId: string) => {
+    const next = favoriteTools.includes(toolId)
+      ? favoriteTools.filter((id) => id !== toolId)
+      : [...favoriteTools, toolId];
+    onUpdateSettings({ ...settings, favoriteTools: next });
+  };
 
   const shortcuts: Record<ShortcutActionId, string> = {
     ...DEFAULT_SHORTCUTS,
@@ -480,6 +559,146 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             />
             <span>Show canvas grid overlay by default</span>
           </label>
+        </div>
+      </GlassCard>
+
+      {/* Editing Presets & Favorite Tools (Module 12) */}
+      <GlassCard level={3} padding="md" className="space-y-4 text-xs">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Sliders className="w-4 h-4 text-[#101010] dark:text-white" />
+            <div>
+              <h2 className="text-sm font-semibold text-[#101010] dark:text-white">
+                Editing Presets &amp; Favorite Tools
+              </h2>
+              <p className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
+                Switch precision grid/unit profiles in one click or save your custom workflow setup.
+              </p>
+            </div>
+          </div>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const clean = presetNameInput.trim();
+              if (!clean) return;
+              const customPreset: StudioEditingPreset = {
+                id: `preset-custom-${Date.now()}`,
+                name: clean,
+                description: `${settings.gridSizePt} pt grid · ${settings.defaultUnit} · snap ${
+                  settings.snapToObjects ?? true ? 'on' : 'off'
+                }`,
+                gridSizePt: settings.gridSizePt,
+                snapToObjects: settings.snapToObjects ?? true,
+                defaultUnit: settings.defaultUnit,
+                showGridByDefault: settings.showGridByDefault,
+                showRulersByDefault: settings.showRulersByDefault,
+              };
+              onUpdateSettings({
+                ...settings,
+                activeEditingPresetId: customPreset.id,
+                editingPresets: [...(settings.editingPresets || []), customPreset],
+              });
+              setPresetNameInput('');
+            }}
+            className="flex items-center gap-1.5"
+          >
+            <input
+              type="text"
+              value={presetNameInput}
+              onChange={(e) => setPresetNameInput(e.target.value)}
+              placeholder="New preset name..."
+              className="px-2.5 py-1.5 rounded-lg border studio-input text-xs w-40"
+            />
+            <button
+              type="submit"
+              className="px-2.5 py-1.5 rounded-lg bg-[#101010] text-white dark:bg-white dark:text-[#050505] font-medium flex items-center gap-1"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Save Current
+            </button>
+          </form>
+        </div>
+
+        <div className="grid grid-cols-1 tablet:grid-cols-3 gap-2.5">
+          {allPresets.map((preset) => {
+            const isActive = settings.activeEditingPresetId === preset.id;
+            const isCustom = !BUILTIN_EDITING_PRESETS.some((b) => b.id === preset.id);
+            return (
+              <div
+                key={preset.id}
+                className={`p-3 rounded-xl border flex flex-col justify-between gap-2 ${
+                  isActive
+                    ? 'border-[#101010] dark:border-white bg-black/[0.04] dark:bg-white/[0.08]'
+                    : 'border-black/10 dark:border-white/12'
+                }`}
+              >
+                <div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-[#101010] dark:text-white truncate">
+                      {preset.name}
+                    </span>
+                    {isCustom && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onUpdateSettings({
+                            ...settings,
+                            editingPresets: (settings.editingPresets || []).filter(
+                              (x) => x.id !== preset.id
+                            ),
+                          })
+                        }
+                        className="text-[#888888] hover:text-[#101010] dark:hover:text-white"
+                        title="Remove custom preset"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-[#555555] dark:text-[#B5B5B5] mt-0.5 tabular-nums">
+                    {preset.description}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => applyEditingPreset(preset)}
+                  className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium border ${
+                    isActive
+                      ? 'bg-[#101010] text-white dark:bg-white dark:text-[#050505] border-transparent'
+                      : 'border-black/15 dark:border-white/15 hover:bg-black/[0.04] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white'
+                  }`}
+                >
+                  {isActive ? 'Active Preset' : 'Apply Preset'}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="pt-3 border-t border-black/10 dark:border-white/10">
+          <div className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5] mb-2 flex items-center gap-1.5">
+            <Star className="w-3.5 h-3.5" />
+            Pinned Favorite Editor Tools ({favoriteTools.length})
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {FAVORITE_TOOL_CANDIDATES.map((t) => {
+              const pinned = favoriteTools.includes(t.id);
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => toggleFavoriteTool(t.id)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-medium border transition-colors ${
+                    pinned
+                      ? 'bg-[#101010] text-white dark:bg-white dark:text-[#050505] border-transparent'
+                      : 'border-black/15 dark:border-white/15 text-[#555555] dark:text-[#B5B5B5] hover:text-[#101010] dark:hover:text-white'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </GlassCard>
 

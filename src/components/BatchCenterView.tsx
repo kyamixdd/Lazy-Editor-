@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import {
+  AlertTriangle,
   CheckCircle2,
   Download,
   Layers,
@@ -8,6 +9,7 @@ import {
   Play,
   Plus,
   RotateCcw,
+  ShieldCheck,
   Square,
   Trash2,
   XCircle,
@@ -15,11 +17,19 @@ import {
 import { MOTION_EASE } from '../config/motionSystem';
 import {
   AssetFontItem,
+  BatchCheckpoint,
   BatchJob,
   PDFProject,
+  SerialBatchRecord,
 } from '../types/pdfStudio';
 import { formatBytesCompact } from '../utils/projectStorage';
 import { ExportJobControl, generateExportBytes } from '../utils/pdfExporter';
+import {
+  base64ToUint8ArrayRecovery,
+  detectDuplicateOutputGuard,
+  runCheckpointedBatchExport,
+  verifyPdfBytesIntegrity,
+} from '../utils/recoveryEngine';
 import { validateProject } from '../utils/validationEngine';
 import { GlassButton, GlassCard } from './glass';
 
@@ -27,9 +37,13 @@ interface BatchCenterViewProps {
   projects: PDFProject[];
   customFonts: AssetFontItem[];
   batchJobs: BatchJob[];
+  serialBatches?: SerialBatchRecord[];
+  checkpoints?: BatchCheckpoint[];
   onSaveBatchJob: (job: BatchJob) => void;
   onDeleteBatchJob: (id: string) => void;
   onClearBatchHistory: () => void;
+  onSaveCheckpoint?: (cp: BatchCheckpoint) => void;
+  onDeleteCheckpoint?: (id: string) => void;
 }
 
 interface SessionDownload {
@@ -42,14 +56,20 @@ export const BatchCenterView: React.FC<BatchCenterViewProps> = ({
   projects,
   customFonts,
   batchJobs,
+  serialBatches = [],
+  checkpoints = [],
   onSaveBatchJob,
   onDeleteBatchJob,
   onClearBatchHistory,
+  onSaveCheckpoint,
+  onDeleteCheckpoint,
 }) => {
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
   const [isRunningQueue, setIsRunningQueue] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [downloads, setDownloads] = useState<Record<string, SessionDownload>>({});
+  const [chunkSizePages, setChunkSizePages] = useState<number>(8);
+  const [integrityNotices, setIntegrityNotices] = useState<Record<string, string>>({});
 
   const cancelSetRef = useRef<Set<string>>(new Set());
   const globalCancelRef = useRef(false);
@@ -240,9 +260,113 @@ export const BatchCenterView: React.FC<BatchCenterViewProps> = ({
     });
   };
 
+  const handleRunCheckpointedForProject = async (
+    project: PDFProject,
+    resumeCp?: BatchCheckpoint
+  ) => {
+    const blocking = validateProject(project, customFonts).filter(
+      (i) => i.severity === 'error'
+    );
+    if (blocking.length > 0) {
+      setIntegrityNotices((prev) => ({
+        ...prev,
+        [resumeCp?.id || project.id]: `Preflight blocked: ${blocking[0].message}`,
+      }));
+      return;
+    }
+
+    globalCancelRef.current = false;
+    pausedRef.current = false;
+    setIsPaused(false);
+    setIsRunningQueue(true);
+
+    try {
+      const result = await runCheckpointedBatchExport(project, {
+        customFonts,
+        chunkSizePages,
+        resumeCheckpoint: resumeCp,
+        onCheckpoint: (cp) => onSaveCheckpoint?.(cp),
+        control: {
+          isCancelled: () => globalCancelRef.current,
+          waitWhilePaused: async () => {
+            while (pausedRef.current && !globalCancelRef.current) {
+              await new Promise((r) => setTimeout(r, 200));
+            }
+          },
+        },
+      });
+      if (result.bytes.byteLength > 0) {
+        const blob = new Blob([result.bytes.slice().buffer], {
+          type: result.mimeType,
+        });
+        setDownloads((prev) => ({
+          ...prev,
+          [result.checkpoint.id]: {
+            url: URL.createObjectURL(blob),
+            fileName: result.fileName,
+            sizeBytes: result.bytes.byteLength,
+          },
+        }));
+      }
+      setIntegrityNotices((prev) => ({
+        ...prev,
+        [result.checkpoint.id]: result.interrupted
+          ? `Paused cleanly at ${result.checkpoint.completedPageCount}/${result.checkpoint.totalOutputPages} verified pages.`
+          : `Completed ${result.checkpoint.completedPageCount}/${result.checkpoint.totalOutputPages} pages with verified PDF integrity.`,
+      }));
+    } catch (err) {
+      setIntegrityNotices((prev) => ({
+        ...prev,
+        [resumeCp?.id || project.id]:
+          err instanceof Error ? err.message : 'Checkpointed run failed',
+      }));
+    } finally {
+      setIsRunningQueue(false);
+      setIsPaused(false);
+      pausedRef.current = false;
+    }
+  };
+
+  const handleVerifyCheckpointIntegrity = async (cp: BatchCheckpoint) => {
+    if (!cp.partialPdfBase64) {
+      setIntegrityNotices((prev) => ({
+        ...prev,
+        [cp.id]: 'No partial PDF buffer stored in checkpoint.',
+      }));
+      return;
+    }
+    const bytes = base64ToUint8ArrayRecovery(cp.partialPdfBase64);
+    const rep = await verifyPdfBytesIntegrity(bytes);
+    setIntegrityNotices((prev) => ({
+      ...prev,
+      [cp.id]: rep.valid
+        ? `Verified ${rep.pageCount} valid PDF page(s) (${formatBytesCompact(rep.byteLength)}).`
+        : `Integrity error: ${rep.issues.join(' | ')}`,
+    }));
+  };
+
+  const handleDownloadCheckpoint = (cp: BatchCheckpoint) => {
+    if (!cp.partialPdfBase64) return;
+    const bytes = base64ToUint8ArrayRecovery(cp.partialPdfBase64);
+    const blob = new Blob([bytes.slice().buffer], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = cp.outputFileName || `${cp.projectName.replace(/\s+/g, '_')}_checkpoint.pdf`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const queuedCount = batchJobs.filter((j) => j.status === 'queued').length;
   const completedCount = batchJobs.filter((j) => j.status === 'completed').length;
   const failedCount = batchJobs.filter((j) => j.status === 'failed').length;
+  const guardReports = projects
+    .filter((p) => selectedProjectIds.includes(p.id))
+    .map((p) => ({
+      project: p,
+      report: detectDuplicateOutputGuard(p, serialBatches, checkpoints),
+    }))
+    .filter((x) => x.report.hasOverlapWarning);
 
   return (
     <div className="flex-1 overflow-y-auto p-4 tablet:p-6 desktop:p-8 max-w-6xl mx-auto w-full space-y-6">
@@ -335,40 +459,186 @@ export const BatchCenterView: React.FC<BatchCenterViewProps> = ({
                   ? p.bulkConfig.totalOutputPages
                   : p.pageCount;
               return (
-                <label
+                <div
                   key={p.id}
-                  className={`p-2.5 rounded-xl border cursor-pointer flex items-center gap-2.5 transition-colors ${
+                  className={`p-2.5 rounded-xl border flex items-center gap-2.5 transition-colors ${
                     checked
                       ? 'studio-active-surface'
                       : 'border-black/10 dark:border-white/12 hover:border-black/25 dark:hover:border-white/25'
                   }`}
                 >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={(e) =>
-                      setSelectedProjectIds((prev) =>
-                        e.target.checked
-                          ? [...prev, p.id]
-                          : prev.filter((id) => id !== p.id)
-                      )
-                    }
-                    className="rounded border-black/25 dark:border-white/25"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="font-medium text-[#101010] dark:text-white truncate">
-                      {p.name}
+                  <label className="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) =>
+                        setSelectedProjectIds((prev) =>
+                          e.target.checked
+                            ? [...prev, p.id]
+                            : prev.filter((id) => id !== p.id)
+                        )
+                      }
+                      className="rounded border-black/25 dark:border-white/25"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium text-[#101010] dark:text-white truncate">
+                        {p.name}
+                      </div>
+                      <div className="text-[11px] text-[#888888] dark:text-[#858585] tabular-nums">
+                        {pages} output pg · {p.exportConfig.mode.replace(/_/g, ' ')}
+                      </div>
                     </div>
-                    <div className="text-[11px] text-[#888888] dark:text-[#858585] tabular-nums">
-                      {pages} output pg · {p.exportConfig.mode.replace(/_/g, ' ')}
-                    </div>
-                  </div>
-                </label>
+                  </label>
+                  {onSaveCheckpoint && (
+                    <button
+                      type="button"
+                      disabled={isRunningQueue}
+                      onClick={() => void handleRunCheckpointedForProject(p)}
+                      title="Run with chunked checkpoint recovery"
+                      className="px-2 py-1 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[10px] font-medium shrink-0 disabled:opacity-40"
+                    >
+                      Checkpointed
+                    </button>
+                  )}
+                </div>
               );
             })}
           </div>
         )}
+
+        {guardReports.length > 0 && (
+          <div className="p-2.5 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 space-y-1">
+            <div className="font-semibold flex items-center gap-1.5">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+              Duplicate Output Guard Warnings
+            </div>
+            {guardReports.flatMap((g) =>
+              g.report.warnings.map((w, idx) => (
+                <div key={`${g.project.id}-${idx}`} className="text-[11px]">
+                  {w}
+                </div>
+              ))
+            )}
+          </div>
+        )}
       </GlassCard>
+
+      {/* Smart Batch Recovery & Integrity Checkpoints (Module 7) */}
+      {(checkpoints.length > 0 || onSaveCheckpoint) && (
+        <GlassCard level={3} padding="md" className="space-y-3 text-xs">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="font-semibold text-[#101010] dark:text-white flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4" />
+              Smart Batch Recovery &amp; Integrity Checkpoints ({checkpoints.length})
+            </div>
+            <label className="flex items-center gap-2 text-[11px] text-[#555555] dark:text-[#B5B5B5]">
+              <span>Checkpoint Every</span>
+              <input
+                type="number"
+                min="1"
+                max="50"
+                value={chunkSizePages}
+                onChange={(e) =>
+                  setChunkSizePages(Math.max(1, Math.min(50, Number(e.target.value) || 8)))
+                }
+                className="w-14 px-2 py-0.5 rounded-lg border studio-input tabular-nums text-center"
+              />
+              <span>pages</span>
+            </label>
+          </div>
+
+          {checkpoints.length === 0 ? (
+            <div className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
+              Use &ldquo;Checkpointed&rdquo; on any project above to save verified page chunks and enable crash-safe resume without duplicating serial numbers.
+            </div>
+          ) : (
+            <div className="divide-y divide-black/10 dark:divide-white/10">
+              {checkpoints.map((cp) => {
+                const proj = projects.find((p) => p.id === cp.projectId);
+                const canResume =
+                  proj &&
+                  cp.completedPageCount < cp.totalOutputPages &&
+                  cp.status !== 'completed';
+                const notice = integrityNotices[cp.id];
+                return (
+                  <div key={cp.id} className="py-3 first:pt-1 last:pb-1 space-y-1.5">
+                    <div className="flex flex-col tablet:flex-row tablet:items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-semibold text-[#101010] dark:text-white">
+                            {cp.projectName}
+                          </span>
+                          <span className="text-[10px] font-mono uppercase text-[#888888] dark:text-[#858585]">
+                            {cp.status.replace(/_/g, ' ')}
+                          </span>
+                          <span className="text-[11px] tabular-nums text-[#555555] dark:text-[#B5B5B5]">
+                            {cp.completedPageCount}/{cp.totalOutputPages} pages verified
+                          </span>
+                        </div>
+                        {cp.lastSerialByRule.length > 0 && (
+                          <div className="mt-0.5 text-[10px] font-mono text-[#888888] dark:text-[#858585] flex flex-wrap gap-2">
+                            {cp.lastSerialByRule.map((sr) => (
+                              <span key={sr.ruleId}>
+                                {sr.ruleName}: last #{sr.lastNumber} → next #{sr.nextResumeNumber}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {notice && (
+                          <div className="mt-1 text-[11px] text-[#101010] dark:text-white">
+                            {notice}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                        {canResume && proj && (
+                          <button
+                            type="button"
+                            disabled={isRunningQueue}
+                            onClick={() => void handleRunCheckpointedForProject(proj, cp)}
+                            className="px-2.5 py-1 rounded-lg bg-[#101010] text-white dark:bg-white dark:text-[#050505] font-medium text-[11px] flex items-center gap-1 disabled:opacity-40"
+                          >
+                            <Play className="w-3 h-3" />
+                            Resume Safely
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => void handleVerifyCheckpointIntegrity(cp)}
+                          className="px-2.5 py-1 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.04] dark:hover:bg-white/[0.08] text-[11px] font-medium"
+                        >
+                          Verify Integrity
+                        </button>
+                        {cp.partialPdfBase64 && (
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadCheckpoint(cp)}
+                            className="px-2.5 py-1 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.04] dark:hover:bg-white/[0.08] text-[11px] font-medium flex items-center gap-1"
+                          >
+                            <Download className="w-3 h-3" />
+                            PDF
+                          </button>
+                        )}
+                        {onDeleteCheckpoint && (
+                          <button
+                            type="button"
+                            onClick={() => onDeleteCheckpoint(cp.id)}
+                            className="p-1 rounded-lg text-[#888888] hover:text-red-600"
+                            title="Discard checkpoint"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </GlassCard>
+      )}
 
       {/* Queue & Processing History */}
       <GlassCard level={3} padding="none" className="overflow-hidden">

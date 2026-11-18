@@ -1,22 +1,34 @@
 import {
   AssetLibraryItem,
+  BatchCheckpoint,
   BatchJob,
   CustomPaperPreset,
+  DocumentIntegrityPassport,
   DocumentOperationLog,
+  ExportNamingProfile,
   PDFProject,
+  ProductionBlueprint,
+  SerialBatchRecord,
   ShortcutActionId,
   StudioSettings,
   TemplateAutomationProfile,
   UnsavedDraftRecord,
+  WorkflowChain,
 } from '../types/pdfStudio';
 
 const DB_NAME = 'pdf_studio_ai_db';
-const DB_VERSION = 2;
+const DB_VERSION = 6;
 const STORE_PROJECTS = 'projects';
 const STORE_DRAFTS = 'drafts';
 const STORE_ASSETS = 'assets';
 const STORE_PROFILES = 'template_profiles';
 const STORE_BATCH_JOBS = 'batch_jobs';
+const STORE_BLUEPRINTS = 'blueprints';
+const STORE_SERIAL_BATCHES = 'serial_batches';
+const STORE_PASSPORTS = 'passports';
+const STORE_CHECKPOINTS = 'batch_checkpoints';
+const STORE_WORKFLOWS = 'workflows';
+const STORE_EXPORT_PROFILES = 'export_profiles';
 
 const SETTINGS_KEY = 'pdf_studio_ai_settings_v1';
 const ACTIVE_PROJECT_KEY = 'pdf_studio_ai_active_project_id';
@@ -85,6 +97,24 @@ function openDb(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_BATCH_JOBS)) {
         db.createObjectStore(STORE_BATCH_JOBS, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(STORE_BLUEPRINTS)) {
+        db.createObjectStore(STORE_BLUEPRINTS, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(STORE_SERIAL_BATCHES)) {
+        db.createObjectStore(STORE_SERIAL_BATCHES, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(STORE_PASSPORTS)) {
+        db.createObjectStore(STORE_PASSPORTS, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(STORE_CHECKPOINTS)) {
+        db.createObjectStore(STORE_CHECKPOINTS, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(STORE_WORKFLOWS)) {
+        db.createObjectStore(STORE_WORKFLOWS, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(STORE_EXPORT_PROFILES)) {
+        db.createObjectStore(STORE_EXPORT_PROFILES, { keyPath: 'id' });
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -373,6 +403,270 @@ export async function clearBatchHistory(): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE_BATCH_JOBS, 'readwrite');
     tx.objectStore(STORE_BATCH_JOBS).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// --- Production Blueprints (Module 1) ---
+export async function listBlueprints(): Promise<ProductionBlueprint[]> {
+  try {
+    const db = await openDb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_BLUEPRINTS, 'readonly');
+      const req = tx.objectStore(STORE_BLUEPRINTS).getAll();
+      req.onsuccess = () => {
+        const items = (req.result as ProductionBlueprint[]) || [];
+        items.sort(
+          (a, b) =>
+            new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+        );
+        resolve(items);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return [];
+  }
+}
+
+export async function saveBlueprint(
+  blueprint: ProductionBlueprint
+): Promise<void> {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_BLUEPRINTS, 'readwrite');
+    tx.objectStore(STORE_BLUEPRINTS).put(blueprint);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+export async function deleteBlueprint(id: string): Promise<void> {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_BLUEPRINTS, 'readwrite');
+    tx.objectStore(STORE_BLUEPRINTS).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// --- Serial Batch History (Module 2) ---
+export async function listSerialBatches(): Promise<SerialBatchRecord[]> {
+  try {
+    const db = await openDb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_SERIAL_BATCHES, 'readonly');
+      const req = tx.objectStore(STORE_SERIAL_BATCHES).getAll();
+      req.onsuccess = () => {
+        const items = (req.result as SerialBatchRecord[]) || [];
+        items.sort(
+          (a, b) =>
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+        resolve(items);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return [];
+  }
+}
+
+export async function saveSerialBatch(record: SerialBatchRecord): Promise<void> {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_SERIAL_BATCHES, 'readwrite');
+    tx.objectStore(STORE_SERIAL_BATCHES).put(record);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+export async function deleteSerialBatch(id: string): Promise<void> {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_SERIAL_BATCHES, 'readwrite');
+    tx.objectStore(STORE_SERIAL_BATCHES).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// --- Document Integrity Passports (Module 6) ---
+export async function listPassports(): Promise<DocumentIntegrityPassport[]> {
+  try {
+    const db = await openDb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_PASSPORTS, 'readonly');
+      const req = tx.objectStore(STORE_PASSPORTS).getAll();
+      req.onsuccess = () => {
+        const items = (req.result as DocumentIntegrityPassport[]) || [];
+        items.sort(
+          (a, b) =>
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+        resolve(items);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return [];
+  }
+}
+
+export async function savePassport(
+  passport: DocumentIntegrityPassport
+): Promise<void> {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_PASSPORTS, 'readwrite');
+    tx.objectStore(STORE_PASSPORTS).put(passport);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+export async function deletePassport(id: string): Promise<void> {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_PASSPORTS, 'readwrite');
+    tx.objectStore(STORE_PASSPORTS).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// --- Batch Checkpoints (Module 7) ---
+export async function listBatchCheckpoints(): Promise<BatchCheckpoint[]> {
+  try {
+    const db = await openDb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_CHECKPOINTS, 'readonly');
+      const req = tx.objectStore(STORE_CHECKPOINTS).getAll();
+      req.onsuccess = () => {
+        const items = (req.result as BatchCheckpoint[]) || [];
+        items.sort(
+          (a, b) =>
+            new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+        );
+        resolve(items);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return [];
+  }
+}
+
+export async function saveBatchCheckpoint(
+  checkpoint: BatchCheckpoint
+): Promise<void> {
+  try {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_CHECKPOINTS, 'readwrite');
+      tx.objectStore(STORE_CHECKPOINTS).put(checkpoint);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {
+    // Ignore storage quota issues gracefully
+  }
+}
+
+export async function deleteBatchCheckpoint(id: string): Promise<void> {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_CHECKPOINTS, 'readwrite');
+    tx.objectStore(STORE_CHECKPOINTS).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// --- Workflow Chains (Module 10) ---
+export async function listWorkflows(): Promise<WorkflowChain[]> {
+  try {
+    const db = await openDb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_WORKFLOWS, 'readonly');
+      const req = tx.objectStore(STORE_WORKFLOWS).getAll();
+      req.onsuccess = () => {
+        const items = (req.result as WorkflowChain[]) || [];
+        items.sort(
+          (a, b) =>
+            new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+        );
+        resolve(items);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return [];
+  }
+}
+
+export async function saveWorkflow(workflow: WorkflowChain): Promise<void> {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_WORKFLOWS, 'readwrite');
+    tx.objectStore(STORE_WORKFLOWS).put(workflow);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+export async function deleteWorkflow(id: string): Promise<void> {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_WORKFLOWS, 'readwrite');
+    tx.objectStore(STORE_WORKFLOWS).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// --- Export Naming Profiles (Module 11) ---
+export async function listExportProfiles(): Promise<ExportNamingProfile[]> {
+  try {
+    const db = await openDb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_EXPORT_PROFILES, 'readonly');
+      const req = tx.objectStore(STORE_EXPORT_PROFILES).getAll();
+      req.onsuccess = () => {
+        const items = (req.result as ExportNamingProfile[]) || [];
+        items.sort(
+          (a, b) =>
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+        resolve(items);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return [];
+  }
+}
+
+export async function saveExportProfile(
+  profile: ExportNamingProfile
+): Promise<void> {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_EXPORT_PROFILES, 'readwrite');
+    tx.objectStore(STORE_EXPORT_PROFILES).put(profile);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+export async function deleteExportProfile(id: string): Promise<void> {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_EXPORT_PROFILES, 'readwrite');
+    tx.objectStore(STORE_EXPORT_PROFILES).delete(id);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });

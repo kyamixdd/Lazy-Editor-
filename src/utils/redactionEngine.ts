@@ -173,6 +173,7 @@ export async function renderSanitizedRedactedPagePng(
     scale = 2.4,
   } = sourceDataUrlOrBase64Pdf;
 
+  if (typeof document === 'undefined') return null;
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(4, Math.round(pageWidthPt * scale));
   canvas.height = Math.max(4, Math.round(pageHeightPt * scale));

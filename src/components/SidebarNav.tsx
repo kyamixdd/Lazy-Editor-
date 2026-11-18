@@ -5,16 +5,19 @@ import {
   Download,
   FilePlus2,
   FolderHeart,
+  GitBranch,
   GitCompare,
   Info,
   Layers,
   LayoutDashboard,
+  LayoutTemplate,
   ListChecks,
   Menu,
   Moon,
   PenTool,
   Plus,
   Printer,
+  Search,
   Settings,
   ShieldCheck,
   Sun,
@@ -57,6 +60,7 @@ interface SidebarNavProps {
   workspaceLayout?: WorkspaceLayoutMode;
   mobileDrawerOpen?: boolean;
   onMobileDrawerOpenChange?: (open: boolean) => void;
+  onOpenCommandPalette?: () => void;
 }
 
 const NAV_ITEMS: Array<{
@@ -95,6 +99,13 @@ const NAV_ITEMS: Array<{
     desc: 'Visual layout & text',
     icon: PenTool,
     requiresProject: true,
+  },
+  {
+    id: 'blueprint-studio',
+    label: 'Blueprint Studio',
+    shortLabel: 'Blueprints',
+    desc: 'Visual production sheet',
+    icon: LayoutTemplate,
   },
   {
     id: 'bulk-generator',
@@ -136,6 +147,13 @@ const NAV_ITEMS: Array<{
     icon: ListChecks,
   },
   {
+    id: 'workflow-studio',
+    label: 'Workflow Studio',
+    shortLabel: 'Workflows',
+    desc: 'Automated pipelines',
+    icon: GitBranch,
+  },
+  {
     id: 'asset-library',
     label: 'Asset Library',
     shortLabel: 'Assets',
@@ -149,6 +167,13 @@ const NAV_ITEMS: Array<{
     desc: 'PDF, ZIP & print',
     icon: Download,
     requiresProject: true,
+  },
+  {
+    id: 'pdf-utilities',
+    label: 'PDF Utilities',
+    shortLabel: 'Utilities',
+    desc: 'Metadata, split & forms',
+    icon: Wrench,
   },
   {
     id: 'settings',
@@ -168,12 +193,15 @@ const NAV_ITEMS: Array<{
 
 const TOOL_HUB_IDS: NavSection[] = [
   'editor',
+  'blueprint-studio',
   'bulk-generator',
   'data-manager',
   'preflight',
   'compare',
   'export-center',
+  'pdf-utilities',
   'batch-center',
+  'workflow-studio',
   'asset-library',
 ];
 
@@ -188,6 +216,7 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
   workspaceLayout = 'standard',
   mobileDrawerOpen: controlledDrawerOpen,
   onMobileDrawerOpenChange,
+  onOpenCommandPalette,
 }) => {
   const { isMobile, isTablet } = useViewport();
   const prefersReduced = useReducedMotion();
@@ -268,6 +297,17 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
             </div>
 
             <div className="flex items-center gap-1 shrink-0">
+              {onOpenCommandPalette && (
+                <motion.button
+                  type="button"
+                  whileTap={!prefersReduced ? { scale: 0.92 } : undefined}
+                  onClick={onOpenCommandPalette}
+                  aria-label="Open quick command search"
+                  className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl text-[#555555] dark:text-[#B5B5B5] hover:text-[#101010] dark:hover:text-white hover:bg-black/[0.06] dark:hover:bg-white/[0.08] transition-colors"
+                >
+                  <Search className="w-4 h-4" />
+                </motion.button>
+              )}
               <motion.button
                 type="button"
                 whileTap={!prefersReduced ? { scale: 0.92 } : undefined}
@@ -712,6 +752,21 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
               <span aria-hidden="true">·</span>
               <span>v{activeProject.version}</span>
             </div>
+          )}
+          {onOpenCommandPalette && (
+            <button
+              type="button"
+              onClick={onOpenCommandPalette}
+              className="mt-2.5 w-full px-2.5 py-1.5 rounded-xl border border-black/12 dark:border-white/14 bg-black/[0.03] dark:bg-white/[0.05] hover:bg-black/[0.06] dark:hover:bg-white/[0.09] flex items-center justify-between gap-2 text-[11px] text-[#555555] dark:text-[#B5B5B5] transition-colors"
+            >
+              <span className="flex items-center gap-1.5 truncate">
+                <Search className="w-3 h-3 shrink-0" />
+                Quick Jump...
+              </span>
+              <kbd className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10 text-[#101010] dark:text-white shrink-0">
+                ⌘K
+              </kbd>
+            </button>
           )}
         </div>
       )}

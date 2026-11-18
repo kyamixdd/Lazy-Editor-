@@ -3,13 +3,16 @@ export type NavSection =
   | 'new-project'
   | 'templates'
   | 'editor'
+  | 'blueprint-studio'
   | 'bulk-generator'
   | 'data-manager'
+  | 'workflow-studio'
   | 'preflight'
   | 'compare'
   | 'batch-center'
   | 'asset-library'
   | 'export-center'
+  | 'pdf-utilities'
   | 'settings'
   | 'about';
 
@@ -49,7 +52,11 @@ export type ElementType =
   | 'callout'
   | 'stamp'
   | 'signature'
-  | 'redaction';
+  | 'redaction'
+  | 'barcode'
+  | 'qr_code';
+
+export type BarcodeFormat = 'qr' | 'code128' | 'code39' | 'ean13' | 'upca';
 
 export interface TableElementData {
   rows: string[][];
@@ -134,6 +141,12 @@ export interface DocumentElement {
   redactionMode?: 'visual_mask' | 'true_redaction';
   redactionApplied?: boolean;
   redactionReason?: string;
+  // Barcode & QR Studio (Module 8)
+  barcodeFormat?: BarcodeFormat;
+  barcodeValue?: string;
+  barcodeIncludeText?: boolean;
+  qrErrorCorrection?: 'L' | 'M' | 'Q' | 'H';
+  barcodeQuietZonePt?: number;
 }
 
 export interface RectPt {
@@ -255,6 +268,13 @@ export interface CopiesPerPageConfig {
   selectedBlockId?: string;
 }
 
+export interface SerialReservedRange {
+  id: string;
+  start: number;
+  end: number;
+  label?: string;
+}
+
 export interface SerialSequenceRule {
   id: string;
   name: string;
@@ -272,6 +292,28 @@ export interface SerialSequenceRule {
   csvColumn?: string;
   customPattern?: string;
   manualValues?: string[];
+  reservedRanges?: SerialReservedRange[];
+}
+
+export interface SerialBatchRecord {
+  id: string;
+  projectId: string;
+  projectName: string;
+  ruleId: string;
+  ruleName: string;
+  targetFieldKey: string;
+  blockIndex: number;
+  prefix: string;
+  suffix: string;
+  startNumber: number;
+  endNumber: number;
+  actualFirstNum: number;
+  actualLastNum: number;
+  generatedCount: number;
+  totalPages: number;
+  nextResumeNumber: number;
+  status: 'completed' | 'interrupted' | 'planned';
+  createdAt: string;
 }
 
 export interface BulkConfig {
@@ -384,7 +426,8 @@ export interface ValidationIssue {
     | 'clipping'
     | 'aspect_ratio'
     | 'blank_region'
-    | 'inconsistent_repeated';
+    | 'inconsistent_repeated'
+    | 'pending_redaction';
   message: string;
   detail?: string;
   elementId?: string;
@@ -448,6 +491,63 @@ export interface UnsavedDraftRecord {
   dirty: boolean;
 }
 
+export interface BlueprintBlockDataSource {
+  mode: 'sequential' | 'offset' | 'static_row';
+  rowOffset: number;
+  fixedRowIndex?: number;
+  columnMap?: Record<string, string>;
+}
+
+export interface BlueprintBlock {
+  id: string;
+  label: string;
+  blockIndex: number;
+  xPt: number;
+  yPt: number;
+  widthPt: number;
+  heightPt: number;
+  rotation: number;
+  locked: boolean;
+  visible: boolean;
+  sourcePageNumber: number;
+  sourceScope: 'full_page' | 'selected_block';
+  selectedSourceBlockId?: string;
+  scalingMode: ScalingMode;
+  serialRuleId?: string;
+  dataSource: BlueprintBlockDataSource;
+  showBorder?: boolean;
+  cropMarks?: boolean;
+}
+
+export interface ProductionBlueprint {
+  id: string;
+  name: string;
+  description: string;
+  createdAt: string;
+  updatedAt: string;
+  sheetWidthPt: number;
+  sheetHeightPt: number;
+  unit: MeasurementUnit;
+  orientation: PageOrientation;
+  sizePreset: PageSizePreset;
+  marginTopPt: number;
+  marginRightPt: number;
+  marginBottomPt: number;
+  marginLeftPt: number;
+  gutterXPt: number;
+  gutterYPt: number;
+  snapToGrid: boolean;
+  gridSizePt: number;
+  bleedPt: number;
+  cropMarks: boolean;
+  cuttingGuides: boolean;
+  backgroundColor: string;
+  blocks: BlueprintBlock[];
+  sourceProjectId?: string;
+  sourcePdfName?: string;
+  tags?: string[];
+}
+
 export interface PDFProject {
   id: string;
   name: string;
@@ -468,11 +568,139 @@ export interface PDFProject {
   dataColumns: DataColumn[];
   dataRows: DataRow[];
   exportConfig: ExportConfig;
+  activeBlueprint?: ProductionBlueprint;
+  useBlueprintLayout?: boolean;
+  printOptimization?: PrintOptimizationConfig;
   aiSummary?: string;
   isTemplate: boolean;
   isFavorite?: boolean;
+  tags?: string[];
+  folderName?: string;
   versions: ProjectVersionSnapshot[];
   operationLog?: DocumentOperationLog[];
+}
+
+export type DuplexFlipEdge = 'long_edge' | 'short_edge';
+
+export interface PrintOptimizationConfig {
+  minReadableFontPt: number;
+  duplexEnabled: boolean;
+  duplexFlipEdge: DuplexFlipEdge;
+  backSideOffsetXPt: number;
+  backSideOffsetYPt: number;
+}
+
+export interface TemplateDnaFieldNode {
+  elementId: string;
+  type: ElementType;
+  pageNumber: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fontFamily: string;
+  fontSize: number;
+  fontWeight: 'normal' | 'bold';
+  align: 'left' | 'center' | 'right';
+  fieldKey?: string;
+  blockId?: string;
+  textSample: string;
+}
+
+export interface TemplateDnaFingerprint {
+  fingerprintHash: string;
+  generatedAt: string;
+  pageCount: number;
+  pageDimensionsPt: { width: number; height: number };
+  marginsPt: { top: number; right: number; bottom: number; left: number };
+  blockGeometry: Array<{ blockId: string; pageNumber: number; rect: RectPt }>;
+  fields: TemplateDnaFieldNode[];
+  relationships: Array<{ parentBlockId: string; childElementIds: string[] }>;
+  numberingSignatures: Array<{
+    ruleId: string;
+    name: string;
+    targetFieldKey: string;
+    blockIndex: number;
+    pattern: string;
+  }>;
+  dataColumnNames: string[];
+  scalingMode: ScalingMode;
+  boundaryMode: BoundaryMode;
+  gridSpec: {
+    enabled: boolean;
+    columns: number;
+    rows: number;
+    hSpacingPt: number;
+    vSpacingPt: number;
+  };
+}
+
+export interface TemplateDnaDiffItem {
+  id: string;
+  category:
+    | 'page_dimensions'
+    | 'moved_element'
+    | 'missing_element'
+    | 'added_element'
+    | 'changed_text'
+    | 'font_change'
+    | 'block_geometry';
+  severity: 'info' | 'warning';
+  summary: string;
+  detail: string;
+  savedElementId?: string;
+  incomingElementId?: string;
+  fieldKey?: string;
+  deltaXPt?: number;
+  deltaYPt?: number;
+}
+
+export interface TemplateDnaDiffReport {
+  savedFingerprintHash: string;
+  incomingFingerprintHash: string;
+  identicalGeometry: boolean;
+  compatibilityScore: number;
+  differences: TemplateDnaDiffItem[];
+  remappedFieldIds: Array<{
+    oldElementId: string;
+    newElementId: string;
+    fieldKey: string;
+    label: string;
+  }>;
+}
+
+export interface DocumentIntegrityPassport {
+  id: string;
+  projectId: string;
+  projectName: string;
+  createdAt: string;
+  fileName: string;
+  mimeType: string;
+  sha256Hex: string;
+  fileSizeBytes: number;
+  templateDnaHash: string;
+  totalOutputPages: number;
+  copiesPerPage: number;
+  totalRecords: number;
+  documentBlocksCount: number;
+  serialSpans: Array<{
+    ruleName: string;
+    fieldKey: string;
+    firstValue: string;
+    lastValue: string;
+    count: number;
+  }>;
+  numberingConflictsCount: number;
+  preflightErrorsCount: number;
+  preflightWarningsCount: number;
+  outputWidthPt: number;
+  outputHeightPt: number;
+  dpi: number;
+  bleedPt: number;
+  cropMarks: boolean;
+  duplexEnabled: boolean;
+  validationStatus: 'verified' | 'warnings' | 'failed';
+  embeddedFonts: string[];
 }
 
 export interface TemplateAutomationProfile {
@@ -499,6 +727,7 @@ export interface TemplateAutomationProfile {
     embedFonts: boolean;
   };
   exportConfig: ExportConfig;
+  dna?: TemplateDnaFingerprint;
 }
 
 export interface BatchJob {
@@ -516,6 +745,86 @@ export interface BatchJob {
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
+}
+
+export interface BatchCheckpoint {
+  id: string;
+  jobId: string;
+  projectId: string;
+  projectName: string;
+  totalOutputPages: number;
+  copiesPerPage: number;
+  chunkSizePages: number;
+  lastVerifiedPageZero: number;
+  completedPageCount: number;
+  status: 'in_progress' | 'paused' | 'interrupted' | 'completed' | 'discarded';
+  verifiedIntegrity: boolean;
+  outputFileName?: string;
+  outputSizeBytes?: number;
+  lastSerialByRule: Array<{
+    ruleId: string;
+    ruleName: string;
+    lastNumber: number;
+    nextResumeNumber: number;
+  }>;
+  partialPdfBase64?: string;
+  createdAt: string;
+  updatedAt: string;
+  error?: string;
+}
+
+export type WorkflowStepKind =
+  | 'import_pdf'
+  | 'local_scan'
+  | 'apply_profile'
+  | 'import_data'
+  | 'map_fields'
+  | 'validate_numbering'
+  | 'preview_sheet'
+  | 'preflight_check'
+  | 'bulk_generate'
+  | 'export_pdf'
+  | 'create_passport';
+
+export interface WorkflowStep {
+  id: string;
+  kind: WorkflowStepKind;
+  label: string;
+  enabled: boolean;
+  profileId?: string;
+  stopOnCriticalError?: boolean;
+  notes?: string;
+}
+
+export interface WorkflowChain {
+  id: string;
+  name: string;
+  description: string;
+  isPreset?: boolean;
+  projectId?: string;
+  steps: WorkflowStep[];
+  createdAt: string;
+  updatedAt: string;
+  lastRunAt?: string;
+}
+
+export interface WorkflowStepRunResult {
+  stepId: string;
+  kind: WorkflowStepKind;
+  label: string;
+  status: 'passed' | 'warning' | 'failed' | 'skipped';
+  summary: string;
+}
+
+export interface WorkflowRunLog {
+  id: string;
+  workflowId: string;
+  workflowName: string;
+  projectId: string;
+  status: 'completed' | 'halted' | 'cancelled';
+  stepResults: WorkflowStepRunResult[];
+  startedAt: string;
+  finishedAt: string;
 }
 
 export interface AssetFontItem {
@@ -629,10 +938,42 @@ export interface StudioSettings {
   inspectorWidthPx?: number;
   hiddenEditorTools?: string[];
   recentTools?: string[];
+  favoriteTools?: string[];
   recentFonts?: string[];
   favoriteFonts?: string[];
   shortcuts?: Record<ShortcutActionId, string>;
   autoSnapshotIntervalSec?: number;
+  activeEditingPresetId?: string;
+  editingPresets?: StudioEditingPreset[];
+}
+
+export type BatchExportStrategy =
+  | 'combined_pdf'
+  | 'separate_per_record'
+  | 'per_page_group';
+
+export interface ExportNamingProfile {
+  id: string;
+  name: string;
+  strategy: BatchExportStrategy;
+  filenameTemplate: string;
+  pageGroupSize: number;
+  recordRangeStart?: number;
+  recordRangeEnd?: number;
+  serialRangeFilter?: string;
+  includeBatchCsvReport: boolean;
+  createdAt: string;
+}
+
+export interface StudioEditingPreset {
+  id: string;
+  name: string;
+  description: string;
+  gridSizePt: number;
+  snapToObjects: boolean;
+  defaultUnit: MeasurementUnit;
+  showGridByDefault: boolean;
+  showRulersByDefault: boolean;
 }
 
 export type EditorToolCategory =

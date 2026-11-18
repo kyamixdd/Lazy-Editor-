@@ -8,6 +8,7 @@ import {
   ArrowUp,
   Bold,
   Check,
+  CheckCircle2,
   ChevronsDown,
   ChevronsUp,
   Copy,
@@ -22,8 +23,10 @@ import {
   Minus,
   Paintbrush,
   Plus,
+  QrCode,
   RotateCcw,
   Scan,
+  ScanBarcode,
   Send,
   ShieldAlert,
   Sparkles,
@@ -50,6 +53,7 @@ import {
   AssetFontItem,
   AssetPaletteItem,
   AssetTextStyleItem,
+  BarcodeFormat,
   BoundaryMode,
   DocumentElement,
   MeasurementUnit,
@@ -64,6 +68,7 @@ import {
 import { useViewport } from '../hooks/useViewport';
 import { formatFriendlyAiError } from '../utils/aiEnhancedAnalysis';
 import { AlignMode } from '../utils/alignmentEngine';
+import { validateBarcodeSpec } from '../utils/barcodeEngine';
 import { clampRect } from '../utils/geometryEngine';
 import { computeTypographyLayout } from '../utils/typographyEngine';
 import {
@@ -979,18 +984,31 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                             if (!f) return;
                             const reader = new FileReader();
                             reader.onload = () => {
-                              const dataUrl = String(reader.result || '');
+                              const rawUrl = String(reader.result || '');
                               const im = new Image();
                               im.onload = () => {
+                                const w = im.naturalWidth || 200;
+                                const h = im.naturalHeight || 150;
+                                const canvas = document.createElement('canvas');
+                                canvas.width = w;
+                                canvas.height = h;
+                                const ctx = canvas.getContext('2d');
+                                let normalizedUrl = rawUrl;
+                                if (ctx) {
+                                  ctx.drawImage(im, 0, 0);
+                                  normalizedUrl = canvas.toDataURL('image/png');
+                                }
+                                canvas.width = 0;
+                                canvas.height = 0;
                                 onUpdateElement(el.id, {
-                                  imageDataUrl: dataUrl,
-                                  imageNaturalWidth: im.naturalWidth,
-                                  imageNaturalHeight: im.naturalHeight,
+                                  imageDataUrl: normalizedUrl,
+                                  imageNaturalWidth: w,
+                                  imageNaturalHeight: h,
                                   imageCropRect: undefined,
                                   isUserAdded: true,
                                 });
                               };
-                              im.src = dataUrl;
+                              im.src = rawUrl;
                             };
                             reader.readAsDataURL(f);
                             e.target.value = '';
@@ -1159,8 +1177,236 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                   </div>
                 )}
 
+                {/* Barcode & QR Code Studio */}
+                {(el.type === 'barcode' || el.type === 'qr_code') && (() => {
+                  const fmt: BarcodeFormat =
+                    el.barcodeFormat || (el.type === 'qr_code' ? 'qr' : 'code128');
+                  const val = el.barcodeValue ?? el.text ?? '';
+                  const report = validateBarcodeSpec(el);
+                  return (
+                    <div className="pt-3 border-t border-black/10 dark:border-white/10 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5] flex items-center gap-1.5">
+                          {fmt === 'qr' ? (
+                            <QrCode className="w-3.5 h-3.5" />
+                          ) : (
+                            <ScanBarcode className="w-3.5 h-3.5" />
+                          )}
+                          Barcode &amp; QR Studio
+                        </span>
+                        <span className="text-[10px] font-mono tabular-nums text-[#888888] dark:text-[#858585]">
+                          {report.moduleSizePt.toFixed(2)}pt mod
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="block">
+                          <span className="text-[10px] text-[#888888] dark:text-[#858585]">
+                            Symbology
+                          </span>
+                          <select
+                            value={fmt}
+                            onChange={(e) => {
+                              const nextFmt = e.target.value as BarcodeFormat;
+                              onUpdateElement(el.id, {
+                                barcodeFormat: nextFmt,
+                                type: nextFmt === 'qr' ? 'qr_code' : 'barcode',
+                                ...(nextFmt === 'qr' && Math.abs(el.width - el.height) > 20
+                                  ? { height: el.width }
+                                  : {}),
+                              });
+                            }}
+                            className={`mt-0.5 w-full px-2 rounded-lg border studio-select ${inputHeightClass}`}
+                          >
+                            <option value="qr">QR Code (ISO 18004)</option>
+                            <option value="code128">Code 128 (Set B)</option>
+                            <option value="code39">Code 39</option>
+                            <option value="ean13">EAN-13 (Mod-10)</option>
+                            <option value="upca">UPC-A (Mod-10)</option>
+                          </select>
+                        </label>
+
+                        {fmt === 'qr' ? (
+                          <label className="block">
+                            <span className="text-[10px] text-[#888888] dark:text-[#858585]">
+                              Error Correction
+                            </span>
+                            <select
+                              value={el.qrErrorCorrection || 'M'}
+                              onChange={(e) =>
+                                onUpdateElement(el.id, {
+                                  qrErrorCorrection: e.target.value as 'L' | 'M' | 'Q' | 'H',
+                                })
+                              }
+                              className={`mt-0.5 w-full px-2 rounded-lg border studio-select ${inputHeightClass}`}
+                            >
+                              <option value="L">L (~7%)</option>
+                              <option value="M">M (~15%)</option>
+                              <option value="Q">Q (~25%)</option>
+                              <option value="H">H (~30%)</option>
+                            </select>
+                          </label>
+                        ) : (
+                          <label className="block">
+                            <span className="text-[10px] text-[#888888] dark:text-[#858585]">
+                              Quiet Zone (pt)
+                            </span>
+                            <input
+                              type="number"
+                              min="0"
+                              max="36"
+                              step="1"
+                              onFocus={scrollOnFocus}
+                              value={el.barcodeQuietZonePt ?? 6}
+                              onChange={(e) =>
+                                onUpdateElement(el.id, {
+                                  barcodeQuietZonePt: Math.max(0, Number(e.target.value) || 0),
+                                })
+                              }
+                              className={`mt-0.5 w-full px-2 rounded-lg border studio-input tabular-nums ${inputHeightClass}`}
+                            />
+                          </label>
+                        )}
+                      </div>
+
+                      {fmt === 'qr' && (
+                        <label className="block">
+                          <span className="text-[10px] text-[#888888] dark:text-[#858585]">
+                            Quiet Zone Margin (pt)
+                          </span>
+                          <input
+                            type="number"
+                            min="0"
+                            max="36"
+                            step="1"
+                            onFocus={scrollOnFocus}
+                            value={el.barcodeQuietZonePt ?? 6}
+                            onChange={(e) =>
+                              onUpdateElement(el.id, {
+                                barcodeQuietZonePt: Math.max(0, Number(e.target.value) || 0),
+                              })
+                            }
+                            className={`mt-0.5 w-full px-2 rounded-lg border studio-input tabular-nums ${inputHeightClass}`}
+                          />
+                        </label>
+                      )}
+
+                      <label className="block">
+                        <span className="text-[10px] text-[#888888] dark:text-[#858585]">
+                          Payload / Default Value (overridden by Field Key in Bulk/Data)
+                        </span>
+                        <input
+                          type="text"
+                          onFocus={scrollOnFocus}
+                          value={val}
+                          onChange={(e) =>
+                            onUpdateElement(el.id, {
+                              barcodeValue: e.target.value,
+                              text: e.target.value,
+                            })
+                          }
+                          placeholder={
+                            fmt === 'ean13'
+                              ? '12 or 13 digits'
+                              : fmt === 'upca'
+                              ? '11 or 12 digits'
+                              : 'INV-0001'
+                          }
+                          className={`mt-0.5 w-full px-2 rounded-lg border studio-input font-mono ${inputHeightClass}`}
+                        />
+                      </label>
+
+                      {fmt !== 'qr' && (
+                        <label className="flex items-center gap-2 cursor-pointer text-[11px] text-[#101010] dark:text-white">
+                          <input
+                            type="checkbox"
+                            checked={el.barcodeIncludeText !== false}
+                            onChange={(e) =>
+                              onUpdateElement(el.id, {
+                                barcodeIncludeText: e.target.checked,
+                              })
+                            }
+                          />
+                          <span>Show human-readable text below bars</span>
+                        </label>
+                      )}
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="flex items-center justify-between gap-2 text-[10px] text-[#888888] dark:text-[#858585]">
+                          <span>Bars / Modules</span>
+                          <input
+                            type="color"
+                            value={el.color || '#111827'}
+                            onChange={(e) =>
+                              onUpdateElement(el.id, { color: e.target.value })
+                            }
+                            className="w-8 h-7 rounded border border-black/15 dark:border-white/15 bg-transparent cursor-pointer"
+                          />
+                        </label>
+                        <label className="flex items-center justify-between gap-2 text-[10px] text-[#888888] dark:text-[#858585]">
+                          <span>Background</span>
+                          <input
+                            type="color"
+                            value={
+                              el.backgroundColor === 'transparent'
+                                ? '#FFFFFF'
+                                : el.backgroundColor || '#FFFFFF'
+                            }
+                            onChange={(e) =>
+                              onUpdateElement(el.id, { backgroundColor: e.target.value })
+                            }
+                            className="w-8 h-7 rounded border border-black/15 dark:border-white/15 bg-transparent cursor-pointer"
+                          />
+                        </label>
+                      </div>
+
+                      {/* Real-time Scannability & Check-Digit Validation Status */}
+                      <div
+                        className={`p-2 rounded-lg border text-[10px] space-y-1 ${
+                          report.errors.length > 0
+                            ? 'border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-300'
+                            : report.warnings.length > 0
+                            ? 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                            : 'border-black/12 dark:border-white/15 bg-black/[0.03] dark:bg-white/[0.04] text-[#101010] dark:text-white'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between font-semibold">
+                          <span className="flex items-center gap-1">
+                            {report.errors.length > 0 ? (
+                              <AlertTriangle className="w-3 h-3" />
+                            ) : (
+                              <CheckCircle2 className="w-3 h-3" />
+                            )}
+                            {report.errors.length > 0
+                              ? 'Invalid Barcode Spec'
+                              : report.warnings.length > 0
+                              ? 'Scannability Warning'
+                              : 'Vector Barcode Verified'}
+                          </span>
+                          {report.encoded.checkDigitComputed && (
+                            <span className="font-mono tabular-nums">
+                              Chk: {report.encoded.checkDigitComputed}
+                            </span>
+                          )}
+                        </div>
+                        {report.errors.map((err, idx) => (
+                          <div key={`berr-${idx}`}>{err}</div>
+                        ))}
+                        {report.warnings.map((w, idx) => (
+                          <div key={`bwarn-${idx}`}>{w}</div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* Advanced Typography Studio & Styling */}
-                {el.type !== 'image' && el.type !== 'signature' && el.type !== 'line' && el.type !== 'draw' && (
+                {el.type !== 'image' &&
+                  el.type !== 'signature' &&
+                  el.type !== 'line' &&
+                  el.type !== 'draw' &&
+                  el.type !== 'barcode' &&
+                  el.type !== 'qr_code' && (
                   <div className="pt-3 border-t border-black/10 dark:border-white/10 space-y-2.5">
                     {(() => {
                       const typo = computeTypographyLayout(el);

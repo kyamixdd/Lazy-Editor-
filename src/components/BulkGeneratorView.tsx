@@ -23,6 +23,7 @@ import {
   PageConfig,
   PDFProject,
   ScalingMode,
+  SerialBatchRecord,
   SerialSequenceRule,
   SlotOverride,
   SourceFitConfig,
@@ -41,15 +42,23 @@ import {
 import { presetToGrid, ptToUnit, unitToPt } from '../utils/units';
 import { GlassButton } from './glass';
 import { PageConfigurationModal } from './PageConfigurationModal';
+import { PrintOptimizerPanel } from './PrintOptimizerPanel';
+import { SerialIntelligencePanel } from './SerialIntelligencePanel';
 
 interface BulkGeneratorViewProps {
   project: PDFProject;
+  serialBatches?: SerialBatchRecord[];
+  onSaveSerialBatch?: (record: SerialBatchRecord) => void;
+  onDeleteSerialBatch?: (id: string) => void;
   onUpdateProject: (updated: PDFProject) => void;
   onGoToExport: () => void;
 }
 
 export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
   project,
+  serialBatches = [],
+  onSaveSerialBatch = () => {},
+  onDeleteSerialBatch = () => {},
   onUpdateProject,
   onGoToExport,
 }) => {
@@ -57,7 +66,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
   const subTabGroupId = useId();
   const viewport = useViewport();
   const csvInputRef = useRef<HTMLInputElement>(null);
-  const [subTab, setSubTab] = useState<'copies' | 'bulk' | 'serial' | 'preview'>('copies');
+  const [subTab, setSubTab] = useState<'copies' | 'bulk' | 'serial' | 'optimizer' | 'preview'>('copies');
   const [selectedSlotIdx, setSelectedSlotIdx] = useState<number>(0);
   const [showPageSetupModal, setShowPageSetupModal] = useState(false);
   const [csvImportStatus, setCsvImportStatus] = useState<string | null>(null);
@@ -223,14 +232,16 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
 
   const availableTabs: Array<[typeof subTab, string]> = viewport.isDesktop
     ? [
-        ['copies', 'Copies Per Page'],
-        ['bulk', 'Bulk Job'],
-        ['serial', 'Serial Rules'],
-      ]
-    : [
         ['copies', 'Copies'],
         ['bulk', 'Bulk Job'],
         ['serial', 'Serial Rules'],
+        ['optimizer', 'Optimizer'],
+      ]
+    : [
+        ['copies', 'Copies'],
+        ['bulk', 'Bulk'],
+        ['serial', 'Serial'],
+        ['optimizer', 'Optimize'],
         ['preview', 'Preview'],
       ];
 
@@ -272,7 +283,11 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
         <LayoutGroup id={`bulk-tabs-${subTabGroupId}`}>
           <div
             className={`grid ${
-              availableTabs.length === 4 ? 'grid-cols-4' : 'grid-cols-3'
+              availableTabs.length === 5
+                ? 'grid-cols-5'
+                : availableTabs.length === 4
+                ? 'grid-cols-4'
+                : 'grid-cols-3'
             } border-b border-black/10 dark:border-white/12 text-xs font-medium shrink-0`}
           >
             {availableTabs.map(([id, label]) => {
@@ -1457,7 +1472,24 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                   </div>
                 </div>
               )}
+
+              <SerialIntelligencePanel
+                project={project}
+                copiesPerPage={copiesPerPage}
+                serialBatches={serialBatches}
+                onUpdateRules={updateRules}
+                onSaveSerialBatch={onSaveSerialBatch}
+                onDeleteSerialBatch={onDeleteSerialBatch}
+              />
             </div>
+          )}
+
+          {effectiveSubTab === 'optimizer' && (
+            <PrintOptimizerPanel
+              project={project}
+              layout={layout}
+              onUpdateProject={onUpdateProject}
+            />
           )}
             </motion.div>
           </AnimatePresence>

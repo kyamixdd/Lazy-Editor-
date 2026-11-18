@@ -21,6 +21,7 @@ import {
 } from '../config/motionSystem';
 import {
   ActiveEditorTool,
+  BarcodeFormat,
   DocumentElement,
   MeasurementUnit,
   PageConfig,
@@ -32,6 +33,7 @@ import {
   computeSmartSnapAndGuides,
   getElementsInMarquee,
 } from '../utils/alignmentEngine';
+import { encodeBarcode } from '../utils/barcodeEngine';
 import { clampRect } from '../utils/geometryEngine';
 import { computeTypographyLayout } from '../utils/typographyEngine';
 import { ptToUnit } from '../utils/units';
@@ -1584,13 +1586,136 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
                 width: Math.max(8, cW - (cellPadding || 4) * 2),
                 height: Math.max(8, rH - (cellPadding || 4) * 2),
                 text: String(rows[r]?.[c] ?? ''),
+                fontFamily: mapFontToCanvasCss(el.fontFamily),
                 fontSize: Math.min(el.fontSize || 9.5, rH * 0.6),
                 fontStyle: headerRow && r === 0 ? 'bold' : 'normal',
+                align: el.align || 'left',
                 fill: el.color || '#111827',
                 verticalAlign: 'middle',
               })
             );
           }
+        }
+      } else if (el.type === 'barcode' || el.type === 'qr_code') {
+        const format: BarcodeFormat =
+          el.barcodeFormat || (el.type === 'qr_code' ? 'qr' : 'code128');
+        const payload = el.barcodeValue || el.text || '';
+        const encoded = encodeBarcode(format, payload, el.qrErrorCorrection || 'M');
+        const qz = Math.max(0, el.barcodeQuietZonePt ?? 6);
+        const bgFill =
+          el.backgroundColor && el.backgroundColor !== 'transparent'
+            ? el.backgroundColor
+            : '#FFFFFF';
+        const fgColor = el.color || '#000000';
+
+        group.add(
+          new Konva.Rect({
+            width: el.width,
+            height: el.height,
+            fill: bgFill,
+            stroke: isPreview
+              ? 'transparent'
+              : encoded.ok
+              ? 'rgba(16, 16, 16, 0.32)'
+              : '#DC2626',
+            strokeWidth: (encoded.ok ? 0.7 : 1.3) / zoom,
+            dash: !isPreview && !encoded.ok ? [4 / zoom, 2 / zoom] : undefined,
+          })
+        );
+
+        if (encoded.ok) {
+          group.add(
+            new Konva.Shape({
+              width: el.width,
+              height: el.height,
+              listening: false,
+              sceneFunc: (ctx, shape) => {
+                const innerW = Math.max(4, el.width - qz * 2);
+                const innerH = Math.max(4, el.height - qz * 2);
+                ctx.fillStyle = fgColor;
+
+                if (encoded.matrix) {
+                  const n = encoded.matrix.size;
+                  const dim = Math.min(innerW, innerH);
+                  const cell = dim / n;
+                  const startX = qz + (innerW - dim) / 2;
+                  const startY = qz + (innerH - dim) / 2;
+                  for (let r = 0; r < n; r++) {
+                    let c = 0;
+                    while (c < n) {
+                      if (encoded.matrix.rows[r][c] === 1) {
+                        let run = 1;
+                        while (c + run < n && encoded.matrix.rows[r][c + run] === 1) run++;
+                        ctx.fillRect(
+                          startX + c * cell,
+                          startY + r * cell,
+                          run * cell + 0.05,
+                          cell + 0.05
+                        );
+                        c += run;
+                      } else {
+                        c++;
+                      }
+                    }
+                  }
+                } else if (encoded.linearModules && encoded.totalModules) {
+                  const showText = el.barcodeIncludeText !== false && innerH >= 20;
+                  const textBandH = showText ? Math.min(11, Math.max(7, innerH * 0.24)) : 0;
+                  const barH = Math.max(4, innerH - textBandH);
+                  const modW = innerW / encoded.totalModules;
+                  const mods = encoded.linearModules;
+                  let i = 0;
+                  while (i < mods.length) {
+                    if (mods[i] === 1) {
+                      let run = 1;
+                      while (i + run < mods.length && mods[i + run] === 1) run++;
+                      ctx.fillRect(qz + i * modW, qz, run * modW, barH);
+                      i += run;
+                    } else {
+                      i++;
+                    }
+                  }
+                }
+                ctx.fillStrokeShape(shape);
+              },
+            })
+          );
+
+          if (!encoded.matrix && el.barcodeIncludeText !== false && el.height - qz * 2 >= 20) {
+            const innerW = Math.max(4, el.width - qz * 2);
+            const innerH = Math.max(4, el.height - qz * 2);
+            const textBandH = Math.min(11, Math.max(7, innerH * 0.24));
+            group.add(
+              new Konva.Text({
+                x: qz,
+                y: qz + innerH - textBandH,
+                width: innerW,
+                height: textBandH,
+                text: encoded.displayValue,
+                fontFamily: 'JetBrains Mono, Courier, monospace',
+                fontSize: Math.max(5.5, Math.min(9.5, textBandH * 0.82)),
+                fill: fgColor,
+                align: 'center',
+                verticalAlign: 'middle',
+                listening: false,
+              })
+            );
+          }
+        } else {
+          group.add(
+            new Konva.Text({
+              x: 4,
+              y: 4,
+              width: Math.max(12, el.width - 8),
+              height: Math.max(12, el.height - 8),
+              text: encoded.error || 'Invalid Barcode',
+              fontSize: 8,
+              fill: '#DC2626',
+              align: 'center',
+              verticalAlign: 'middle',
+              listening: false,
+            })
+          );
         }
       } else {
         const shouldDrawFillAndText = Boolean(
@@ -1626,28 +1751,44 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
           ]
             .filter(Boolean)
             .join(' ');
-          group.add(
-            new Konva.Text({
-              y: -(el.baselineOffset || 0),
-              width: el.width,
-              height: el.height,
-              text: el.text,
-              fontFamily: mapFontToCanvasCss(el.fontFamily),
-              fontSize: typo.effectiveFontSize,
-              fontStyle:
-                `${el.fontWeight === 'bold' ? 'bold' : ''} ${
-                  el.fontStyle === 'italic' ? 'italic' : ''
-                }`.trim() || 'normal',
-              textDecoration: textDeco || undefined,
-              letterSpacing: el.letterSpacing ?? 0,
-              lineHeight: el.lineHeight ?? 1.2,
-              fill: el.color || '#111827',
-              align: el.align || 'left',
-              verticalAlign: el.verticalAlign || 'top',
-              wrap: el.textWrap === false ? 'none' : 'word',
-              padding: Math.max(0, el.paddingPt ?? 1),
-            })
-          );
+          const paddingPt = Math.max(0, el.paddingPt ?? 1);
+          const fontStyleStr =
+            `${el.fontWeight === 'bold' ? 'bold' : ''} ${
+              el.fontStyle === 'italic' ? 'italic' : ''
+            }`.trim() || 'normal';
+          const textClipGroup = new Konva.Group({
+            clipX: 0,
+            clipY: 0,
+            clipWidth: el.width,
+            clipHeight: el.height,
+            listening: false,
+          });
+          let cursorY = typo.verticalOffsetPt;
+          typo.lines.forEach((lineObj, idx) => {
+            if (idx > 0 && lineObj.paragraphIndex !== typo.lines[idx - 1].paragraphIndex) {
+              cursorY += typo.paragraphSpacingPt;
+            }
+            textClipGroup.add(
+              new Konva.Text({
+                x: paddingPt,
+                y: cursorY - (el.baselineOffset || 0),
+                width: typo.contentBoxWidthPt,
+                height: typo.lineHeightPt * 1.15,
+                text: lineObj.text,
+                fontFamily: mapFontToCanvasCss(el.fontFamily),
+                fontSize: typo.effectiveFontSize,
+                fontStyle: fontStyleStr,
+                textDecoration: textDeco || undefined,
+                letterSpacing: el.letterSpacing ?? 0,
+                fill: el.color || '#111827',
+                align: el.align || 'left',
+                wrap: 'none',
+                listening: false,
+              })
+            );
+            cursorY += typo.lineHeightPt;
+          });
+          group.add(textClipGroup);
           if (!isPreview && typo.isClipped) {
             group.add(
               new Konva.Circle({
@@ -2232,9 +2373,16 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
                   top: inlineElement.y * zoom,
                   width: Math.max(120, inlineElement.width * zoom),
                   height: Math.max(36, inlineElement.height * zoom),
+                  fontFamily: mapFontToCanvasCss(inlineElement.fontFamily),
                   fontSize: Math.max(12, inlineElement.fontSize * zoom),
                   fontWeight: inlineElement.fontWeight,
+                  fontStyle: inlineElement.fontStyle,
+                  textAlign: inlineElement.align,
                   color: inlineElement.color,
+                  transform: inlineElement.rotation
+                    ? `rotate(${inlineElement.rotation}deg)`
+                    : undefined,
+                  transformOrigin: 'top left',
                 }}
                 className="absolute z-20 p-1.5 bg-white/95 border-2 border-[#101010] rounded-xs outline-none resize-none leading-tight shadow-md"
               />

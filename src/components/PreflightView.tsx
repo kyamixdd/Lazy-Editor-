@@ -15,6 +15,7 @@ import {
 } from '../types/pdfStudio';
 import { analyzeDataQuality } from '../utils/dataFormulaEngine';
 import { normalizeFitConfig } from '../utils/geometryEngine';
+import { applyTrueRedactionsToProject } from '../utils/redactionEngine';
 import { validateProject } from '../utils/validationEngine';
 import { GlassButton, GlassCard, GlassSegmentedControl } from './glass';
 
@@ -76,7 +77,8 @@ export const PreflightView: React.FC<PreflightViewProps> = ({
         issue.category === 'clipping' ||
         issue.category === 'aspect_ratio' ||
         issue.category === 'blank_region' ||
-        issue.category === 'inconsistent_repeated'
+        issue.category === 'inconsistent_repeated' ||
+        issue.category === 'pending_redaction'
       );
     }
     if (filter === 'fonts') {
@@ -208,6 +210,11 @@ export const PreflightView: React.FC<PreflightViewProps> = ({
         exportConfig: { ...project.exportConfig, embedFonts: true },
         updatedAt: new Date().toISOString(),
       });
+    } else if (issue.category === 'pending_redaction') {
+      const res = applyTrueRedactionsToProject(project);
+      if (res.appliedRedactionCount > 0) {
+        onUpdateProject(res.updatedProject);
+      }
     }
   };
 

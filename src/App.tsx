@@ -10,30 +10,40 @@ import {
 import { AboutView } from './components/AboutView';
 import { AssetLibraryView } from './components/AssetLibraryView';
 import { BatchCenterView } from './components/BatchCenterView';
+import { BlueprintStudioView } from './components/BlueprintStudioView';
 import { BulkGeneratorView } from './components/BulkGeneratorView';
+import { CommandPaletteModal } from './components/CommandPaletteModal';
 import { ComparisonView } from './components/ComparisonView';
 import { DashboardView } from './components/DashboardView';
 import { DataManagerView } from './components/DataManagerView';
 import { EditorView } from './components/EditorView';
 import { ExportCenterView } from './components/ExportCenterView';
 import { NewProjectView } from './components/NewProjectView';
+import { PdfUtilitiesView } from './components/PdfUtilitiesView';
 import { PreflightView } from './components/PreflightView';
 import { SettingsView } from './components/SettingsView';
 import { SidebarNav } from './components/SidebarNav';
 import { TemplatesView } from './components/TemplatesView';
+import { WorkflowStudioView } from './components/WorkflowStudioView';
 import {
   AssetFontItem,
   AssetImageItem,
   AssetLibraryItem,
   AssetShapeItem,
+  BatchCheckpoint,
   BatchJob,
   DocumentElement,
+  DocumentIntegrityPassport,
+  ExportNamingProfile,
   NavSection,
   PDFProject,
+  ProductionBlueprint,
   ProjectVersionSnapshot,
+  SerialBatchRecord,
   StudioSettings,
   TemplateAutomationProfile,
   UnsavedDraftRecord,
+  WorkflowChain,
 } from './types/pdfStudio';
 import { registerBrowserFonts } from './utils/fontUtils';
 import {
@@ -42,22 +52,40 @@ import {
   clearBatchHistory,
   clearUnsavedDraft,
   deleteAsset,
+  deleteBatchCheckpoint,
   deleteBatchJob,
+  deleteBlueprint,
+  deleteExportProfile,
+  deletePassport,
   deleteProjectLocal,
+  deleteSerialBatch,
   deleteTemplateProfile,
+  deleteWorkflow,
   getActiveProjectId,
   listAssets,
+  listBatchCheckpoints,
   listBatchJobs,
+  listBlueprints,
+  listExportProfiles,
+  listPassports,
   listProjectsLocal,
+  listSerialBatches,
   listTemplateProfiles,
   listUnsavedDrafts,
+  listWorkflows,
   loadSettings,
   saveAsset,
+  saveBatchCheckpoint,
   saveBatchJob,
+  saveBlueprint,
+  saveExportProfile,
+  savePassport,
   saveProjectLocal,
+  saveSerialBatch,
   saveSettings,
   saveTemplateProfile,
   saveUnsavedDraft,
+  saveWorkflow,
   setActiveProjectId,
 } from './utils/projectStorage';
 import {
@@ -106,6 +134,12 @@ export default function App() {
     TemplateAutomationProfile[]
   >([]);
   const [batchJobs, setBatchJobs] = useState<BatchJob[]>([]);
+  const [batchCheckpoints, setBatchCheckpoints] = useState<BatchCheckpoint[]>([]);
+  const [blueprints, setBlueprints] = useState<ProductionBlueprint[]>([]);
+  const [serialBatches, setSerialBatches] = useState<SerialBatchRecord[]>([]);
+  const [passports, setPassports] = useState<DocumentIntegrityPassport[]>([]);
+  const [exportProfiles, setExportProfiles] = useState<ExportNamingProfile[]>([]);
+  const [workflows, setWorkflows] = useState<WorkflowChain[]>([]);
   const [recoverableDrafts, setRecoverableDrafts] = useState<
     UnsavedDraftRecord[]
   >([]);
@@ -165,6 +199,12 @@ export default function App() {
     });
     void listTemplateProfiles().then(setAutomationProfiles);
     void listBatchJobs().then(setBatchJobs);
+    void listBatchCheckpoints().then(setBatchCheckpoints);
+    void listBlueprints().then(setBlueprints);
+    void listSerialBatches().then(setSerialBatches);
+    void listPassports().then(setPassports);
+    void listExportProfiles().then(setExportProfiles);
+    void listWorkflows().then(setWorkflows);
     void listUnsavedDrafts().then(setRecoverableDrafts);
   }, []);
 
@@ -367,6 +407,66 @@ export default function App() {
     void clearBatchHistory();
   };
 
+  const handleSaveBlueprint = (bp: ProductionBlueprint) => {
+    setBlueprints((prev) => [bp, ...prev.filter((x) => x.id !== bp.id)]);
+    void saveBlueprint(bp);
+  };
+
+  const handleDeleteBlueprint = (id: string) => {
+    setBlueprints((prev) => prev.filter((x) => x.id !== id));
+    void deleteBlueprint(id);
+  };
+
+  const handleSaveSerialBatch = (record: SerialBatchRecord) => {
+    setSerialBatches((prev) => [record, ...prev.filter((x) => x.id !== record.id)]);
+    void saveSerialBatch(record);
+  };
+
+  const handleDeleteSerialBatch = (id: string) => {
+    setSerialBatches((prev) => prev.filter((x) => x.id !== id));
+    void deleteSerialBatch(id);
+  };
+
+  const handleSavePassport = (passport: DocumentIntegrityPassport) => {
+    setPassports((prev) => [passport, ...prev.filter((x) => x.id !== passport.id)]);
+    void savePassport(passport);
+  };
+
+  const handleDeletePassport = (id: string) => {
+    setPassports((prev) => prev.filter((x) => x.id !== id));
+    void deletePassport(id);
+  };
+
+  const handleSaveExportProfile = (profile: ExportNamingProfile) => {
+    setExportProfiles((prev) => [profile, ...prev.filter((x) => x.id !== profile.id)]);
+    void saveExportProfile(profile);
+  };
+
+  const handleDeleteExportProfile = (id: string) => {
+    setExportProfiles((prev) => prev.filter((x) => x.id !== id));
+    void deleteExportProfile(id);
+  };
+
+  const handleSaveCheckpoint = (cp: BatchCheckpoint) => {
+    setBatchCheckpoints((prev) => [cp, ...prev.filter((x) => x.id !== cp.id)]);
+    void saveBatchCheckpoint(cp);
+  };
+
+  const handleDeleteCheckpoint = (id: string) => {
+    setBatchCheckpoints((prev) => prev.filter((x) => x.id !== id));
+    void deleteBatchCheckpoint(id);
+  };
+
+  const handleSaveWorkflow = (wf: WorkflowChain) => {
+    setWorkflows((prev) => [wf, ...prev.filter((x) => x.id !== wf.id)]);
+    void saveWorkflow(wf);
+  };
+
+  const handleDeleteWorkflow = (id: string) => {
+    setWorkflows((prev) => prev.filter((x) => x.id !== id));
+    void deleteWorkflow(id);
+  };
+
   const handleEnqueueBatch = (proj: PDFProject) => {
     const totalPages =
       proj.bulkConfig.enabled || proj.copiesConfig.enabled
@@ -476,6 +576,18 @@ export default function App() {
   };
 
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setCommandPaletteOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   const handleToggleFavoriteProject = (proj: PDFProject) => {
     const updated: PDFProject = {
@@ -519,6 +631,7 @@ export default function App() {
           workspaceLayout={settings.workspaceLayout}
           mobileDrawerOpen={mobileDrawerOpen}
           onMobileDrawerOpenChange={setMobileDrawerOpen}
+          onOpenCommandPalette={() => setCommandPaletteOpen(true)}
         />
 
         <main
@@ -675,9 +788,23 @@ export default function App() {
                 />
               )}
 
+              {activeSection === 'blueprint-studio' && (
+                <BlueprintStudioView
+                  project={activeProject}
+                  blueprints={blueprints}
+                  onSaveBlueprint={handleSaveBlueprint}
+                  onDeleteBlueprint={handleDeleteBlueprint}
+                  onUpdateProject={handleSaveProject}
+                  onGoToExport={() => setActiveSection('export-center')}
+                />
+              )}
+
               {activeSection === 'bulk-generator' && activeProject && (
                 <BulkGeneratorView
                   project={activeProject}
+                  serialBatches={serialBatches}
+                  onSaveSerialBatch={handleSaveSerialBatch}
+                  onDeleteSerialBatch={handleDeleteSerialBatch}
                   onUpdateProject={handleSaveProject}
                   onGoToExport={() => setActiveSection('export-center')}
                 />
@@ -714,9 +841,28 @@ export default function App() {
                   projects={projects}
                   customFonts={customFonts}
                   batchJobs={batchJobs}
+                  serialBatches={serialBatches}
+                  checkpoints={batchCheckpoints}
                   onSaveBatchJob={handleSaveBatchJob}
                   onDeleteBatchJob={handleDeleteBatchJob}
                   onClearBatchHistory={handleClearBatchHistory}
+                  onSaveCheckpoint={handleSaveCheckpoint}
+                  onDeleteCheckpoint={handleDeleteCheckpoint}
+                />
+              )}
+
+              {activeSection === 'workflow-studio' && (
+                <WorkflowStudioView
+                  projects={projects}
+                  activeProject={activeProject}
+                  customFonts={customFonts}
+                  profiles={automationProfiles}
+                  serialBatches={serialBatches}
+                  workflows={workflows}
+                  onSaveWorkflow={handleSaveWorkflow}
+                  onDeleteWorkflow={handleDeleteWorkflow}
+                  onUpdateProject={handleSaveProject}
+                  onSavePassport={handleSavePassport}
                 />
               )}
 
@@ -735,6 +881,12 @@ export default function App() {
                 <ExportCenterView
                   project={activeProject}
                   customFonts={customFonts}
+                  passports={passports}
+                  exportProfiles={exportProfiles}
+                  onSavePassport={handleSavePassport}
+                  onDeletePassport={handleDeletePassport}
+                  onSaveExportProfile={handleSaveExportProfile}
+                  onDeleteExportProfile={handleDeleteExportProfile}
                   onUpdateProject={handleSaveProject}
                   onJumpToEditor={() => setActiveSection('editor')}
                   onInspectElement={handleInspectElement}
@@ -742,6 +894,10 @@ export default function App() {
                   onEnqueueBatch={handleEnqueueBatch}
                   onRecordExportActivity={handleSaveBatchJob}
                 />
+              )}
+
+              {activeSection === 'pdf-utilities' && (
+                <PdfUtilitiesView activeProject={activeProject} />
               )}
 
               {activeSection === 'settings' && (
@@ -759,6 +915,25 @@ export default function App() {
             </motion.div>
           </AnimatePresence>
         </main>
+
+        <CommandPaletteModal
+          isOpen={commandPaletteOpen}
+          onClose={() => setCommandPaletteOpen(false)}
+          projects={projects}
+          blueprints={blueprints}
+          profiles={automationProfiles}
+          workflows={workflows}
+          activeProject={activeProject}
+          resolvedTheme={resolvedTheme}
+          onToggleTheme={() =>
+            setSettings((s) => ({
+              ...s,
+              theme: resolvedTheme === 'dark' ? 'light' : 'dark',
+            }))
+          }
+          onNavigate={setActiveSection}
+          onOpenProject={handleOpenProject}
+        />
       </div>
     </MotionConfig>
   );

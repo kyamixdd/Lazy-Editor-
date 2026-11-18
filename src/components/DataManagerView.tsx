@@ -36,6 +36,7 @@ import {
   parseSpreadsheetFile,
 } from '../utils/dataFormulaEngine';
 import { GlassButton, GlassCard } from './glass';
+import { DataSimulatorPanel } from './DataSimulatorPanel';
 
 interface DataManagerViewProps {
   project: PDFProject;
@@ -68,6 +69,7 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
   const [showMappingPanel, setShowMappingPanel] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [mobileViewMode, setMobileViewMode] = useState<'cards' | 'table'>('cards');
+  const [workspaceMode, setWorkspaceMode] = useState<'spreadsheet' | 'simulator'>('spreadsheet');
 
   const { dataColumns, dataRows } = project;
 
@@ -289,6 +291,30 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <div className="inline-flex rounded-xl border border-black/15 dark:border-white/15 overflow-hidden p-0.5 glass-level-2 text-xs">
+            <button
+              type="button"
+              onClick={() => setWorkspaceMode('spreadsheet')}
+              className={`px-3 py-1.5 rounded-lg font-medium transition-colors ${
+                workspaceMode === 'spreadsheet'
+                  ? 'bg-[#101010] text-white dark:bg-white dark:text-[#050505]'
+                  : 'text-[#555555] dark:text-[#B5B5B5]'
+              }`}
+            >
+              Spreadsheet
+            </button>
+            <button
+              type="button"
+              onClick={() => setWorkspaceMode('simulator')}
+              className={`px-3 py-1.5 rounded-lg font-medium transition-colors ${
+                workspaceMode === 'simulator'
+                  ? 'bg-[#101010] text-white dark:bg-white dark:text-[#050505]'
+                  : 'text-[#555555] dark:text-[#B5B5B5]'
+              }`}
+            >
+              Visual Data Simulator
+            </button>
+          </div>
           <input
             ref={fileInputRef}
             type="file"
@@ -341,6 +367,14 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
           </GlassButton>
         </div>
       </div>
+
+      {workspaceMode === 'simulator' ? (
+        <DataSimulatorPanel
+          project={project}
+          onUpdateProject={onUpdateProject}
+        />
+      ) : (
+        <>
 
       <AnimatePresence>
         {importError && (
@@ -1191,6 +1225,8 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
           </button>
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 };

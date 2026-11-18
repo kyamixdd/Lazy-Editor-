@@ -2,15 +2,21 @@ import React, { useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
   AlertTriangle,
+  Archive,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Download,
+  FileSpreadsheet,
   FolderOpen,
+  FolderOutput,
   Layers,
   Loader2,
   Maximize2,
+  Plus,
+  Save,
   ShieldCheck,
+  Trash2,
   Upload,
   Wrench,
 } from 'lucide-react';
@@ -24,13 +30,27 @@ import {
 } from '../config/motionSystem';
 import {
   AssetFontItem,
+  BatchExportStrategy,
   BatchJob,
+  DocumentIntegrityPassport,
   ExportConfig,
   ExportMode,
+  ExportNamingProfile,
   PageConfig,
   PDFProject,
   ValidationIssue,
 } from '../types/pdfStudio';
+import {
+  BatchExportResultItem,
+  buildBatchZipArchive,
+  createDefaultExportNamingProfile,
+  runManagedBatchExport,
+} from '../utils/batchExportEngine';
+import {
+  buildPassportCsv,
+  createDocumentIntegrityPassport,
+  generatePassportPdfBytes,
+} from '../utils/passportEngine';
 import { generateExportBytes } from '../utils/pdfExporter';
 import {
   renderPdfPagesForStudio,
@@ -38,6 +58,7 @@ import {
   uint8ArrayToBase64,
 } from '../utils/pdfRenderer';
 import { computeSheetLayout, normalizeFitConfig } from '../utils/geometryEngine';
+import { applyTrueRedactionsToProject } from '../utils/redactionEngine';
 import {
   createDefaultBulkConfig,
   createDefaultCopiesConfig,
@@ -53,6 +74,12 @@ import { PageConfigurationModal } from './PageConfigurationModal';
 interface ExportCenterViewProps {
   project: PDFProject;
   customFonts?: AssetFontItem[];
+  passports?: DocumentIntegrityPassport[];
+  exportProfiles?: ExportNamingProfile[];
+  onSavePassport?: (passport: DocumentIntegrityPassport) => void;
+  onDeletePassport?: (id: string) => void;
+  onSaveExportProfile?: (profile: ExportNamingProfile) => void;
+  onDeleteExportProfile?: (id: string) => void;
   onUpdateProject: (updated: PDFProject) => void;
   onJumpToEditor: () => void;
   onInspectElement?: (pageNumber: number, elementId?: string) => void;
@@ -77,6 +104,12 @@ const EXPORT_MODES: Array<{ id: ExportMode; label: string; desc: string }> = [
 export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
   project,
   customFonts = [],
+  passports = [],
+  exportProfiles = [],
+  onSavePassport,
+  onDeletePassport,
+  onSaveExportProfile,
+  onDeleteExportProfile,
   onUpdateProject,
   onJumpToEditor,
   onInspectElement,
@@ -97,6 +130,7 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
     verifiedPageCount?: number;
     verifiedWidthPt?: number;
     verifiedHeightPt?: number;
+    passport?: DocumentIntegrityPassport;
   } | null>(null);
   const [previewPageNum, setPreviewPageNum] = useState(1);
   const [previewPageImg, setPreviewPageImg] = useState<string | null>(null);
@@ -104,6 +138,22 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
   const [showPageSetupModal, setShowPageSetupModal] = useState(false);
   const [mergeFiles, setMergeFiles] = useState<Array<{ name: string; bytes: Uint8Array }>>([]);
   const mergeInputRef = useRef<HTMLInputElement>(null);
+
+  // Managed Batch Export Manager state (Module 11)
+  const [activeNamingProfile, setActiveNamingProfile] = useState<ExportNamingProfile>(() =>
+    createDefaultExportNamingProfile()
+  );
+  const [managedExportBusy, setManagedExportBusy] = useState(false);
+  const [managedExportProgress, setManagedExportProgress] = useState({
+    stage: '',
+    current: 0,
+    total: 1,
+  });
+  const [managedExportResults, setManagedExportResults] = useState<{
+    items: BatchExportResultItem[];
+    csvReport: string;
+  } | null>(null);
+  const [managedExportMessage, setManagedExportMessage] = useState<string | null>(null);
 
   const issues = useMemo(
     () => validateProject(project, customFonts),
@@ -216,6 +266,111 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
       });
     } else if (issue.category === 'font_substitution') {
       updateExport({ embedFonts: true });
+    } else if (issue.category === 'pending_redaction') {
+      const res = applyTrueRedactionsToProject(project);
+      if (res.appliedRedactionCount > 0) {
+        onUpdateProject(res.updatedProject);
+      }
+    }
+  };
+
+  const handleRunManagedBatchExport = async () => {
+    if (errorIssues.length > 0) return;
+    setManagedExportBusy(true);
+    setManagedExportMessage(null);
+    setManagedExportProgress({ stage: 'Preparing managed batch...', current: 0, total: 1 });
+    try {
+      const res = await runManagedBatchExport(project, activeNamingProfile, {
+        customFonts,
+        onProgress: (stage, current, total) =>
+          setManagedExportProgress({ stage, current, total }),
+      });
+      setManagedExportResults({ items: res.items, csvReport: res.csvReport });
+      setManagedExportMessage(
+        `Prepared ${res.items.length} output file${res.items.length === 1 ? '' : 's'} using "${activeNamingProfile.name}".`
+      );
+    } catch (err) {
+      setManagedExportMessage(
+        err instanceof Error ? err.message : 'Managed batch export failed.'
+      );
+    } finally {
+      setManagedExportBusy(false);
+    }
+  };
+
+  const handleDownloadManagedZip = async () => {
+    if (!managedExportResults || managedExportResults.items.length === 0) return;
+    const zipBytes = await buildBatchZipArchive(
+      managedExportResults.items,
+      activeNamingProfile.includeBatchCsvReport
+    );
+    const blob = new Blob([zipBytes.slice().buffer], { type: 'application/zip' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${project.name.replace(/\s+/g, '_')}_managed_batch.zip`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleSaveResultsToFolder = async () => {
+    if (!managedExportResults || managedExportResults.items.length === 0) return;
+    const dirPicker = (
+      window as unknown as {
+        showDirectoryPicker?: () => Promise<{
+          getFileHandle: (
+            name: string,
+            opts: { create: boolean }
+          ) => Promise<{
+            createWritable: () => Promise<{
+              write: (data: BufferSource | Blob | string) => Promise<void>;
+              close: () => Promise<void>;
+            }>;
+          }>;
+        }>;
+      }
+    ).showDirectoryPicker;
+
+    if (!dirPicker) {
+      setManagedExportMessage(
+        'Direct folder writing requires the browser File System Access API (not supported in this frame) — downloading structured ZIP archive instead.'
+      );
+      await handleDownloadManagedZip();
+      return;
+    }
+
+    try {
+      const dirHandle = await dirPicker();
+      let written = 0;
+      for (const item of managedExportResults.items) {
+        const fh = await dirHandle.getFileHandle(item.fileName, { create: true });
+        const writable = await fh.createWritable();
+        await writable.write(item.bytes.slice().buffer);
+        await writable.close();
+        written++;
+      }
+      if (activeNamingProfile.includeBatchCsvReport) {
+        const csvFh = await dirHandle.getFileHandle('batch_export_report.csv', {
+          create: true,
+        });
+        const csvWritable = await csvFh.createWritable();
+        await csvWritable.write(managedExportResults.csvReport);
+        await csvWritable.close();
+      }
+      setManagedExportMessage(
+        `Saved ${written} PDF file${written === 1 ? '' : 's'}${
+          activeNamingProfile.includeBatchCsvReport ? ' + CSV report' : ''
+        } to selected folder.`
+      );
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        setManagedExportMessage('Folder selection cancelled.');
+        return;
+      }
+      setManagedExportMessage(
+        'Folder write unavailable in sandboxed frame — downloading ZIP archive instead.'
+      );
+      await handleDownloadManagedZip();
     }
   };
 
@@ -274,6 +429,17 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
         setPreviewPageImg(null);
       }
 
+      const passport = await createDocumentIntegrityPassport(project, {
+        fileName: result.fileName,
+        mimeType: result.mimeType,
+        bytes: result.data,
+        verifiedPageCount,
+        verifiedWidthPt,
+        verifiedHeightPt,
+        customFonts,
+      });
+      onSavePassport?.(passport);
+
       setLastExportUrl({
         url,
         fileName: result.fileName,
@@ -282,6 +448,7 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
         verifiedPageCount,
         verifiedWidthPt,
         verifiedHeightPt,
+        passport,
       });
 
       onRecordExportActivity?.({
@@ -638,6 +805,73 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
                 </div>
               </div>
 
+              {lastExportUrl.passport && (
+                <div className="p-3.5 rounded-xl border border-black/10 dark:border-white/12 bg-[#F7F7F7] dark:bg-[#0B0B0B] space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 font-semibold text-[#101010] dark:text-white">
+                      <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                      <span>
+                        Document Integrity Passport ·{' '}
+                        {lastExportUrl.passport.validationStatus.toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!lastExportUrl.passport) return;
+                          const csv = buildPassportCsv(lastExportUrl.passport);
+                          const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+                          const u = URL.createObjectURL(blob);
+                          const link = document.createElement('a');
+                          link.href = u;
+                          link.download = `${lastExportUrl.passport.fileName.replace(/\.[^.]+$/, '')}_passport.csv`;
+                          link.click();
+                          URL.revokeObjectURL(u);
+                        }}
+                        className="px-2.5 py-1 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.04] dark:hover:bg-white/[0.08] text-[11px] font-medium text-[#101010] dark:text-white"
+                      >
+                        Passport CSV
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!lastExportUrl.passport) return;
+                          const bytes = await generatePassportPdfBytes(lastExportUrl.passport);
+                          const blob = new Blob([new Uint8Array(bytes)], { type: 'application/pdf' });
+                          const u = URL.createObjectURL(blob);
+                          const link = document.createElement('a');
+                          link.href = u;
+                          link.download = `${lastExportUrl.passport.fileName.replace(/\.[^.]+$/, '')}_passport.pdf`;
+                          link.click();
+                          URL.revokeObjectURL(u);
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-[#101010] text-white dark:bg-white dark:text-[#050505] text-[11px] font-medium hover:opacity-90"
+                      >
+                        Passport PDF
+                      </button>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 tablet:grid-cols-2 gap-1.5 text-[11px] text-[#555555] dark:text-[#B5B5B5] tabular-nums">
+                    <div className="truncate font-mono">
+                      SHA-256: {lastExportUrl.passport.sha256Hex}
+                    </div>
+                    <div className="truncate font-mono">
+                      Template DNA: {lastExportUrl.passport.templateDnaHash}
+                    </div>
+                    <div>
+                      Volume: {lastExportUrl.passport.totalOutputPages} pages ×{' '}
+                      {lastExportUrl.passport.copiesPerPage} copies ({lastExportUrl.passport.totalRecords} records)
+                    </div>
+                    <div>
+                      Pre-Flight: {lastExportUrl.passport.preflightErrorsCount} errors ·{' '}
+                      {lastExportUrl.passport.preflightWarningsCount} warnings ·{' '}
+                      {lastExportUrl.passport.numberingConflictsCount} conflicts
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {previewPageImg && lastExportUrl.verifiedPageCount && (
                 <div className="pt-3 border-t border-black/10 dark:border-white/10 flex flex-col items-center gap-3">
                   <div className="flex flex-wrap items-center justify-center gap-2.5">
@@ -945,6 +1179,386 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
           </div>
         </GlassCard>
       </div>
+
+      {/* Document Integrity Passports Audit Archive (Module 6) */}
+      {passports.length > 0 && (
+        <GlassCard level={3} padding="none" className="overflow-hidden">
+          <div className="px-4 tablet:px-5 py-3 border-b border-black/10 dark:border-white/12 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-xs font-semibold text-[#101010] dark:text-white">
+              <ShieldCheck className="w-4 h-4" />
+              Recent Document Integrity Passports ({passports.length})
+            </div>
+          </div>
+          <div className="divide-y divide-black/10 dark:divide-white/10 max-h-56 overflow-y-auto text-xs">
+            {passports.slice(0, 12).map((pass) => (
+              <div
+                key={pass.id}
+                className="px-4 tablet:px-5 py-2.5 flex flex-wrap items-center justify-between gap-2 tabular-nums"
+              >
+                <div className="min-w-0">
+                  <div className="font-medium text-[#101010] dark:text-white truncate">
+                    {pass.fileName}
+                  </div>
+                  <div className="text-[11px] text-[#555555] dark:text-[#B5B5B5] font-mono truncate">
+                    {pass.sha256Hex.slice(0, 16)}… · {pass.templateDnaHash} · {pass.totalOutputPages}p ·{' '}
+                    {new Date(pass.createdAt).toLocaleString()}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const bytes = await generatePassportPdfBytes(pass);
+                      const blob = new Blob([new Uint8Array(bytes)], { type: 'application/pdf' });
+                      const u = URL.createObjectURL(blob);
+                      const link = document.createElement('a');
+                      link.href = u;
+                      link.download = `${pass.fileName.replace(/\.[^.]+$/, '')}_passport.pdf`;
+                      link.click();
+                      URL.revokeObjectURL(u);
+                    }}
+                    className="px-2 py-1 rounded-lg border border-black/15 dark:border-white/15 text-[11px] font-medium text-[#101010] dark:text-white hover:bg-black/[0.04] dark:hover:bg-white/[0.08]"
+                  >
+                    PDF
+                  </button>
+                  {onDeletePassport && (
+                    <button
+                      type="button"
+                      onClick={() => onDeletePassport(pass.id)}
+                      className="px-2 py-1 rounded-lg text-[11px] text-[#888888] hover:text-[#101010] dark:text-[#858585] dark:hover:text-white"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </GlassCard>
+      )}
+
+      {/* Managed Batch Export Manager (Module 11) */}
+      <GlassCard level={3} padding="md" className="space-y-4 text-xs">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-black/10 dark:border-white/10">
+          <div>
+            <div className="text-sm font-semibold text-[#101010] dark:text-white flex items-center gap-2">
+              <FolderOutput className="w-4 h-4" />
+              Managed Batch Export &amp; Naming Profiles
+            </div>
+            <p className="text-[11px] text-[#555555] dark:text-[#B5B5B5] mt-0.5">
+              Export combined batches, per-record PDFs, or fixed page groups with template filename tokens, range filtering, CSV report, ZIP bundle, or folder output.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {exportProfiles.length > 0 && (
+              <select
+                value={
+                  exportProfiles.some((p) => p.id === activeNamingProfile.id)
+                    ? activeNamingProfile.id
+                    : ''
+                }
+                onChange={(e) => {
+                  const found = exportProfiles.find((p) => p.id === e.target.value);
+                  if (found) setActiveNamingProfile(found);
+                }}
+                className="px-2.5 py-1.5 rounded-lg border studio-select text-xs"
+              >
+                <option value="">Load saved profile...</option>
+                {exportProfiles.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({p.strategy.replace(/_/g, ' ')})
+                  </option>
+                ))}
+              </select>
+            )}
+            {onSaveExportProfile && (
+              <button
+                type="button"
+                onClick={() => {
+                  const toSave: ExportNamingProfile = {
+                    ...activeNamingProfile,
+                    id:
+                      activeNamingProfile.id ||
+                      `exprof-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+                  };
+                  onSaveExportProfile(toSave);
+                  setManagedExportMessage(`Saved export profile "${toSave.name}".`);
+                }}
+                className="px-2.5 py-1.5 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.04] dark:hover:bg-white/[0.08] flex items-center gap-1.5 font-medium text-[#101010] dark:text-white"
+              >
+                <Save className="w-3.5 h-3.5" />
+                Save Profile
+              </button>
+            )}
+            {onDeleteExportProfile &&
+              exportProfiles.some((p) => p.id === activeNamingProfile.id) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onDeleteExportProfile(activeNamingProfile.id);
+                    setActiveNamingProfile(createDefaultExportNamingProfile());
+                  }}
+                  title="Delete saved profile"
+                  className="p-1.5 rounded-lg text-[#888888] hover:text-[#101010] dark:text-[#858585] dark:hover:text-white"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 tablet:grid-cols-4 gap-3">
+          <label className="block">
+            <span className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5]">
+              Profile Name
+            </span>
+            <input
+              type="text"
+              value={activeNamingProfile.name}
+              onChange={(e) =>
+                setActiveNamingProfile((p) => ({ ...p, name: e.target.value }))
+              }
+              className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input"
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5]">
+              Batch Strategy
+            </span>
+            <select
+              value={activeNamingProfile.strategy}
+              onChange={(e) =>
+                setActiveNamingProfile((p) => ({
+                  ...p,
+                  strategy: e.target.value as BatchExportStrategy,
+                }))
+              }
+              className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-select"
+            >
+              <option value="combined_pdf">Combined Multi-Page PDF</option>
+              <option value="separate_per_record">Separate PDF per Record / Serial</option>
+              <option value="per_page_group">Split by Page Group Size</option>
+            </select>
+          </label>
+
+          <label className="block tablet:col-span-2">
+            <span className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5]">
+              Filename Template (tokens: {'{project}'}, {'{serial}'}, {'{record}'}, {'{page}'}, {'{date}'}, {'{index}'})
+            </span>
+            <input
+              type="text"
+              value={activeNamingProfile.filenameTemplate}
+              onChange={(e) =>
+                setActiveNamingProfile((p) => ({
+                  ...p,
+                  filenameTemplate: e.target.value,
+                }))
+              }
+              className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input font-mono"
+            />
+          </label>
+        </div>
+
+        <div className="grid grid-cols-1 tablet:grid-cols-4 gap-3 items-end">
+          {activeNamingProfile.strategy === 'per_page_group' && (
+            <label className="block">
+              <span className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5]">
+                Pages per File Group
+              </span>
+              <input
+                type="number"
+                min={1}
+                max={200}
+                value={activeNamingProfile.pageGroupSize}
+                onChange={(e) =>
+                  setActiveNamingProfile((p) => ({
+                    ...p,
+                    pageGroupSize: Math.max(1, Number(e.target.value) || 10),
+                  }))
+                }
+                className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
+              />
+            </label>
+          )}
+
+          {activeNamingProfile.strategy === 'separate_per_record' && (
+            <>
+              <label className="block">
+                <span className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5]">
+                  Record Range Start
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  placeholder="1"
+                  value={activeNamingProfile.recordRangeStart ?? ''}
+                  onChange={(e) =>
+                    setActiveNamingProfile((p) => ({
+                      ...p,
+                      recordRangeStart: e.target.value ? Number(e.target.value) : undefined,
+                    }))
+                  }
+                  className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
+                />
+              </label>
+              <label className="block">
+                <span className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5]">
+                  Record Range End
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  placeholder="All (max 100)"
+                  value={activeNamingProfile.recordRangeEnd ?? ''}
+                  onChange={(e) =>
+                    setActiveNamingProfile((p) => ({
+                      ...p,
+                      recordRangeEnd: e.target.value ? Number(e.target.value) : undefined,
+                    }))
+                  }
+                  className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
+                />
+              </label>
+              <label className="block">
+                <span className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5]">
+                  Serial Number Filter (e.g. 1-10, 25)
+                </span>
+                <input
+                  type="text"
+                  placeholder="All serials"
+                  value={activeNamingProfile.serialRangeFilter ?? ''}
+                  onChange={(e) =>
+                    setActiveNamingProfile((p) => ({
+                      ...p,
+                      serialRangeFilter: e.target.value,
+                    }))
+                  }
+                  className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input font-mono"
+                />
+              </label>
+            </>
+          )}
+
+          <label className="flex items-center gap-2 cursor-pointer text-[#101010] dark:text-white py-1.5">
+            <input
+              type="checkbox"
+              checked={activeNamingProfile.includeBatchCsvReport}
+              onChange={(e) =>
+                setActiveNamingProfile((p) => ({
+                  ...p,
+                  includeBatchCsvReport: e.target.checked,
+                }))
+              }
+              className="rounded border-black/30 dark:border-white/30"
+            />
+            <span>Include batch_export_report.csv</span>
+          </label>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-black/10 dark:border-white/10">
+          <div className="flex flex-wrap items-center gap-2">
+            <GlassButton
+              variant="primary"
+              size="md"
+              disabled={managedExportBusy || errorIssues.length > 0}
+              onClick={() => void handleRunManagedBatchExport()}
+            >
+              {managedExportBusy ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Plus className="w-3.5 h-3.5" />
+              )}
+              {managedExportBusy
+                ? `${managedExportProgress.stage} (${managedExportProgress.current}/${managedExportProgress.total})`
+                : 'Generate Managed Batch'}
+            </GlassButton>
+
+            {managedExportResults && managedExportResults.items.length > 0 && (
+              <>
+                <GlassButton
+                  variant="glass"
+                  size="md"
+                  onClick={() => void handleSaveResultsToFolder()}
+                >
+                  <FolderOutput className="w-3.5 h-3.5" />
+                  Save to Folder ({managedExportResults.items.length})
+                </GlassButton>
+                <GlassButton
+                  variant="glass"
+                  size="md"
+                  onClick={() => void handleDownloadManagedZip()}
+                >
+                  <Archive className="w-3.5 h-3.5" />
+                  Download ZIP
+                </GlassButton>
+                <GlassButton
+                  variant="glass"
+                  size="md"
+                  onClick={() => {
+                    const blob = new Blob([managedExportResults.csvReport], {
+                      type: 'text/csv;charset=utf-8;',
+                    });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `${project.name.replace(/\s+/g, '_')}_batch_report.csv`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5" />
+                  CSV Report
+                </GlassButton>
+              </>
+            )}
+          </div>
+          {managedExportMessage && (
+            <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
+              {managedExportMessage}
+            </span>
+          )}
+        </div>
+
+        {managedExportResults && managedExportResults.items.length > 0 && (
+          <div className="rounded-xl border border-black/10 dark:border-white/10 divide-y divide-black/10 dark:divide-white/10 max-h-48 overflow-y-auto">
+            {managedExportResults.items.map((item, idx) => (
+              <div
+                key={`${item.fileName}-${idx}`}
+                className="px-3 py-2 flex items-center justify-between gap-2 tabular-nums"
+              >
+                <div className="min-w-0">
+                  <div className="font-mono font-medium text-[#101010] dark:text-white truncate">
+                    {item.fileName}
+                  </div>
+                  <div className="text-[11px] text-[#888888] dark:text-[#858585]">
+                    {(item.bytes.byteLength / 1024).toFixed(1)} KB
+                    {item.pageRangeLabel ? ` · p.${item.pageRangeLabel}` : ''}
+                    {item.serialSummary ? ` · Serial ${item.serialSummary}` : ''}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const blob = new Blob([item.bytes.slice().buffer], {
+                      type: item.mimeType,
+                    });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = item.fileName;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                  className="px-2.5 py-1 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.04] dark:hover:bg-white/[0.08] text-[11px] font-medium text-[#101010] dark:text-white shrink-0"
+                >
+                  Download
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </GlassCard>
 
       <PageConfigurationModal
         isOpen={showPageSetupModal}

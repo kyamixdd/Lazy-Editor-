@@ -20,12 +20,18 @@ import {
 } from 'pdf-lib';
 import {
   AssetFontItem,
+  BarcodeFormat,
+  BlueprintBlock,
   DocumentElement,
   PDFProject,
+  ProductionBlueprint,
   RectPt,
 } from '../types/pdfStudio';
+import { encodeBarcode } from './barcodeEngine';
+import { resolveBlockSourceBox } from './blueprintEngine';
 import { formatCellValue } from './dataFormulaEngine';
 import { computeSheetLayout, SheetLayoutPlan, SlotGeometry } from './geometryEngine';
+import { computeDuplexBackSlotOffsets } from './printOptimizerEngine';
 import { base64ToUint8Array, renderSinglePagePreview } from './pdfRenderer';
 import { renderSanitizedRedactedPagePng } from './redactionEngine';
 import { applyRestorationToDataUrl } from './restorationEngine';
@@ -115,7 +121,7 @@ function pickFont(el: DocumentElement, fonts: FontBundle): PDFFont {
 }
 
 interface SlotTransform {
-  rot: 0 | 90 | 180 | 270;
+  rot: number;
   anchorX: number;
   anchorY: number;
   slotHeightPt: number;
@@ -136,6 +142,16 @@ function mapSlotPoint(
       return { x: st.anchorX - u, y: st.anchorY - v, rotDeg: -180 };
     case 270:
       return { x: st.anchorX - v, y: st.anchorY + u, rotDeg: -270 };
+    default: {
+      const rad = (-st.rot * Math.PI) / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      return {
+        x: st.anchorX + u * cos - v * sin,
+        y: st.anchorY + u * sin + v * cos,
+        rotDeg: -st.rot,
+      };
+    }
   }
 }
 
@@ -205,17 +221,22 @@ async function prepareImageBytesForExport(
   maskShape?: 'none' | 'rect' | 'rounded' | 'circle',
   quality?: number
 ): Promise<{ bytes: Uint8Array; isPng: boolean } | null> {
+  const isNativePng = /^data:image\/png;base64,/i.test(dataUrl);
+  const isNativeJpeg = /^data:image\/jpe?g;base64,/i.test(dataUrl);
   const needsCanvasTransform =
+    (!isNativePng && !isNativeJpeg) ||
     Boolean(cropRect && cropRect.width > 1 && cropRect.height > 1) ||
     maskShape === 'circle' ||
     maskShape === 'rounded' ||
     (quality !== undefined && quality < 0.99);
 
   if (!needsCanvasTransform || typeof document === 'undefined') {
-    const isPng = dataUrl.startsWith('data:image/png');
+    if (!isNativePng && !isNativeJpeg) {
+      return null;
+    }
     return {
-      bytes: base64ToUint8Array(dataUrl.replace(/^data:image\/\w+;base64,/, '')),
-      isPng,
+      bytes: base64ToUint8Array(dataUrl.replace(/^data:image\/[\w+.-]+;base64,/i, '')),
+      isPng: isNativePng,
     };
   }
 
@@ -265,10 +286,15 @@ async function prepareImageBytesForExport(
     ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
 
     const hasAlphaMask =
-      maskShape === 'circle' || maskShape === 'rounded' || dataUrl.startsWith('data:image/png');
-    const outMime = hasAlphaMask && (quality === undefined || quality >= 0.95)
-      ? 'image/png'
-      : 'image/jpeg';
+      maskShape === 'circle' ||
+      maskShape === 'rounded' ||
+      isNativePng ||
+      /^data:image\/webp;base64,/i.test(dataUrl) ||
+      /^data:image\/svg\+xml/i.test(dataUrl);
+    const outMime =
+      hasAlphaMask && (quality === undefined || quality >= 0.95)
+        ? 'image/png'
+        : 'image/jpeg';
     const outUrl =
       outMime === 'image/jpeg'
         ? canvas.toDataURL('image/jpeg', Math.max(0.25, Math.min(1, quality ?? 0.92)))
@@ -277,14 +303,14 @@ async function prepareImageBytesForExport(
     canvas.height = 0;
 
     return {
-      bytes: base64ToUint8Array(outUrl.replace(/^data:image\/\w+;base64,/, '')),
+      bytes: base64ToUint8Array(outUrl.replace(/^data:image\/[\w+.-]+;base64,/i, '')),
       isPng: outMime === 'image/png',
     };
   } catch {
-    const isPng = dataUrl.startsWith('data:image/png');
+    if (!isNativePng && !isNativeJpeg) return null;
     return {
-      bytes: base64ToUint8Array(dataUrl.replace(/^data:image\/\w+;base64,/, '')),
-      isPng,
+      bytes: base64ToUint8Array(dataUrl.replace(/^data:image\/[\w+.-]+;base64,/i, '')),
+      isPng: isNativePng,
     };
   }
 }
@@ -298,14 +324,13 @@ async function drawElementOntoPage(
   fonts: FontBundle,
   pageBgHex: string,
   imageCache: Map<string, PDFImage>,
-  slotTransform?: SlotTransform
+  slotTransform?: SlotTransform,
+  defaultImageQuality?: number
 ) {
   if (!el.visible && !el.eraseOriginal) return;
 
   const localHeight = slotTransform ? slotTransform.slotHeightPt : pageHeightPt;
-  const x = el.x;
   const elRot = el.rotation || 0;
-  const pdfYBottom = localHeight - el.y - el.height;
 
   const toPagePt = (u: number, v: number, extraDeg = 0) => {
     const mapped = mapSlotPoint(u, v, slotTransform);
@@ -315,6 +340,17 @@ async function drawElementOntoPage(
       y: mapped.y,
       rotate: totalDeg !== 0 ? degrees(totalDeg) : undefined,
     };
+  };
+
+  const getElementAnnotRect = (): [number, number, number, number] => {
+    const c1 = rotateAroundKonvaTopLeft(el.x, el.y, 0, 0, elRot, localHeight);
+    const c2 = rotateAroundKonvaTopLeft(el.x, el.y, el.width, 0, elRot, localHeight);
+    const c3 = rotateAroundKonvaTopLeft(el.x, el.y, 0, el.height, elRot, localHeight);
+    const c4 = rotateAroundKonvaTopLeft(el.x, el.y, el.width, el.height, elRot, localHeight);
+    const pts = [c1, c2, c3, c4].map((c) => mapSlotPoint(c.u, c.v, slotTransform));
+    const xs = pts.map((p) => p.x);
+    const ys = pts.map((p) => p.y);
+    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
   };
 
   const toElementBottomLeftPt = (
@@ -505,7 +541,7 @@ async function drawElementOntoPage(
     }
     appendPdfAnnotationEntry(pdfDoc, page, {
       subtype: 'FreeText',
-      rect: [x, pdfYBottom, x + el.width, pdfYBottom + el.height],
+      rect: getElementAnnotRect(),
       contents: el.text,
       colorHex: el.borderColor || '#111111',
     });
@@ -597,7 +633,7 @@ async function drawElementOntoPage(
       });
       appendPdfAnnotationEntry(pdfDoc, page, {
         subtype: 'Highlight',
-        rect: [x, pdfYBottom, x + el.width, pdfYBottom + el.height],
+        rect: getElementAnnotRect(),
         contents: el.commentText || el.text,
         colorHex: el.color || '#111111',
       });
@@ -615,7 +651,7 @@ async function drawElementOntoPage(
       });
       appendPdfAnnotationEntry(pdfDoc, page, {
         subtype: kind === 'underline' ? 'Underline' : 'StrikeOut',
-        rect: [x, pdfYBottom, x + el.width, pdfYBottom + el.height],
+        rect: getElementAnnotRect(),
         contents: el.commentText || el.text,
         colorHex: el.color || '#111111',
       });
@@ -633,13 +669,13 @@ async function drawElementOntoPage(
       });
       appendPdfAnnotationEntry(pdfDoc, page, {
         subtype: 'Text',
-        rect: [x, pdfYBottom, x + el.width, pdfYBottom + el.height],
+        rect: getElementAnnotRect(),
         contents: el.commentText || el.text || 'Note',
         colorHex: el.color || '#111111',
       });
     } else if (kind === 'ellipse') {
       const cAnchor = rotateAroundKonvaTopLeft(el.x, el.y, el.width / 2, el.height / 2, elRot, localHeight);
-      const pos = toPagePt(cAnchor.u, cAnchor.v);
+      const pos = toPagePt(cAnchor.u, cAnchor.v, elRot ? -elRot : 0);
       page.drawEllipse({
         x: pos.x,
         y: pos.y,
@@ -648,10 +684,11 @@ async function drawElementOntoPage(
         borderColor: col,
         borderWidth: el.borderWidth ?? 1.5,
         opacity: el.opacity ?? 0.9,
+        rotate: pos.rotate,
       });
       appendPdfAnnotationEntry(pdfDoc, page, {
         subtype: 'Circle',
-        rect: [x, pdfYBottom, x + el.width, pdfYBottom + el.height],
+        rect: getElementAnnotRect(),
         contents: el.commentText || el.text,
         colorHex: el.color || '#111111',
       });
@@ -669,7 +706,7 @@ async function drawElementOntoPage(
       });
       appendPdfAnnotationEntry(pdfDoc, page, {
         subtype: 'Square',
-        rect: [x, pdfYBottom, x + el.width, pdfYBottom + el.height],
+        rect: getElementAnnotRect(),
         contents: el.commentText || el.text,
         colorHex: el.color || '#111111',
       });
@@ -682,14 +719,12 @@ async function drawElementOntoPage(
     if (isModifiedOrAdded) {
       if (el.shapeKind === 'circle') {
         const cAnchor = rotateAroundKonvaTopLeft(el.x, el.y, el.width / 2, el.height / 2, elRot, localHeight);
-        const pos = toPagePt(cAnchor.u, cAnchor.v);
-        const swapped =
-          slotTransform && (slotTransform.rot === 90 || slotTransform.rot === 270);
+        const pos = toPagePt(cAnchor.u, cAnchor.v, elRot ? -elRot : 0);
         page.drawEllipse({
           x: pos.x,
           y: pos.y,
-          xScale: swapped ? el.height / 2 : el.width / 2,
-          yScale: swapped ? el.width / 2 : el.height / 2,
+          xScale: el.width / 2,
+          yScale: el.height / 2,
           borderColor: hexToRgb(el.borderColor || el.color || '#1E293B'),
           borderWidth: el.borderWidth ?? 1.2,
           color:
@@ -697,6 +732,7 @@ async function drawElementOntoPage(
               ? hexToRgb(el.backgroundColor)
               : undefined,
           opacity: el.opacity ?? 1,
+          rotate: pos.rotate,
         });
       } else if (el.shapeKind === 'arrow') {
         const midY = el.height / 2;
@@ -759,14 +795,18 @@ async function drawElementOntoPage(
   // Images & Signatures
   if ((el.type === 'image' || el.type === 'signature') && el.imageDataUrl) {
     try {
-      const cacheKey = `${el.imageDataUrl.slice(0, 48)}:${JSON.stringify(el.imageCropRect || '')}:${el.maskShape || ''}:${el.imageCompressionQuality || ''}`;
+      const effectiveQuality =
+        el.imageCompressionQuality !== undefined && defaultImageQuality !== undefined
+          ? Math.min(el.imageCompressionQuality, defaultImageQuality)
+          : el.imageCompressionQuality ?? defaultImageQuality;
+      const cacheKey = `${el.imageDataUrl.slice(0, 48)}:${JSON.stringify(el.imageCropRect || '')}:${el.maskShape || ''}:${effectiveQuality || ''}`;
       let embedded = imageCache.get(cacheKey);
       if (!embedded) {
         const prepared = await prepareImageBytesForExport(
           el.imageDataUrl,
           el.imageCropRect,
           el.maskShape,
-          el.imageCompressionQuality
+          effectiveQuality
         );
         if (!prepared) return;
         embedded = prepared.isPng
@@ -797,8 +837,8 @@ async function drawElementOntoPage(
     const colCount = Math.max(1, rows[0]?.length || 1);
     const rowH = el.height / rowCount;
     const colW = el.width / colCount;
-    const font = fonts.helvetica;
-    const boldFont = fonts.helveticaBold;
+    const font = pickFont(el, fonts);
+    const boldFont = pickFont({ ...el, fontWeight: 'bold' }, fonts);
 
     for (let rIdx = 0; rIdx < rowCount; rIdx++) {
       for (let cIdx = 0; cIdx < colCount; cIdx++) {
@@ -840,6 +880,129 @@ async function drawElementOntoPage(
             rotate: textPos.rotate,
           });
         }
+      }
+    }
+    return;
+  }
+
+  // Vector Barcodes & QR Codes (Module 8)
+  if (el.type === 'barcode' || el.type === 'qr_code') {
+    const format: BarcodeFormat =
+      el.barcodeFormat || (el.type === 'qr_code' ? 'qr' : 'code128');
+    const payload =
+      overrideText !== null && overrideText.trim() !== ''
+        ? overrideText
+        : el.barcodeValue || el.text || '';
+    const encoded = encodeBarcode(format, payload, el.qrErrorCorrection || 'M');
+    const qz = Math.max(0, el.barcodeQuietZonePt ?? 6);
+    const bgPos = toElementBottomLeftPt(0, 0, el.height);
+    // Quiet-zone white background box
+    page.drawRectangle({
+      x: bgPos.x,
+      y: bgPos.y,
+      width: el.width,
+      height: el.height,
+      color:
+        el.backgroundColor && el.backgroundColor !== 'transparent'
+          ? hexToRgb(el.backgroundColor)
+          : rgb(1, 1, 1),
+      opacity: el.opacity ?? 1,
+      rotate: bgPos.rotate,
+    });
+
+    if (!encoded.ok) {
+      return;
+    }
+
+    const darkCol = hexToRgb(el.color || '#000000');
+    const innerW = Math.max(4, el.width - qz * 2);
+    const innerH = Math.max(4, el.height - qz * 2);
+
+    if (encoded.matrix) {
+      const n = encoded.matrix.size;
+      const qrDim = Math.min(innerW, innerH);
+      const cell = qrDim / n;
+      const startDx = qz + (innerW - qrDim) / 2;
+      const startDy = qz + (innerH - qrDim) / 2;
+
+      for (let r = 0; r < n; r++) {
+        let c = 0;
+        while (c < n) {
+          if (encoded.matrix.rows[r][c] === 1) {
+            let run = 1;
+            while (c + run < n && encoded.matrix.rows[r][c + run] === 1) run++;
+            const pos = toElementBottomLeftPt(
+              startDx + c * cell,
+              startDy + r * cell,
+              cell + 0.04
+            );
+            page.drawRectangle({
+              x: pos.x,
+              y: pos.y,
+              width: run * cell + 0.04,
+              height: cell + 0.04,
+              color: darkCol,
+              opacity: el.opacity ?? 1,
+              rotate: pos.rotate,
+            });
+            c += run;
+          } else {
+            c++;
+          }
+        }
+      }
+    } else if (encoded.linearModules && encoded.totalModules) {
+      const showHumanText = el.barcodeIncludeText !== false && innerH >= 20;
+      const textBandH = showHumanText ? Math.min(11, Math.max(7, innerH * 0.24)) : 0;
+      const barH = Math.max(4, innerH - textBandH);
+      const modW = innerW / encoded.totalModules;
+      const mods = encoded.linearModules;
+
+      let i = 0;
+      while (i < mods.length) {
+        if (mods[i] === 1) {
+          let run = 1;
+          while (i + run < mods.length && mods[i + run] === 1) run++;
+          const pos = toElementBottomLeftPt(qz + i * modW, qz, barH);
+          page.drawRectangle({
+            x: pos.x,
+            y: pos.y,
+            width: run * modW,
+            height: barH,
+            color: darkCol,
+            opacity: el.opacity ?? 1,
+            rotate: pos.rotate,
+          });
+          i += run;
+        } else {
+          i++;
+        }
+      }
+
+      if (showHumanText && encoded.displayValue) {
+        const textSize = Math.max(5.5, Math.min(9.5, textBandH * 0.82));
+        const label = encoded.displayValue;
+        const lw = fonts.courier.widthOfTextAtSize(label, textSize);
+        const textDx = qz + Math.max(0, (innerW - lw) / 2);
+        const baselineDy = qz + barH + textBandH * 0.85;
+        const anchor = rotateAroundKonvaTopLeft(
+          el.x,
+          el.y,
+          textDx,
+          baselineDy,
+          elRot,
+          localHeight
+        );
+        const tPos = toPagePt(anchor.u, anchor.v, elRot ? -elRot : 0);
+        page.drawText(label, {
+          x: tPos.x,
+          y: tPos.y,
+          size: textSize,
+          font: fonts.courier,
+          color: darkCol,
+          opacity: el.opacity ?? 1,
+          rotate: tPos.rotate,
+        });
       }
     }
     return;
@@ -1106,6 +1269,84 @@ function buildDynamicOverridesForSlot(
   return overrides;
 }
 
+function buildDynamicOverridesForBlueprintBlock(
+  project: PDFProject,
+  blueprint: ProductionBlueprint,
+  block: BlueprintBlock,
+  pageZeroIdx: number
+): Map<string, string> {
+  const overrides = new Map<string, string>();
+  const visibleCount = Math.max(
+    1,
+    blueprint.blocks.filter((b) => b.visible).length
+  );
+  const mode = project.bulkConfig.dataSourceMode || 'hybrid';
+
+  let rowIdx = pageZeroIdx * visibleCount + block.blockIndex;
+  if (block.dataSource.mode === 'static_row') {
+    rowIdx = Math.max(0, block.dataSource.fixedRowIndex ?? 0);
+  } else if (block.dataSource.mode === 'offset') {
+    rowIdx = Math.max(0, pageZeroIdx + (block.dataSource.rowOffset || 0));
+  }
+  const row = project.dataRows[rowIdx];
+
+  if (row && mode !== 'serial_only') {
+    for (const col of project.dataColumns) {
+      const formatted = formatCellValue(
+        row[col.name],
+        col,
+        row,
+        project.dataColumns
+      );
+      overrides.set(col.name, formatted);
+    }
+    if (block.dataSource.columnMap) {
+      for (const [targetField, colName] of Object.entries(block.dataSource.columnMap)) {
+        const col = project.dataColumns.find((c) => c.name === colName);
+        if (col) {
+          overrides.set(
+            targetField,
+            formatCellValue(row[col.name], col, row, project.dataColumns)
+          );
+        } else if (row[colName] !== undefined) {
+          overrides.set(targetField, String(row[colName]));
+        }
+      }
+    }
+  }
+
+  if (mode !== 'dataset') {
+    const specificRule = block.serialRuleId
+      ? project.serialRules.find((r) => r.id === block.serialRuleId)
+      : undefined;
+    const rulesToApply = specificRule
+      ? [specificRule]
+      : project.serialRules.filter(
+          (r) =>
+            r.blockIndex === block.blockIndex ||
+            project.serialRules.filter((x) => x.targetFieldKey === r.targetFieldKey).length === 1
+        );
+
+    for (const rule of rulesToApply) {
+      const matchingCount = specificRule
+        ? 2
+        : project.serialRules.filter((r) => r.targetFieldKey === rule.targetFieldKey).length;
+      const res = computeSerialValueForSlot(
+        rule,
+        pageZeroIdx,
+        block.blockIndex,
+        visibleCount,
+        project.dataRows,
+        matchingCount,
+        rule.blockIndex
+      );
+      overrides.set(rule.targetFieldKey, res.value);
+    }
+  }
+
+  return overrides;
+}
+
 function resolveBlockIndex(blockId?: string): number | null {
   if (!blockId) return null;
   const letterMatch = blockId.match(/block[-_]?([A-Z])$/i);
@@ -1191,9 +1432,13 @@ async function renderSlotOntoPage(
   const hasActiveRestoration = Boolean(pageMeta?.restoration?.enabled);
   const isInsertedBlank = Boolean(pageMeta?.isBlankInserted);
 
+  const hasBackgroundSource = Boolean(
+    project.sourcePdfBase64 || pageMeta?.previewImageDataUrl
+  );
+
   // If page has true applied redactions or active non-destructive restoration, bake sanitized raster background
   // so underlying PDF glyphs inside redacted rectangles are 100% destroyed and unextractable.
-  if (!isInsertedBlank && (hasAppliedRedactions || hasActiveRestoration)) {
+  if (!isInsertedBlank && hasBackgroundSource && (hasAppliedRedactions || hasActiveRestoration)) {
     const key = `sanitized-p${templatePageNum}-${hasAppliedRedactions ? pageMeta!.appliedRedactions!.length : 0}-${JSON.stringify(pageMeta?.restoration || '')}`;
     let sanitizedImg = sanitizedBitmapCache.get(key);
     if (!sanitizedImg && pageMeta) {
@@ -1246,24 +1491,31 @@ async function renderSlotOntoPage(
     const bBottom = cropBox.y + Math.max(0, cropBox.height - (sourceBox.y + sourceBox.height));
 
     const cacheKey = `p${srcIdx}-${bLeft.toFixed(2)}-${bBottom.toFixed(2)}-${bRight.toFixed(2)}-${bTop.toFixed(2)}`;
-    let embeddedBg = embeddedPageCache.get(cacheKey);
-    if (!embeddedBg) {
-      embeddedBg = await outDoc.embedPage(srcPage, {
-        left: bLeft,
-        right: Math.max(bLeft + 1, bRight),
-        bottom: bBottom,
-        top: Math.max(bBottom + 1, bTop),
-      });
-      embeddedPageCache.set(cacheKey, embeddedBg);
+    const hasContents = Boolean(srcPage.node.lookup(PDFName.of('Contents')));
+    let embeddedBg = hasContents ? embeddedPageCache.get(cacheKey) : undefined;
+    if (hasContents && !embeddedBg) {
+      try {
+        embeddedBg = await outDoc.embedPage(srcPage, {
+          left: bLeft,
+          right: Math.max(bLeft + 1, bRight),
+          bottom: bBottom,
+          top: Math.max(bBottom + 1, bTop),
+        });
+        embeddedPageCache.set(cacheKey, embeddedBg);
+      } catch {
+        // Blank PDF page with missing Contents stream — skip background safely
+      }
     }
 
-    outPage.drawPage(embeddedBg, {
-      x: anchorX,
-      y: anchorY,
-      width: copyW,
-      height: copyH,
-      rotate: rot ? degrees(-rot) : undefined,
-    });
+    if (embeddedBg) {
+      outPage.drawPage(embeddedBg, {
+        x: anchorX,
+        y: anchorY,
+        width: copyW,
+        height: copyH,
+        rotate: rot ? degrees(-rot) : undefined,
+      });
+    }
   }
 
   const slotTransform: SlotTransform | undefined = rot
@@ -1322,6 +1574,12 @@ async function renderSlotOntoPage(
         override = overrides.get(el.fieldKey)!;
       }
     }
+    const defaultImageQuality =
+      project.exportConfig.imageCompression === 'high'
+        ? 0.62
+        : project.exportConfig.imageCompression === 'medium'
+        ? 0.85
+        : undefined;
     await drawElementOntoPage(
       outDoc,
       outPage,
@@ -1331,7 +1589,8 @@ async function renderSlotOntoPage(
       fonts,
       pageConfig.backgroundColor,
       imageCache,
-      slotTransform
+      slotTransform,
+      defaultImageQuality
     );
   }
 
@@ -1363,10 +1622,23 @@ async function buildSingleModifiedTemplatePage(
   const imageCache = new Map<string, PDFImage>();
   const embeddedPageCache = new Map<string, PDFEmbeddedPage>();
   const sanitizedBitmapCache = new Map<string, PDFImage>();
-  const layout = computeSheetLayout(project, sourcePageNumber);
-  const bleed = Math.max(0, project.exportConfig.bleedPt || project.pageConfig.bleedPt || 0);
-  const baseOutW = layout.outputSheetWidthPt;
-  const baseOutH = layout.outputSheetHeightPt;
+  const effectiveProject =
+    project.exportConfig.customWidthPt || project.exportConfig.customHeightPt
+      ? {
+          ...project,
+          pageConfig: {
+            ...project.pageConfig,
+            widthPt: project.exportConfig.customWidthPt || project.pageConfig.widthPt,
+            heightPt: project.exportConfig.customHeightPt || project.pageConfig.heightPt,
+          },
+        }
+      : project;
+  const layout = computeSheetLayout(effectiveProject, sourcePageNumber);
+  const rawBleed = Math.max(0, project.exportConfig.bleedPt || project.pageConfig.bleedPt || 0);
+  const bleed =
+    project.exportConfig.mode === 'print_ready' ? Math.max(9, rawBleed) : rawBleed;
+  const baseOutW = project.exportConfig.customWidthPt || layout.outputSheetWidthPt;
+  const baseOutH = project.exportConfig.customHeightPt || layout.outputSheetHeightPt;
   const outW = baseOutW + bleed * 2;
   const outH = baseOutH + bleed * 2;
 
@@ -1397,23 +1669,40 @@ async function buildSingleModifiedTemplatePage(
     }
   }
 
-  for (const slot of layout.slots) {
-    await renderSlotOntoPage(
+  if (effectiveProject.useBlueprintLayout && effectiveProject.activeBlueprint) {
+    await renderBlueprintSheetOntoPage(
       doc,
       page,
       srcDoc,
       embeddedPageCache,
       sanitizedBitmapCache,
-      project,
-      layout,
-      slot,
-      sourcePageNumber,
+      effectiveProject,
+      effectiveProject.activeBlueprint,
+      0,
       bleed,
       outH,
       fonts,
-      imageCache,
-      overrides
+      imageCache
     );
+  } else {
+    for (const slot of layout.slots) {
+      await renderSlotOntoPage(
+        doc,
+        page,
+        srcDoc,
+        embeddedPageCache,
+        sanitizedBitmapCache,
+        project,
+        layout,
+        slot,
+        sourcePageNumber,
+        bleed,
+        outH,
+        fonts,
+        imageCache,
+        overrides
+      );
+    }
   }
 
   if (project.exportConfig.cropMarks || project.pageConfig.cropMarks) {
@@ -1433,6 +1722,213 @@ async function buildSingleModifiedTemplatePage(
   return doc.save();
 }
 
+async function renderBlueprintSheetOntoPage(
+  outDoc: PDFDocument,
+  outPage: PDFPage,
+  srcDoc: PDFDocument | null,
+  embeddedPageCache: Map<string, PDFEmbeddedPage>,
+  sanitizedBitmapCache: Map<string, PDFImage>,
+  project: PDFProject,
+  blueprint: ProductionBlueprint,
+  pageZeroIdx: number,
+  bleed: number,
+  outH: number,
+  fonts: FontBundle,
+  imageCache: Map<string, PDFImage>
+) {
+  const visibleBlocks = blueprint.blocks.filter((b) => b.visible);
+  for (const blk of visibleBlocks) {
+    const srcBox = resolveBlockSourceBox(blk, project);
+    const rot = ((blk.rotation % 360) + 360) % 360;
+    const rad = (rot * Math.PI) / 180;
+    const isQuarter = rot === 90 || rot === 270;
+    const effSrcW = isQuarter ? srcBox.height : srcBox.width;
+    const effSrcH = isQuarter ? srcBox.width : srcBox.height;
+
+    const scale =
+      blk.scalingMode === 'preserve_original'
+        ? 1
+        : blk.scalingMode === 'fit_to_width'
+        ? blk.widthPt / Math.max(1, effSrcW)
+        : blk.scalingMode === 'fit_to_height'
+        ? blk.heightPt / Math.max(1, effSrcH)
+        : blk.scalingMode === 'fill_cell'
+        ? Math.max(blk.widthPt / Math.max(1, effSrcW), blk.heightPt / Math.max(1, effSrcH))
+        : Math.min(blk.widthPt / Math.max(1, effSrcW), blk.heightPt / Math.max(1, effSrcH));
+
+    const unrotatedW = srcBox.width * scale;
+    const unrotatedH = srcBox.height * scale;
+    const drawX = bleed + blk.xPt;
+    const drawTop = bleed + blk.yPt;
+    const drawYBottom = outH - drawTop - blk.heightPt;
+
+    // Clip cleanly to the blueprint block rectangle
+    outPage.pushOperators(
+      pushGraphicsState(),
+      rectangle(drawX, drawYBottom, blk.widthPt, blk.heightPt),
+      clip(),
+      endPath()
+    );
+
+    // Center unrotated content inside block and rotate around block center
+    const centerX = drawX + blk.widthPt / 2;
+    const centerY = drawYBottom + blk.heightPt / 2;
+    const pdfRotRad = -rad;
+    const cos = Math.cos(pdfRotRad);
+    const sin = Math.sin(pdfRotRad);
+    const halfW = unrotatedW / 2;
+    const halfH = unrotatedH / 2;
+    const anchorX = centerX - (halfW * cos - halfH * sin);
+    const anchorY = centerY - (halfW * sin + halfH * cos);
+
+    const templatePageNum = Math.max(
+      1,
+      Math.min(blk.sourcePageNumber || 1, project.pageCount || 1)
+    );
+    const pageMeta = project.originalPages.find((p) => p.pageNumber === templatePageNum);
+    const isInsertedBlank = Boolean(pageMeta?.isBlankInserted);
+
+    if (srcDoc && !isInsertedBlank) {
+      const origPdfPageNum = pageMeta?.sourcePdfPageNumber || templatePageNum;
+      const srcIdx = Math.max(0, Math.min(origPdfPageNum - 1, srcDoc.getPageCount() - 1));
+      const srcPage = srcDoc.getPage(srcIdx);
+      const cropBox = srcPage.getCropBox();
+      const bLeft = cropBox.x + srcBox.x;
+      const bRight = cropBox.x + Math.min(cropBox.width, srcBox.x + srcBox.width);
+      const bTop = cropBox.y + cropBox.height - srcBox.y;
+      const bBottom = cropBox.y + Math.max(0, cropBox.height - (srcBox.y + srcBox.height));
+      const cacheKey = `bp-p${srcIdx}-${bLeft.toFixed(2)}-${bBottom.toFixed(2)}-${bRight.toFixed(2)}-${bTop.toFixed(2)}`;
+      const hasContents = Boolean(srcPage.node.lookup(PDFName.of('Contents')));
+      let embeddedBg = hasContents ? embeddedPageCache.get(cacheKey) : undefined;
+      if (hasContents && !embeddedBg) {
+        try {
+          embeddedBg = await outDoc.embedPage(srcPage, {
+            left: bLeft,
+            right: Math.max(bLeft + 1, bRight),
+            bottom: bBottom,
+            top: Math.max(bBottom + 1, bTop),
+          });
+          embeddedPageCache.set(cacheKey, embeddedBg);
+        } catch {
+          // Blank PDF page with missing Contents stream — skip background safely
+        }
+      }
+      if (embeddedBg) {
+        outPage.drawPage(embeddedBg, {
+          x: anchorX,
+          y: anchorY,
+          width: unrotatedW,
+          height: unrotatedH,
+          rotate: rot ? degrees(-rot) : undefined,
+        });
+      }
+    } else if (!isInsertedBlank && pageMeta?.previewImageDataUrl) {
+      const pngBytes = await renderSanitizedRedactedPagePng({
+        pageImageDataUrl: pageMeta.previewImageDataUrl,
+        pageNumber: templatePageNum,
+        pageWidthPt: pageMeta.widthPt,
+        pageHeightPt: pageMeta.heightPt,
+        redactions: pageMeta.appliedRedactions || [],
+        scale: 2,
+      });
+      if (pngBytes) {
+        const key = `bp-san-p${templatePageNum}`;
+        let img = sanitizedBitmapCache.get(key);
+        if (!img) {
+          img = await outDoc.embedPng(pngBytes);
+          sanitizedBitmapCache.set(key, img);
+        }
+        outPage.drawImage(img, {
+          x: anchorX,
+          y: anchorY,
+          width: unrotatedW,
+          height: unrotatedH,
+          rotate: rot ? degrees(-rot) : undefined,
+        });
+      }
+    }
+
+    const slotTransform: SlotTransform | undefined = rot
+      ? {
+          rot,
+          anchorX,
+          anchorY,
+          slotHeightPt: unrotatedH,
+        }
+      : undefined;
+
+    const overrides = buildDynamicOverridesForBlueprintBlock(
+      project,
+      blueprint,
+      blk,
+      pageZeroIdx
+    );
+
+    const els = project.elements.filter((e) => e.pageNumber === templatePageNum);
+    for (const el of els) {
+      if (
+        blk.sourceScope === 'selected_block' &&
+        blk.selectedSourceBlockId &&
+        el.blockId &&
+        el.blockId !== blk.selectedSourceBlockId
+      ) {
+        continue;
+      }
+      const relX = (el.x - srcBox.x) * scale;
+      const relY = (el.y - srcBox.y) * scale;
+      const scaledEl: DocumentElement = {
+        ...el,
+        x: rot ? relX : anchorX + relX,
+        y: rot ? relY : outH - (anchorY + unrotatedH) + relY,
+        width: el.width * scale,
+        height: el.height * scale,
+        fontSize: Math.max(4, el.fontSize * scale),
+        points: el.points ? el.points.map((pt) => pt * scale) : undefined,
+        calloutTarget: el.calloutTarget
+          ? {
+              x: (rot ? 0 : anchorX) + (el.calloutTarget.x - srcBox.x) * scale,
+              y:
+                (rot ? 0 : outH - (anchorY + unrotatedH)) +
+                (el.calloutTarget.y - srcBox.y) * scale,
+            }
+          : undefined,
+        sourceOriginalRect: el.sourceOriginalRect
+          ? {
+              x: (rot ? 0 : anchorX) + (el.sourceOriginalRect.x - srcBox.x) * scale,
+              y:
+                (rot ? 0 : outH - (anchorY + unrotatedH)) +
+                (el.sourceOriginalRect.y - srcBox.y) * scale,
+              width: el.sourceOriginalRect.width * scale,
+              height: el.sourceOriginalRect.height * scale,
+            }
+          : undefined,
+      };
+      const override = el.fieldKey && overrides.has(el.fieldKey)
+        ? overrides.get(el.fieldKey)!
+        : null;
+      await drawElementOntoPage(
+        outDoc,
+        outPage,
+        scaledEl,
+        override,
+        outH,
+        fonts,
+        blueprint.backgroundColor || project.pageConfig.backgroundColor,
+        imageCache,
+        slotTransform
+      );
+    }
+
+    outPage.pushOperators(popGraphicsState());
+
+    drawCropMarksAndGuides(outPage, drawX, drawYBottom, blk.widthPt, blk.heightPt, {
+      cropMarks: blk.cropMarks ?? blueprint.cropMarks,
+      cuttingGuides: blueprint.cuttingGuides,
+      showBorders: blk.showBorder ?? false,
+    });
+  }
+}
+
 export interface ExportJobControl {
   isCancelled: () => boolean;
   waitWhilePaused: () => Promise<void>;
@@ -1445,6 +1941,8 @@ export async function generateExportBytes(
     extraMergePdfBytes?: Uint8Array[];
     customFonts?: AssetFontItem[];
     control?: ExportJobControl;
+    pageRange?: { startPageZero: number; endPageZeroExclusive: number };
+    existingPartialPdfBytes?: Uint8Array;
   } = {}
 ): Promise<{
   data: Uint8Array;
@@ -1456,6 +1954,8 @@ export async function generateExportBytes(
     extraMergePdfBytes = [],
     customFonts = [],
     control,
+    pageRange,
+    existingPartialPdfBytes,
   } = options;
   const { exportConfig, pageConfig, copiesConfig, bulkConfig } = project;
 
@@ -1485,7 +1985,8 @@ export async function generateExportBytes(
     copiesConfig.enabled ||
     bulkConfig.enabled ||
     bulkConfig.totalOutputPages > 1 ||
-    project.serialRules.length > 0;
+    project.serialRules.length > 0 ||
+    Boolean(project.useBlueprintLayout && project.activeBlueprint);
 
   const totalPages = isBulkOrImposition
     ? Math.max(
@@ -1567,7 +2068,9 @@ export async function generateExportBytes(
     };
   }
 
-  const outDoc = await PDFDocument.create();
+  const outDoc = existingPartialPdfBytes
+    ? await PDFDocument.load(existingPartialPdfBytes, { ignoreEncryption: true })
+    : await PDFDocument.create();
   const fonts = await embedFontsForDoc(
     outDoc,
     customFonts,
@@ -1612,7 +2115,10 @@ export async function generateExportBytes(
 
   const selectedPagesSet = parsePageRange(exportConfig.selectedPagesRange, totalPages);
 
-  for (let pageZero = 0; pageZero < totalPages; pageZero++) {
+  const rangeStart = Math.max(0, pageRange?.startPageZero ?? 0);
+  const rangeEnd = Math.min(totalPages, pageRange?.endPageZeroExclusive ?? totalPages);
+
+  for (let pageZero = rangeStart; pageZero < rangeEnd; pageZero++) {
     await checkControl();
     const humanPageNum =
       (isBulkOrImposition ? bulkConfig.startPageNumber : 1) + pageZero;
@@ -1631,9 +2137,13 @@ export async function generateExportBytes(
       copiesConfig.enabled || isBulkOrImposition
         ? 1
         : Math.min(pageZero + 1, project.pageCount || 1);
+    const isBpMode = Boolean(
+      effectiveProject.useBlueprintLayout && effectiveProject.activeBlueprint
+    );
+    const bp = effectiveProject.activeBlueprint;
     const layout = getLayoutForPage(templatePageNum);
-    const pageW = exportConfig.customWidthPt || layout.outputSheetWidthPt;
-    const pageH = exportConfig.customHeightPt || layout.outputSheetHeightPt;
+    const pageW = exportConfig.customWidthPt || (isBpMode && bp ? bp.sheetWidthPt : layout.outputSheetWidthPt);
+    const pageH = exportConfig.customHeightPt || (isBpMode && bp ? bp.sheetHeightPt : layout.outputSheetHeightPt);
     const sheetW = pageW + bleed * 2;
     const sheetH = pageH + bleed * 2;
 
@@ -1643,43 +2153,61 @@ export async function generateExportBytes(
       outPage.setBleedBox(0, 0, sheetW, sheetH);
       outPage.setTrimBox(bleed, bleed, pageW, pageH);
     }
-    if (pageConfig.backgroundColor && pageConfig.backgroundColor !== '#FFFFFF') {
+    const effectiveBg = isBpMode && bp ? bp.backgroundColor : pageConfig.backgroundColor;
+    if (effectiveBg && effectiveBg !== '#FFFFFF') {
       outPage.drawRectangle({
         x: 0,
         y: 0,
         width: sheetW,
         height: sheetH,
-        color: hexToRgb(pageConfig.backgroundColor),
+        color: hexToRgb(effectiveBg),
       });
     }
 
-    for (const slot of layout.slots) {
-      const overrides =
-        copiesConfig.enabled || isBulkOrImposition
-          ? buildDynamicOverridesForSlot(
-              effectiveProject,
-              pageZero,
-              slot.slotIndex,
-              copiesPerPage
-            )
-          : undefined;
-
-      await renderSlotOntoPage(
+    if (isBpMode && bp) {
+      await renderBlueprintSheetOntoPage(
         outDoc,
         outPage,
         srcDoc,
         embeddedPageCache,
         sanitizedBitmapCache,
         effectiveProject,
-        layout,
-        slot,
-        templatePageNum,
+        bp,
+        pageZero,
         bleed,
         sheetH,
         fonts,
-        imageCache,
-        overrides
+        imageCache
       );
+    } else {
+      for (const slot of layout.slots) {
+        const overrides =
+          copiesConfig.enabled || isBulkOrImposition
+            ? buildDynamicOverridesForSlot(
+                effectiveProject,
+                pageZero,
+                slot.slotIndex,
+                copiesPerPage
+              )
+            : undefined;
+
+        await renderSlotOntoPage(
+          outDoc,
+          outPage,
+          srcDoc,
+          embeddedPageCache,
+          sanitizedBitmapCache,
+          effectiveProject,
+          layout,
+          slot,
+          templatePageNum,
+          bleed,
+          sheetH,
+          fonts,
+          imageCache,
+          overrides
+        );
+      }
     }
 
     const pageMeta = project.originalPages.find((p) => p.pageNumber === templatePageNum);
@@ -1757,6 +2285,104 @@ export async function generateExportBytes(
     const effectiveRot = pageMeta?.rotation ?? pageConfig.rotation;
     if (effectiveRot) {
       outPage.setRotation(degrees(effectiveRot));
+    }
+
+    // Duplex Back-Side Mirrored Sheet (Module 5)
+    if (effectiveProject.printOptimization?.duplexEnabled && !isBpMode) {
+      const backPage = outDoc.addPage([sheetW, sheetH]);
+      backPage.setMediaBox(0, 0, sheetW, sheetH);
+      if (bleed > 0) {
+        backPage.setBleedBox(0, 0, sheetW, sheetH);
+        backPage.setTrimBox(bleed, bleed, pageW, pageH);
+      }
+      if (effectiveBg && effectiveBg !== '#FFFFFF') {
+        backPage.drawRectangle({
+          x: 0,
+          y: 0,
+          width: sheetW,
+          height: sheetH,
+          color: hexToRgb(effectiveBg),
+        });
+      }
+
+      const duplexPlacements = computeDuplexBackSlotOffsets(
+        layout,
+        effectiveProject.printOptimization.duplexFlipEdge,
+        effectiveProject.printOptimization.backSideOffsetXPt,
+        effectiveProject.printOptimization.backSideOffsetYPt
+      );
+      const backTemplatePage =
+        (effectiveProject.pageCount || 1) >= 2 ? 2 : templatePageNum;
+      const backLayout = getLayoutForPage(backTemplatePage);
+
+      for (let sIdx = 0; sIdx < layout.slots.length; sIdx++) {
+        const frontSlot = layout.slots[sIdx];
+        const dp = duplexPlacements[sIdx];
+        if (!dp) continue;
+        const mirroredSlot: SlotGeometry = {
+          ...frontSlot,
+          drawXPt: dp.backXPt,
+          drawTopPt: dp.backTopPt,
+          placedWidthPt: dp.backWidthPt,
+          placedHeightPt: dp.backHeightPt,
+          rotation: dp.backRotationDeg as 0 | 90 | 180 | 270,
+        };
+
+        if ((effectiveProject.pageCount || 1) >= 2) {
+          const overrides =
+            copiesConfig.enabled || isBulkOrImposition
+              ? buildDynamicOverridesForSlot(
+                  effectiveProject,
+                  pageZero,
+                  frontSlot.slotIndex,
+                  copiesPerPage
+                )
+              : undefined;
+          await renderSlotOntoPage(
+            outDoc,
+            backPage,
+            srcDoc,
+            embeddedPageCache,
+            sanitizedBitmapCache,
+            effectiveProject,
+            backLayout,
+            mirroredSlot,
+            backTemplatePage,
+            bleed,
+            sheetH,
+            fonts,
+            imageCache,
+            overrides
+          );
+        } else {
+          // Single-page template: emit clean mirrored back registration guides & crop marks
+          const bx = bleed + mirroredSlot.drawXPt;
+          const byBottom = sheetH - (bleed + mirroredSlot.drawTopPt) - mirroredSlot.placedHeightPt;
+          drawCropMarksAndGuides(
+            backPage,
+            bx,
+            byBottom,
+            mirroredSlot.placedWidthPt,
+            mirroredSlot.placedHeightPt,
+            {
+              cropMarks: copiesConfig.cropMarks || true,
+              cuttingGuides: copiesConfig.cuttingGuides,
+              showBorders: copiesConfig.showBorders,
+            }
+          );
+        }
+      }
+
+      if (exportConfig.cropMarks || pageConfig.cropMarks) {
+        drawCropMarksAndGuides(backPage, bleed, bleed, pageW, pageH, {
+          cropMarks: true,
+          cuttingGuides: false,
+          showBorders: false,
+        });
+      }
+      if (effectiveRot) {
+        backPage.setRotation(degrees(effectiveRot));
+      }
     }
 
     if (pageZero % 8 === 0) {

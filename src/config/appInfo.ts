@@ -34,7 +34,7 @@ export interface ThirdPartyLicense {
 
 export const APP_VERSION = '1.0.0';
 export const APP_COPYRIGHT_YEAR = new Date().getFullYear();
-export const APP_SUITE_NAME = 'Lazy Editor';
+export const APP_SUITE_NAME = 'Document Workspace';
 export const APP_PRODUCT_NAME = 'Lazy Editor';
 
 export const DEVELOPER_PROFILE: DeveloperProfileInfo = {

@@ -8,6 +8,7 @@ import {
   GitBranch,
   GitCompare,
   Info,
+  BookOpen,
   Layers,
   LayoutDashboard,
   LayoutTemplate,
@@ -190,6 +191,13 @@ const NAV_ITEMS: Array<{
     shortLabel: 'Settings',
     desc: 'Theme, grid & keys',
     icon: Settings,
+  },
+  {
+    id: 'user-manual',
+    label: 'User Manual',
+    shortLabel: 'Manual',
+    desc: 'Guides for every workspace feature',
+    icon: BookOpen,
   },
   {
     id: 'about',

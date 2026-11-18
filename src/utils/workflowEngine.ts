@@ -531,6 +531,20 @@ export async function executeWorkflowChain(
           const out = await generateExportBytes(workingProject, {
             customFonts,
           });
+          if (control) {
+            await control.waitWhilePaused();
+            if (control.isCancelled()) {
+              overallStatus = 'cancelled';
+              res = {
+                stepId: step.id,
+                kind: step.kind,
+                label: step.label,
+                status: 'skipped',
+                summary: 'Cancellation requested during export; generated output was discarded.',
+              };
+              break;
+            }
+          }
           if (out.mimeType === 'application/pdf') {
             const integrity = await verifyPdfBytesIntegrity(out.data);
             if (!integrity.valid) {
@@ -562,11 +576,39 @@ export async function executeWorkflowChain(
         case 'create_passport': {
           if (!generatedBytes) {
             const out = await generateExportBytes(workingProject, { customFonts });
+            if (control) {
+              await control.waitWhilePaused();
+              if (control.isCancelled()) {
+                overallStatus = 'cancelled';
+                res = {
+                  stepId: step.id,
+                  kind: step.kind,
+                  label: step.label,
+                  status: 'skipped',
+                  summary: 'Cancellation requested during export; no passport was issued.',
+                };
+                break;
+              }
+            }
             generatedBytes = out.data;
             generatedFileName = out.fileName;
             generatedMimeType = out.mimeType;
           }
           const { totalOutputPages } = getProductionCounts(workingProject);
+          if (control) {
+            await control.waitWhilePaused();
+            if (control.isCancelled()) {
+              overallStatus = 'cancelled';
+              res = {
+                stepId: step.id,
+                kind: step.kind,
+                label: step.label,
+                status: 'skipped',
+                summary: 'Cancellation requested before passport creation.',
+              };
+              break;
+            }
+          }
           passport = await createDocumentIntegrityPassport(workingProject, {
             fileName: generatedFileName || `${workingProject.name}.pdf`,
             mimeType: generatedMimeType || 'application/pdf',

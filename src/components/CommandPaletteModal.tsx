@@ -37,6 +37,9 @@ interface CommandPaletteModalProps {
   onToggleTheme: () => void;
   onNavigate: (section: NavSection) => void;
   onOpenProject: (project: PDFProject) => void;
+  onSelectBlueprint: (blueprint: ProductionBlueprint) => void;
+  onSelectWorkflow: (workflow: WorkflowChain) => void;
+  onRunProfile: (profile: TemplateAutomationProfile) => void;
 }
 
 interface PaletteEntry {
@@ -80,6 +83,9 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
   onToggleTheme,
   onNavigate,
   onOpenProject,
+  onSelectBlueprint,
+  onSelectWorkflow,
+  onRunProfile,
 }) => {
   const [query, setQuery] = useState('');
   const [cursor, setCursor] = useState(0);
@@ -175,7 +181,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
         searchBlob: `${bp.name} ${bp.description} ${(bp.tags || []).join(' ')}`.toLowerCase(),
         icon: LayoutTemplate,
         onExecute: () => {
-          onNavigate('blueprint-studio');
+          onSelectBlueprint(bp);
           onClose();
         },
       });
@@ -190,7 +196,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
         searchBlob: `${prof.name} ${prof.description}`.toLowerCase(),
         icon: Sparkles,
         onExecute: () => {
-          onNavigate('templates');
+          onRunProfile(prof);
           onClose();
         },
       });
@@ -205,7 +211,7 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
         searchBlob: `${wf.name} ${wf.description}`.toLowerCase(),
         icon: GitBranch,
         onExecute: () => {
-          onNavigate('workflow-studio');
+          onSelectWorkflow(wf);
           onClose();
         },
       });
@@ -218,6 +224,9 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
     onClose,
     onNavigate,
     onOpenProject,
+    onSelectBlueprint,
+    onSelectWorkflow,
+    onRunProfile,
     onToggleTheme,
     profiles,
     projects,

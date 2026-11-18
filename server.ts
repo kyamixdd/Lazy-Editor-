@@ -423,7 +423,9 @@ app.post('/api/ai/analyze-pdf', async (req, res) => {
 
     // Analyze pages in batches (page-by-page ensures high precision & avoids token truncation on large PDFs)
     for (const page of pages) {
-      const compactTextItems = (page.extractedTextItems || []).slice(0, 220);
+      const compactTextItems = page.extractedTextItems || [];
+      // Preserve every extracted text item; arbitrary per-page truncation caused
+      // dense forms and receipts to lose fields before AI analysis.
       const mimeMatch = page.imageBase64.match(/^data:(image\/\w+);base64,/);
       const imageMimeType = mimeMatch ? mimeMatch[1] : 'image/png';
       const imageBase64Clean = page.imageBase64.replace(

@@ -70,6 +70,7 @@ import {
 } from '../types/pdfStudio';
 import { useViewport } from '../hooks/useViewport';
 import { formatFriendlyAiError } from '../utils/aiEnhancedAnalysis';
+import { getGeminiRequestHeaders } from '../utils/geminiKey';
 import { AlignMode } from '../utils/alignmentEngine';
 import { validateBarcodeSpec } from '../utils/barcodeEngine';
 import { clampRect } from '../utils/geometryEngine';
@@ -303,7 +304,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
     try {
       const res = await fetch('/api/ai/edit-command', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getGeminiRequestHeaders() },
         body: JSON.stringify({
           instruction,
           currentElements: allElements,

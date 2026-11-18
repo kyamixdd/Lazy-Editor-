@@ -42,6 +42,7 @@ interface WorkflowStudioViewProps {
   profiles: TemplateAutomationProfile[];
   serialBatches: SerialBatchRecord[];
   workflows: WorkflowChain[];
+  initialWorkflowId?: string | null;
   onSaveWorkflow: (wf: WorkflowChain) => void;
   onDeleteWorkflow: (id: string) => void;
   onUpdateProject: (proj: PDFProject) => void;
@@ -55,6 +56,7 @@ export const WorkflowStudioView: React.FC<WorkflowStudioViewProps> = ({
   profiles,
   serialBatches,
   workflows,
+  initialWorkflowId,
   onSaveWorkflow,
   onDeleteWorkflow,
   onUpdateProject,
@@ -103,6 +105,13 @@ export const WorkflowStudioView: React.FC<WorkflowStudioViewProps> = ({
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (initialWorkflowId && allWorkflows.some((wf) => wf.id === initialWorkflowId)) {
+      setSelectedWorkflowId(initialWorkflowId);
+      setRunError(null);
+    }
+  }, [initialWorkflowId, allWorkflows]);
 
   useEffect(() => {
     if (projects.some((p) => p.id === targetProjectId)) return;

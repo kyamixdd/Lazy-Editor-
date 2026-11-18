@@ -18,6 +18,8 @@ jobs:
           node-version: 22
       - name: Install dependencies
         run: npm install --no-audit --no-fund --legacy-peer-deps
+      - name: Run regression tests
+        run: npm test
       - name: Type-check
         run: npm run lint
       - name: Build production bundle

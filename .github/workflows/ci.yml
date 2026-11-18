@@ -24,8 +24,9 @@ jobs:
         run: npm run lint
       - name: Build production bundle
         run: npm run build
-      - name: Smoke-test the Express server
+      - name: Smoke-test production server install
         run: |
+          npm install --omit=dev --no-audit --no-fund
           npm start > /tmp/lazy-editor-server.log 2>&1 &
           SERVER_PID=$!
           trap 'kill $SERVER_PID 2>/dev/null || true' EXIT

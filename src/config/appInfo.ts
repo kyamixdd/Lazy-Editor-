@@ -34,8 +34,8 @@ export interface ThirdPartyLicense {
 
 export const APP_VERSION = '1.0.0';
 export const APP_COPYRIGHT_YEAR = new Date().getFullYear();
-export const APP_SUITE_NAME = 'PDF Studio AI';
-export const APP_PRODUCT_NAME = 'Lazy Editor Studio';
+export const APP_SUITE_NAME = 'Lazy Editor';
+export const APP_PRODUCT_NAME = 'Lazy Editor';
 
 export const DEVELOPER_PROFILE: DeveloperProfileInfo = {
   name: 'Kyami Yokai',
@@ -43,7 +43,7 @@ export const DEVELOPER_PROFILE: DeveloperProfileInfo = {
   biography:
     'Here i’M trying to help lazy people, so make sure you buy the Subscription!!',
   ownershipStatement:
-    'PDF Studio AI and Lazy Editor Studio are independently developed, maintained, and owned by Kyami Yokai.',
+    'Lazy Editor is independently developed, maintained, and owned by Kyami Yokai.',
   email: 'kyamiyokai@gmail.com',
   socialLinks: [
     {
@@ -72,7 +72,7 @@ export const PRODUCT_INFO: ProductInfo = {
   suiteName: APP_SUITE_NAME,
   version: APP_VERSION,
   description:
-    'Lazy Editor Studio is a professional document editing and PDF production platform designed to simplify document customization, template management, serial numbering, and large-scale PDF generation.',
+    'Lazy Editor is a professional document editing and PDF production platform designed to simplify document customization, template management, serial numbering, and large-scale PDF generation.',
   mission:
     'Our mission is to make professional document editing and bulk PDF production more precise, efficient, and accessible.',
   capabilities: [

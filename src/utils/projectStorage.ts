@@ -165,7 +165,8 @@ export async function saveProjectLocal(project: PDFProject): Promise<void> {
     const tx = db.transaction(STORE_PROJECTS, 'readwrite');
     tx.objectStore(STORE_PROJECTS).put(project);
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    tx.onerror = () => reject(tx.error || new Error('IndexedDB save failed'));
+    tx.onabort = () => reject(tx.error || new Error('IndexedDB save aborted'));
   });
 
   // Sync lightweight project metadata + JSON layout to server persistence
@@ -179,14 +180,25 @@ export async function saveProjectLocal(project: PDFProject): Promise<void> {
         heightPt: p.heightPt,
         orientation: p.orientation,
       })),
+      versions: (project.versions || []).slice(0, 12).map((v) => ({
+        ...v,
+        elementsSnapshot: v.elementsSnapshot.map((el) =>
+          el.imageDataUrl && el.imageDataUrl.length > 4096
+            ? { ...el, imageDataUrl: undefined }
+            : el
+        ),
+      })),
       sourcePdfBase64: undefined,
       imageResources: undefined,
     };
-    await fetch('/api/projects', {
+    const res = await fetch('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+    if (!res.ok) {
+      console.warn('Server project sync responded with', res.status);
+    }
   } catch {
     // Offline or server sync fallback silently continues with IndexedDB
   }

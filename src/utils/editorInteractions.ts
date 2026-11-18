@@ -131,3 +131,26 @@ export function parseCommittedNumericDraft(
   }
   return val;
 }
+
+/**
+ * Computes a deterministic signature of editable project state so autosave
+ * does not mark a freshly opened or freshly saved project as having an unsaved draft.
+ */
+export function computeProjectDirtySignature(project: {
+  id: string;
+  pageCount?: number;
+  elements: unknown[];
+  pageConfig: unknown;
+  fitConfig?: unknown;
+  copiesConfig?: unknown;
+}): string {
+  return JSON.stringify({
+    id: project.id,
+    pageCount: project.pageCount ?? 1,
+    elements: project.elements,
+    pageConfig: project.pageConfig,
+    fitConfig: project.fitConfig,
+    copiesConfig: project.copiesConfig,
+  });
+}
+

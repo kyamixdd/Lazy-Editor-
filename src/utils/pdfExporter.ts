@@ -215,7 +215,45 @@ function appendPdfAnnotationEntry(
   }
 }
 
-async function prepareImageBytesForExport(
+function hashImageKey(input: string): string {
+  let h1 = 0x811c9dc5;
+  let h2 = 0x9e3779b9;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input.charCodeAt(i);
+    h1 ^= ch;
+    h1 = Math.imul(h1, 0x01000193);
+    h2 ^= ch + i;
+    h2 = Math.imul(h2, 0x85ebca6b);
+  }
+  return `${input.length}:${(h1 >>> 0).toString(36)}:${(h2 >>> 0).toString(36)}`;
+}
+
+export function rgbaPixelsHaveTransparency(
+  rgba: Uint8ClampedArray | Uint8Array,
+  alphaThreshold = 252
+): boolean {
+  for (let i = 3; i < rgba.length; i += 4) {
+    if (rgba[i] < alphaThreshold) return true;
+  }
+  return false;
+}
+
+export function isImageElementModified(el: DocumentElement): boolean {
+  if (el.isUserAdded || el.eraseOriginal) return true;
+  if (el.maskShape && el.maskShape !== 'none' && el.maskShape !== 'rect') return true;
+  if (el.imageCropRect) return true;
+  if (el.opacity !== undefined && el.opacity < 0.999) return true;
+  if (el.sourceOriginalRect) {
+    const dx = Math.abs(el.x - el.sourceOriginalRect.x);
+    const dy = Math.abs(el.y - el.sourceOriginalRect.y);
+    const dw = Math.abs(el.width - el.sourceOriginalRect.width);
+    const dh = Math.abs(el.height - el.sourceOriginalRect.height);
+    if (dx > 0.5 || dy > 0.5 || dw > 0.5 || dh > 0.5) return true;
+  }
+  return false;
+}
+
+export async function prepareImageBytesForExport(
   dataUrl: string,
   cropRect?: RectPt,
   maskShape?: 'none' | 'rect' | 'rounded' | 'circle',
@@ -223,12 +261,14 @@ async function prepareImageBytesForExport(
 ): Promise<{ bytes: Uint8Array; isPng: boolean } | null> {
   const isNativePng = /^data:image\/png;base64,/i.test(dataUrl);
   const isNativeJpeg = /^data:image\/jpe?g;base64,/i.test(dataUrl);
+  const hasCrop = Boolean(cropRect && cropRect.width > 1 && cropRect.height > 1);
+  const hasAlphaMaskShape = maskShape === 'circle' || maskShape === 'rounded';
+  const wantsCompression = quality !== undefined && quality < 0.99;
   const needsCanvasTransform =
     (!isNativePng && !isNativeJpeg) ||
-    Boolean(cropRect && cropRect.width > 1 && cropRect.height > 1) ||
-    maskShape === 'circle' ||
-    maskShape === 'rounded' ||
-    (quality !== undefined && quality < 0.99);
+    hasCrop ||
+    hasAlphaMaskShape ||
+    wantsCompression;
 
   if (!needsCanvasTransform || typeof document === 'undefined') {
     if (!isNativePng && !isNativeJpeg) {
@@ -285,16 +325,41 @@ async function prepareImageBytesForExport(
 
     ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
 
-    const hasAlphaMask =
-      maskShape === 'circle' ||
-      maskShape === 'rounded' ||
-      isNativePng ||
-      /^data:image\/webp;base64,/i.test(dataUrl) ||
-      /^data:image\/svg\+xml/i.test(dataUrl);
-    const outMime =
-      hasAlphaMask && (quality === undefined || quality >= 0.95)
-        ? 'image/png'
-        : 'image/jpeg';
+    let hasAlphaPixels = hasAlphaMaskShape || /^data:image\/svg\+xml/i.test(dataUrl);
+    if (!hasAlphaPixels) {
+      try {
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+        hasAlphaPixels = rgbaPixelsHaveTransparency(imgData);
+      } catch {
+        hasAlphaPixels = isNativePng || /^data:image\/webp;base64,/i.test(dataUrl);
+      }
+    }
+
+    // Never convert transparent or alpha-masked logos/images to JPEG (JPEG turns transparent black)
+    if (hasAlphaPixels) {
+      if (isNativePng && !hasCrop && !hasAlphaMaskShape) {
+        canvas.width = 0;
+        canvas.height = 0;
+        return {
+          bytes: base64ToUint8Array(dataUrl.replace(/^data:image\/[\w+.-]+;base64,/i, '')),
+          isPng: true,
+        };
+      }
+      const outUrl = canvas.toDataURL('image/png');
+      canvas.width = 0;
+      canvas.height = 0;
+      return {
+        bytes: base64ToUint8Array(outUrl.replace(/^data:image\/[\w+.-]+;base64,/i, '')),
+        isPng: true,
+      };
+    }
+
+    // Opaque image: composite white backdrop so any edge subpixels never darken in JPEG
+    ctx.globalCompositeOperation = 'destination-over';
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const outMime = wantsCompression || isNativeJpeg ? 'image/jpeg' : 'image/png';
     const outUrl =
       outMime === 'image/jpeg'
         ? canvas.toDataURL('image/jpeg', Math.max(0.25, Math.min(1, quality ?? 0.92)))
@@ -325,7 +390,8 @@ async function drawElementOntoPage(
   pageBgHex: string,
   imageCache: Map<string, PDFImage>,
   slotTransform?: SlotTransform,
-  defaultImageQuality?: number
+  defaultImageQuality?: number,
+  hasPdfBackground = false
 ) {
   if (!el.visible && !el.eraseOriginal) return;
 
@@ -399,12 +465,20 @@ async function drawElementOntoPage(
     return;
   }
 
-  // Background fill box (non-annotation shapes/text)
+  // Background fill box (skip vector shapes/borders/images which handle their own geometry/alpha)
   if (
     el.backgroundColor &&
     el.backgroundColor !== 'transparent' &&
     el.type !== 'annotation' &&
-    el.type !== 'stamp'
+    el.type !== 'stamp' &&
+    el.type !== 'shape' &&
+    el.type !== 'border' &&
+    el.type !== 'line' &&
+    el.type !== 'draw' &&
+    el.type !== 'measure' &&
+    el.type !== 'callout' &&
+    el.type !== 'image' &&
+    el.type !== 'signature'
   ) {
     const pos = toElementBottomLeftPt(0, 0, el.height);
     page.drawRectangle({
@@ -883,12 +957,16 @@ async function drawElementOntoPage(
 
   // Images & Signatures
   if ((el.type === 'image' || el.type === 'signature') && el.imageDataUrl) {
+    // Preserve native PDF background images in exact z-order unless user added or modified the image
+    if (hasPdfBackground && !isImageElementModified(el)) {
+      return;
+    }
     try {
       const effectiveQuality =
         el.imageCompressionQuality !== undefined && defaultImageQuality !== undefined
           ? Math.min(el.imageCompressionQuality, defaultImageQuality)
           : el.imageCompressionQuality ?? defaultImageQuality;
-      const cacheKey = `${el.imageDataUrl.slice(0, 48)}:${JSON.stringify(el.imageCropRect || '')}:${el.maskShape || ''}:${effectiveQuality || ''}`;
+      const cacheKey = `${hashImageKey(el.imageDataUrl)}:${JSON.stringify(el.imageCropRect || '')}:${el.maskShape || ''}:${effectiveQuality || ''}`;
       let embedded = imageCache.get(cacheKey);
       if (!embedded) {
         const prepared = await prepareImageBytesForExport(
@@ -1588,6 +1666,7 @@ async function renderSlotOntoPage(
     project.sourcePdfBase64 || pageMeta?.previewImageDataUrl
   );
 
+  let hasSlotBackgroundDrawn = false;
   // If page has true applied redactions or active non-destructive restoration, bake sanitized raster background
   // so underlying PDF glyphs inside redacted rectangles are 100% destroyed and unextractable.
   if (!isInsertedBlank && hasBackgroundSource && (hasAppliedRedactions || hasActiveRestoration)) {
@@ -1628,6 +1707,7 @@ async function renderSlotOntoPage(
         height: copyH,
         rotate: rot ? degrees(-rot) : undefined,
       });
+      hasSlotBackgroundDrawn = true;
     }
   } else if (srcDoc && !isInsertedBlank) {
     const origPdfPageNum = pageMeta?.sourcePdfPageNumber || templatePageNum;
@@ -1667,6 +1747,7 @@ async function renderSlotOntoPage(
         height: copyH,
         rotate: rot ? degrees(-rot) : undefined,
       });
+      hasSlotBackgroundDrawn = true;
     }
   }
 
@@ -1742,7 +1823,8 @@ async function renderSlotOntoPage(
       pageConfig.backgroundColor,
       imageCache,
       slotTransform,
-      defaultImageQuality
+      defaultImageQuality,
+      hasSlotBackgroundDrawn
     );
   }
 
@@ -1940,6 +2022,7 @@ async function renderBlueprintSheetOntoPage(
     const pageMeta = project.originalPages.find((p) => p.pageNumber === templatePageNum);
     const isInsertedBlank = Boolean(pageMeta?.isBlankInserted);
 
+    let hasBlueprintBgDrawn = false;
     if (srcDoc && !isInsertedBlank) {
       const origPdfPageNum = pageMeta?.sourcePdfPageNumber || templatePageNum;
       const srcIdx = Math.max(0, Math.min(origPdfPageNum - 1, srcDoc.getPageCount() - 1));
@@ -1973,6 +2056,7 @@ async function renderBlueprintSheetOntoPage(
           height: unrotatedH,
           rotate: rot ? degrees(-rot) : undefined,
         });
+        hasBlueprintBgDrawn = true;
       }
     } else if (!isInsertedBlank && pageMeta?.previewImageDataUrl) {
       const pngBytes = await renderSanitizedRedactedPagePng({
@@ -1997,6 +2081,7 @@ async function renderBlueprintSheetOntoPage(
           height: unrotatedH,
           rotate: rot ? degrees(-rot) : undefined,
         });
+        hasBlueprintBgDrawn = true;
       }
     }
 
@@ -2017,6 +2102,12 @@ async function renderBlueprintSheetOntoPage(
     );
 
     const els = project.elements.filter((e) => e.pageNumber === templatePageNum);
+    const defaultImageQuality =
+      project.exportConfig.imageCompression === 'high'
+        ? 0.62
+        : project.exportConfig.imageCompression === 'medium'
+        ? 0.85
+        : undefined;
     for (const el of els) {
       if (
         blk.sourceScope === 'selected_block' &&
@@ -2067,7 +2158,9 @@ async function renderBlueprintSheetOntoPage(
         fonts,
         blueprint.backgroundColor || project.pageConfig.backgroundColor,
         imageCache,
-        slotTransform
+        slotTransform,
+        defaultImageQuality,
+        hasBlueprintBgDrawn
       );
     }
 
@@ -2591,10 +2684,13 @@ export async function generateExportBytes(
       );
       const dataUrl = await renderSinglePagePreview(base64, i, dpiScale);
       if (dataUrl) {
+        const isPng = /^data:image\/png;base64,/i.test(dataUrl);
         const imgBytes = base64ToUint8Array(
-          dataUrl.replace(/^data:image\/\w+;base64,/, '')
+          dataUrl.replace(/^data:image\/[\w+.-]+;base64,/i, '')
         );
-        const embeddedImg = await flatDoc.embedPng(imgBytes);
+        const embeddedImg = isPng
+          ? await flatDoc.embedPng(imgBytes)
+          : await flatDoc.embedJpg(imgBytes);
         const p = flatDoc.addPage([outW, outH]);
         p.drawImage(embeddedImg, { x: 0, y: 0, width: outW, height: outH });
       }

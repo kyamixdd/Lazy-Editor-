@@ -2738,11 +2738,13 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
                 autoFocus
                 onChange={(e) => setInlineText(e.target.value)}
                 onBlur={() => {
-                  onUpdateElement(inlineElement.id, {
-                    text: inlineText,
-                    eraseOriginal: inlineElement.isUserAdded ? false : true,
-                    needsReview: false,
-                  });
+                  if (inlineText !== inlineElement.text) {
+                    onUpdateElement(inlineElement.id, {
+                      text: inlineText,
+                      eraseOriginal: inlineElement.isUserAdded ? false : true,
+                      needsReview: false,
+                    });
+                  }
                   setInlineEditId(null);
                 }}
                 onKeyDown={(e) => {
@@ -2750,11 +2752,13 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
                     setInlineEditId(null);
                   } else if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
-                    onUpdateElement(inlineElement.id, {
-                      text: inlineText,
-                      eraseOriginal: inlineElement.isUserAdded ? false : true,
-                      needsReview: false,
-                    });
+                    if (inlineText !== inlineElement.text) {
+                      onUpdateElement(inlineElement.id, {
+                        text: inlineText,
+                        eraseOriginal: inlineElement.isUserAdded ? false : true,
+                        needsReview: false,
+                      });
+                    }
                     setInlineEditId(null);
                   }
                 }}

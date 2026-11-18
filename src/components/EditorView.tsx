@@ -131,6 +131,7 @@ import {
   renderSinglePagePreview,
 } from '../utils/pdfRenderer';
 import {
+  computeProjectDirtySignature,
   defaultCategoryForTool,
   resolveEditorEscapeStep,
   toggleEditorTool,
@@ -157,7 +158,10 @@ interface EditorViewProps {
   focusTarget?: { pageNumber: number; elementId?: string; nonce: number } | null;
   onUpdateProject: (updated: PDFProject) => void;
   onUpdateSettings?: (next: StudioSettings) => void;
-  onSaveSnapshot: (project: PDFProject, note: string) => void;
+  onSaveSnapshot: (
+    project: PDFProject,
+    note: string
+  ) => void | Promise<{ ok: boolean; version?: number; error?: string }>;
   onRestoreVersion?: (snapshot: ProjectVersionSnapshot) => void;
   onSaveAsset?: (asset: AssetLibraryItem) => void;
   onTrackRecentTool?: (toolId: string) => void;
@@ -260,9 +264,14 @@ export const EditorView: React.FC<EditorViewProps> = ({
   const imageUploadRef = useRef<HTMLInputElement>(null);
   const assetMenuRef = useRef<HTMLDivElement>(null);
   const toastTimerRef = useRef<number | null>(null);
+  const saveStatusTimerRef = useRef<number | null>(null);
+  const draftAutosaveTimerRef = useRef<number | null>(null);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const handleSaveNowRef = useRef<((customNote?: string) => Promise<void>) | null>(null);
   const projectRef = useRef(project);
   projectRef.current = project;
   const lastAutoSnapHashRef = useRef<string>(JSON.stringify(project.elements));
+  const lastSavedDirtySigRef = useRef<string>(computeProjectDirtySignature(project));
 
   const customFonts = assets.filter((a): a is AssetFontItem => a.kind === 'font');
   const savedImages = assets.filter(
@@ -276,11 +285,17 @@ export const EditorView: React.FC<EditorViewProps> = ({
     (a): a is AssetPaletteItem => a.kind === 'palette'
   );
 
-  // Clamp currentPage when switching projects
+  // Clamp currentPage and reset dirty baseline when switching projects
   useEffect(() => {
     setCurrentPage((p) => Math.max(1, Math.min(p, Math.max(1, project.pageCount))));
-    lastAutoSnapHashRef.current = JSON.stringify(project.elements);
-  }, [project.id, project.pageCount]);
+    lastAutoSnapHashRef.current = JSON.stringify(projectRef.current.elements);
+    lastSavedDirtySigRef.current = computeProjectDirtySignature(projectRef.current);
+    setSaveStatus('idle');
+  }, [project.id]);
+
+  useEffect(() => {
+    setCurrentPage((p) => Math.max(1, Math.min(p, Math.max(1, project.pageCount))));
+  }, [project.pageCount]);
 
   // Direct navigation from Preflight / Comparison / Export Center
   useEffect(() => {
@@ -301,20 +316,35 @@ export const EditorView: React.FC<EditorViewProps> = ({
     }
   }, [focusTarget?.nonce]);
 
-  // Autosave recoverable unsaved draft snapshot (debounced)
+  // Autosave recoverable unsaved draft snapshot (debounced, only when dirty vs last saved state)
   useEffect(() => {
     if (!onSaveUnsavedDraft) return;
-    const timer = window.setTimeout(() => {
+    if (draftAutosaveTimerRef.current !== null) {
+      window.clearTimeout(draftAutosaveTimerRef.current);
+      draftAutosaveTimerRef.current = null;
+    }
+    const sig = computeProjectDirtySignature(project);
+    if (sig === lastSavedDirtySigRef.current) return;
+
+    draftAutosaveTimerRef.current = window.setTimeout(() => {
+      draftAutosaveTimerRef.current = null;
+      const latest = projectRef.current;
+      if (computeProjectDirtySignature(latest) === lastSavedDirtySigRef.current) return;
       onSaveUnsavedDraft({
-        projectId: project.id,
-        projectName: project.name,
+        projectId: latest.id,
+        projectName: latest.name,
         savedAt: new Date().toISOString(),
-        projectSnapshot: project,
+        projectSnapshot: latest,
         dirty: true,
       });
     }, 900);
-    return () => window.clearTimeout(timer);
-  }, [project.elements, project.pageConfig, project.id]);
+    return () => {
+      if (draftAutosaveTimerRef.current !== null) {
+        window.clearTimeout(draftAutosaveTimerRef.current);
+        draftAutosaveTimerRef.current = null;
+      }
+    };
+  }, [project.elements, project.pageConfig, project.fitConfig, project.copiesConfig, project.id]);
 
   // Automatic periodic version snapshots (Module 4)
   useEffect(() => {
@@ -534,25 +564,26 @@ export const EditorView: React.FC<EditorViewProps> = ({
   const handleRevertToHistoryEntry = (entryId: string) => {
     const idx = undoStack.findIndex((e) => e.id === entryId);
     if (idx === -1) return;
+    const currProj = projectRef.current;
     const target = undoStack[idx];
-    const currSnap = makeHistorySnapshot('Before timeline rollback', 'rollback', project);
+    const currSnap = makeHistorySnapshot('Before timeline rollback', 'rollback', currProj);
     setRedoStack((r) => [...r, currSnap]);
     setUndoStack((u) => u.slice(0, idx));
-    onUpdateProject(
-      appendOperationLog(
-        {
-          ...project,
-          elements: structuredClone(target.elements),
-          originalPages: structuredClone(target.originalPages),
-          pageConfig: structuredClone(target.pageConfig),
-          pageCount: target.pageCount,
-          updatedAt: new Date().toISOString(),
-        },
-        'Rollback History',
-        `Rolled back to "${target.label}"`,
-        currentPage
-      )
+    const nextProj = appendOperationLog(
+      {
+        ...currProj,
+        elements: structuredClone(target.elements),
+        originalPages: structuredClone(target.originalPages),
+        pageConfig: structuredClone(target.pageConfig),
+        pageCount: target.pageCount,
+        updatedAt: new Date().toISOString(),
+      },
+      'Rollback History',
+      `Rolled back to "${target.label}"`,
+      currentPage
     );
+    projectRef.current = nextProj;
+    onUpdateProject(nextProj);
     setCurrentPage((cp) => Math.max(1, Math.min(cp, Math.max(1, target.pageCount))));
   };
 
@@ -1290,9 +1321,13 @@ export const EditorView: React.FC<EditorViewProps> = ({
           ctx.drawImage(img, 0, 0);
           normalizedUrl = canvas.toDataURL('image/png');
         }
-        const ratio = canvas.height / Math.max(1, canvas.width);
-        const wPt = Math.min(180, Math.max(60, canvas.width * 0.5));
+        const naturalW = canvas.width;
+        const naturalH = canvas.height;
+        const ratio = naturalH / Math.max(1, naturalW);
+        const wPt = Math.min(180, Math.max(60, naturalW * 0.5));
         const hPt = Math.max(24, wPt * ratio);
+        canvas.width = 0;
+        canvas.height = 0;
 
         const id = `img-${Date.now()}`;
         const el: DocumentElement = {
@@ -1320,14 +1355,14 @@ export const EditorView: React.FC<EditorViewProps> = ({
           needsReview: false,
           isUserAdded: true,
           imageDataUrl: normalizedUrl,
-          imageNaturalWidth: canvas.width,
-          imageNaturalHeight: canvas.height,
+          imageNaturalWidth: naturalW,
+          imageNaturalHeight: naturalH,
         };
         commitElements(
           [...projectRef.current.elements, el],
           true,
           'Insert Image',
-          `Uploaded image "${file.name}" (${canvas.width}×${canvas.height}px)`
+          `Uploaded image "${file.name}" (${naturalW}×${naturalH}px)`
         );
         setSelectedIds([id]);
         onTrackRecentTool?.('image');
@@ -1565,6 +1600,12 @@ export const EditorView: React.FC<EditorViewProps> = ({
   useEffect(() => {
     const shortcuts = { ...DEFAULT_SHORTCUTS, ...(settings.shortcuts || {}) };
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (matchesShortcutCombo(e, shortcuts.saveSnapshot)) {
+        e.preventDefault();
+        void handleSaveNowRef.current?.(`Snapshot via shortcut (Page ${currentPage})`);
+        return;
+      }
+
       const target = e.target as HTMLElement | null;
       if (
         target &&
@@ -1614,9 +1655,6 @@ export const EditorView: React.FC<EditorViewProps> = ({
       } else if (matchesShortcutCombo(e, shortcuts.zoomOut)) {
         e.preventDefault();
         setZoom((z) => Math.max(0.3, Number((z - 0.15).toFixed(2))));
-      } else if (matchesShortcutCombo(e, shortcuts.saveSnapshot)) {
-        e.preventDefault();
-        onSaveSnapshot(projectRef.current, `Snapshot via shortcut (Page ${currentPage})`);
       } else if (e.key === 'Escape') {
         const hasOpenModal =
           showPageSetupModal ||
@@ -1780,8 +1818,62 @@ export const EditorView: React.FC<EditorViewProps> = ({
       if (toastTimerRef.current !== null) {
         window.clearTimeout(toastTimerRef.current);
       }
+      if (saveStatusTimerRef.current !== null) {
+        window.clearTimeout(saveStatusTimerRef.current);
+      }
     };
   }, []);
+
+  const handleSaveNow = async (customNote?: string) => {
+    if (saveStatus === 'saving') return;
+
+    // Commit any active inline text editor or numeric draft before snapshotting
+    const activeEl = typeof document !== 'undefined'
+      ? (document.activeElement as HTMLElement | null)
+      : null;
+    if (
+      activeEl &&
+      (activeEl.tagName === 'TEXTAREA' ||
+        activeEl.tagName === 'INPUT' ||
+        activeEl.isContentEditable)
+    ) {
+      activeEl.blur();
+      await new Promise((r) => window.setTimeout(r, 0));
+    }
+
+    // Cancel any pending debounced draft write so a freshly saved project is not re-marked dirty
+    if (draftAutosaveTimerRef.current !== null) {
+      window.clearTimeout(draftAutosaveTimerRef.current);
+      draftAutosaveTimerRef.current = null;
+    }
+
+    const latest = projectRef.current;
+    const note = customNote || `Manual snapshot (Page ${currentPage})`;
+    setSaveStatus('saving');
+    try {
+      const result = await onSaveSnapshot(latest, note);
+      if (result && result.ok === false) {
+        setSaveStatus('error');
+        showNoticeToast(result.error || 'Failed to save snapshot.');
+        return;
+      }
+      const savedVersion = result?.version ?? latest.version;
+      lastSavedDirtySigRef.current = computeProjectDirtySignature(projectRef.current);
+      setSaveStatus('saved');
+      showNoticeToast(`Saved v${savedVersion} (${note})`);
+      if (saveStatusTimerRef.current !== null) {
+        window.clearTimeout(saveStatusTimerRef.current);
+      }
+      saveStatusTimerRef.current = window.setTimeout(() => {
+        setSaveStatus('idle');
+        saveStatusTimerRef.current = null;
+      }, 2200);
+    } catch (err) {
+      setSaveStatus('error');
+      showNoticeToast(err instanceof Error ? err.message : 'Failed to save snapshot.');
+    }
+  };
+  handleSaveNowRef.current = handleSaveNow;
 
   // Dismiss Asset Insert popover when clicking/tapping outside
   useEffect(() => {
@@ -2354,9 +2446,9 @@ export const EditorView: React.FC<EditorViewProps> = ({
       {/* Desktop & Tablet 10-Category Expandable Workstation Toolbar */}
       {!viewport.isMobile && (
         <div className="shrink-0 z-20 flex flex-col border-b border-black/10 dark:border-white/12 glass-level-2">
-          {/* Row 1: Panels, Undo/Redo, 10 Tool Categories, View/Zoom/Page/Save */}
-          <header className="h-11 px-3 flex items-center justify-between gap-2 overflow-x-auto no-scrollbar">
-            <div className="flex items-center gap-1 shrink-0">
+          {/* Row 1: Panels, Undo/Redo, 10 Tool Categories (scrollable), Pinned View/Zoom/Page/Save */}
+          <header className="h-11 px-3 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1 flex-1 min-w-0 overflow-x-auto no-scrollbar">
               <button
                 type="button"
                 title="Toggle Layers"
@@ -2594,13 +2686,17 @@ export const EditorView: React.FC<EditorViewProps> = ({
 
               <button
                 type="button"
-                onClick={() =>
-                  onSaveSnapshot(project, `Manual snapshot (Page ${currentPage})`)
-                }
-                className="ml-0.5 px-3 py-1 rounded-xl text-xs font-medium bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] shadow-sm flex items-center gap-1.5 whitespace-nowrap transition-colors"
+                title="Save snapshot & persist project (Ctrl/Cmd+S)"
+                disabled={saveStatus === 'saving'}
+                onClick={() => void handleSaveNow()}
+                className="ml-0.5 px-3 py-1 rounded-xl text-xs font-medium bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] shadow-sm flex items-center gap-1.5 whitespace-nowrap transition-colors disabled:opacity-60"
               >
                 <Save className="w-3.5 h-3.5" />
-                Save
+                {saveStatus === 'saving'
+                  ? 'Saving...'
+                  : saveStatus === 'saved'
+                  ? `Saved v${Math.max(1, project.version - 1)}`
+                  : 'Save'}
               </button>
             </div>
           </header>
@@ -3559,16 +3655,34 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() =>
-                      onSaveSnapshot(project, `Manual snapshot (Page ${currentPage})`)
-                    }
-                    className="min-h-[36px] px-2.5 rounded-xl text-xs font-medium bg-[#101010] text-white dark:bg-white dark:text-[#050505] shadow-sm flex items-center gap-1"
+                    disabled={saveStatus === 'saving'}
+                    onClick={() => void handleSaveNow()}
+                    className="min-h-[36px] px-2.5 rounded-xl text-xs font-medium bg-[#101010] text-white dark:bg-white dark:text-[#050505] shadow-sm flex items-center gap-1 disabled:opacity-60"
                   >
                     <Save className="w-3.5 h-3.5" />
-                    Save
+                    {saveStatus === 'saving'
+                      ? 'Saving'
+                      : saveStatus === 'saved'
+                      ? 'Saved'
+                      : 'Save'}
                   </button>
                 </div>
               </div>
+
+              <AnimatePresence>
+                {styleToast && (
+                  <motion.div
+                    key={styleToast}
+                    variants={toastVariants}
+                    initial="initial"
+                    animate="animate"
+                    exit="exit"
+                    className="pointer-events-auto self-center px-3 py-1 rounded-full glass-level-3 border text-[11px] font-medium text-[#101010] dark:text-white shadow-md"
+                  >
+                    {styleToast}
+                  </motion.div>
+                )}
+              </AnimatePresence>
 
               {/* Mobile Quick Zoom Floating Pill + Collapsible Page Thumbnails */}
               <div className="flex items-center justify-between px-1">
@@ -4604,7 +4718,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
         project={project}
         onClose={() => setShowVersionModal(false)}
         onSaveNamedVersion={(note) => {
-          onSaveSnapshot(project, note);
+          void handleSaveNow(note);
         }}
         historyEntries={undoStack}
         onRevertHistoryEntry={handleRevertToHistoryEntry}

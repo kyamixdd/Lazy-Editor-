@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import zlib from 'node:zlib';
+import { PDFDocument, PDFName, StandardFonts, rgb } from 'pdf-lib';
 import {
   DocumentElement,
   PDFProject,
@@ -620,3 +621,188 @@ test('redactionEngine & validationEngine: detects errors before export and sanit
     false
   );
 });
+
+// ---------------------------------------------------------------------------
+// 7. Image Alpha / Overlapping Export & Editor Save State Regression Tests
+// ---------------------------------------------------------------------------
+
+function crc32Bytes(buf: Uint8Array): number {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) {
+    c ^= buf[i];
+    for (let k = 0; k < 8; k++) {
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+  }
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function makeSolidOrAlphaPngDataUrl(
+  width: number,
+  height: number,
+  rgbTuple: [number, number, number],
+  alphaOnLeftHalf: number
+): string {
+  const raw = new Uint8Array(height * (1 + width * 4));
+  for (let y = 0; y < height; y++) {
+    const rowStart = y * (1 + width * 4);
+    raw[rowStart] = 0;
+    for (let x = 0; x < width; x++) {
+      const px = rowStart + 1 + x * 4;
+      raw[px] = rgbTuple[0];
+      raw[px + 1] = rgbTuple[1];
+      raw[px + 2] = rgbTuple[2];
+      raw[px + 3] = x < width / 2 ? alphaOnLeftHalf : 255;
+    }
+  }
+  const chunk = (type: string, data: Uint8Array) => {
+    const out = new Uint8Array(12 + data.length);
+    const dv = new DataView(out.buffer);
+    dv.setUint32(0, data.length, false);
+    for (let i = 0; i < 4; i++) out[4 + i] = type.charCodeAt(i);
+    out.set(data, 8);
+    dv.setUint32(8 + data.length, crc32Bytes(out.subarray(4, 8 + data.length)), false);
+    return out;
+  };
+  const ihdr = new Uint8Array(13);
+  const dv = new DataView(ihdr.buffer);
+  dv.setUint32(0, width, false);
+  dv.setUint32(4, height, false);
+  ihdr[8] = 8;
+  ihdr[9] = 6; // RGBA
+  const sig = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+  const c1 = chunk('IHDR', ihdr);
+  const c2 = chunk('IDAT', zlib.deflateSync(raw));
+  const c3 = chunk('IEND', new Uint8Array(0));
+  const full = new Uint8Array(sig.length + c1.length + c2.length + c3.length);
+  let off = 0;
+  for (const part of [sig, c1, c2, c3]) {
+    full.set(part, off);
+    off += part.length;
+  }
+  return `data:image/png;base64,${Buffer.from(full).toString('base64')}`;
+}
+
+test('pdfExporter: preserves transparent/overlapping PNG logos and avoids cache collisions on export', async () => {
+  const { isImageElementModified, rgbaPixelsHaveTransparency } = await import(
+    '../src/utils/pdfExporter'
+  );
+
+  // Verify pixel transparency detector catches partially transparent logos and ignores opaque ones
+  const transparentPixels = new Uint8ClampedArray([255, 0, 0, 0, 255, 0, 0, 255]);
+  const opaquePixels = new Uint8ClampedArray([255, 0, 0, 255, 0, 255, 0, 255]);
+  assert.equal(rgbaPixelsHaveTransparency(transparentPixels), true);
+  assert.equal(rgbaPixelsHaveTransparency(opaquePixels), false);
+
+  // Verify unmodified original_pdf image vs modified/user-added image detection
+  const origImgEl = makeElement({
+    id: 'orig-bg-img',
+    type: 'image',
+    isUserAdded: false,
+    eraseOriginal: false,
+    x: 40,
+    y: 40,
+    width: 120,
+    height: 60,
+    sourceOriginalRect: { x: 40, y: 40, width: 120, height: 60 },
+  });
+  assert.equal(isImageElementModified(origImgEl), false);
+  assert.equal(isImageElementModified({ ...origImgEl, maskShape: 'circle' }), true);
+  assert.equal(isImageElementModified({ ...origImgEl, opacity: 0.7 }), true);
+  assert.equal(isImageElementModified({ ...origImgEl, x: 55 }), true);
+
+  // Build real source PDF with native content + overlapping transparent PNG logos under medium compression (0.85)
+  const srcDoc = await PDFDocument.create();
+  const font = await srcDoc.embedFont(StandardFonts.HelveticaBold);
+  const srcPage = srcDoc.addPage([595.28, 841.89]);
+  srcPage.drawText('OVERLAPPING UNDERLAY TEXT', { x: 60, y: 740, size: 14, font, color: rgb(0.1, 0.1, 0.1) });
+  const srcBase64 = Buffer.from(await srcDoc.save()).toString('base64');
+
+  const logoA = makeSolidOrAlphaPngDataUrl(24, 24, [20, 120, 220], 0);
+  const logoB = makeSolidOrAlphaPngDataUrl(24, 24, [220, 60, 40], 0);
+
+  const project = makeTestProject({
+    sourcePdfBase64: srcBase64,
+    exportConfig: {
+      ...createDefaultExportConfig(),
+      imageCompression: 'medium',
+    },
+    elements: [
+      {
+        ...origImgEl,
+        imageDataUrl: logoA,
+      },
+      makeElement({
+        id: 'logo-a',
+        type: 'image',
+        isUserAdded: true,
+        x: 60,
+        y: 80,
+        width: 48,
+        height: 48,
+        imageDataUrl: logoA,
+      }),
+      makeElement({
+        id: 'logo-b-same-size',
+        type: 'image',
+        isUserAdded: true,
+        x: 90,
+        y: 95,
+        width: 48,
+        height: 48,
+        maskShape: 'rounded',
+        imageDataUrl: logoB,
+      }),
+    ],
+  });
+
+  const exported = await generateExportBytes(project);
+  assert.equal(exported.mimeType, 'application/pdf');
+  const outDoc = await PDFDocument.load(exported.data);
+  assert.equal(outDoc.getPageCount(), 1);
+
+  // Confirm embedded XObjects include two distinct images with alpha SMask preserved (not flattened to opaque black JPEG)
+  const outPage = outDoc.getPage(0);
+  const resources = outPage.node.Resources();
+  const xObjects = resources?.lookup(PDFName.of('XObject')) as
+    | { entries: () => [unknown, unknown][] }
+    | undefined;
+  assert.ok(xObjects, 'Exported page must contain XObject resources');
+
+  let imageWithSmaskCount = 0;
+  for (const [, refOrObj] of xObjects.entries()) {
+    const obj = outDoc.context.lookup(refOrObj as never) as { dict?: { get: (k: unknown) => unknown } };
+    const subtype = obj?.dict?.get(PDFName.of('Subtype'));
+    const smask = obj?.dict?.get(PDFName.of('SMask'));
+    if (subtype === PDFName.of('Image') && smask) {
+      imageWithSmaskCount++;
+    }
+  }
+  assert.equal(
+    imageWithSmaskCount,
+    2,
+    'Both distinct overlapping PNG logos must embed with SMask alpha preserved (no black JPEG or cache collision)'
+  );
+});
+
+test('editorInteractions: computeProjectDirtySignature ignores version increments while detecting layout edits', async () => {
+  const { computeProjectDirtySignature } = await import('../src/utils/editorInteractions');
+  const proj = makeTestProject();
+  const sigInitial = computeProjectDirtySignature(proj);
+
+  // Saving increments version/updatedAt without changing editable layout -> signature stays equal
+  const afterSave = {
+    ...proj,
+    version: proj.version + 1,
+    updatedAt: '2026-11-18T12:00:00.000Z',
+  };
+  assert.equal(computeProjectDirtySignature(afterSave), sigInitial);
+
+  // Editing an element changes the dirty signature
+  const afterEdit = {
+    ...afterSave,
+    elements: [{ ...afterSave.elements[0], text: 'Updated 0002' }],
+  };
+  assert.notEqual(computeProjectDirtySignature(afterEdit), sigInitial);
+});
+

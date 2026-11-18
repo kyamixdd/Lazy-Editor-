@@ -1002,6 +1002,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                           onClick={() =>
                             onUpdateElement(el.id, {
                               rotation: ((el.rotation || 0) - 15) % 360,
+                              eraseOriginal: el.isUserAdded ? false : true,
                             })
                           }
                           className={`px-2 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white transition-colors ${btnHeightClass}`}
@@ -1015,6 +1016,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                           onCommit={(val) =>
                             onUpdateElement(el.id, {
                               rotation: val % 360,
+                              eraseOriginal: el.isUserAdded ? false : true,
                             })
                           }
                           className={`w-full px-1.5 rounded-lg border studio-input tabular-nums text-center ${inputHeightClass}`}
@@ -1024,6 +1026,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                           onClick={() =>
                             onUpdateElement(el.id, {
                               rotation: ((el.rotation || 0) + 15) % 360,
+                              eraseOriginal: el.isUserAdded ? false : true,
                             })
                           }
                           className={`px-2 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white transition-colors ${btnHeightClass}`}
@@ -1041,6 +1044,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                         onCommit={(val) =>
                           onUpdateElement(el.id, {
                             opacity: Math.max(0.05, Math.min(1, val)),
+                            eraseOriginal: el.isUserAdded ? false : true,
                           })
                         }
                         className={`mt-0.5 w-full px-2 rounded-lg border studio-input tabular-nums ${inputHeightClass}`}
@@ -1138,6 +1142,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                           onChange={(e) =>
                             onUpdateElement(el.id, {
                               maskShape: e.target.value as 'none' | 'rect' | 'rounded' | 'circle',
+                              eraseOriginal: el.isUserAdded ? false : true,
                             })
                           }
                           className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-select text-[11px]"
@@ -1172,7 +1177,12 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                           {el.imageCropRect && (
                             <button
                               type="button"
-                              onClick={() => onUpdateElement(el.id, { imageCropRect: undefined })}
+                              onClick={() =>
+                                onUpdateElement(el.id, {
+                                  imageCropRect: undefined,
+                                  eraseOriginal: el.isUserAdded ? false : true,
+                                })
+                              }
                               className="underline text-[#101010] dark:text-white"
                             >
                               Reset Crop
@@ -1196,7 +1206,10 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                                     next.y = Math.min(natH - 10, next.y);
                                     next.width = Math.max(10, Math.min(natW - next.x, next.width));
                                     next.height = Math.max(10, Math.min(natH - next.y, next.height));
-                                    onUpdateElement(el.id, { imageCropRect: next });
+                                    onUpdateElement(el.id, {
+                                      imageCropRect: next,
+                                      eraseOriginal: el.isUserAdded ? false : true,
+                                    });
                                   }}
                                   className="w-full px-1 py-0.5 rounded border studio-input text-[10px] tabular-nums"
                                 />

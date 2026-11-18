@@ -232,7 +232,15 @@ function cmykToHex(c: number, m: number, y: number, k: number): string {
 }
 
 function hexToRgbTuple(hex: string): [number, number, number] {
-  const clean = (hex || '#111827').replace('#', '');
+  if (!hex || hex === 'transparent') return [17, 24, 39];
+  const clean = hex.replace('#', '');
+  if (clean.length === 3) {
+    return [
+      parseInt(clean[0] + clean[0], 16) || 0,
+      parseInt(clean[1] + clean[1], 16) || 0,
+      parseInt(clean[2] + clean[2], 16) || 0,
+    ];
+  }
   if (clean.length !== 6) return [17, 24, 39];
   return [
     parseInt(clean.slice(0, 2), 16) || 0,
@@ -413,6 +421,11 @@ function encodePdfJsImageToDataUrl(
     const ctx = c.getContext('2d');
     if (!ctx) return null;
     ctx.drawImage(imgObj.bitmap, 0, 0);
+    if (maskTintHex && maskTintHex !== 'transparent') {
+      ctx.globalCompositeOperation = 'source-in';
+      ctx.fillStyle = maskTintHex;
+      ctx.fillRect(0, 0, w, h);
+    }
     const dataUrl = c.toDataURL('image/png');
     releaseCanvas(c);
     return { dataUrl, naturalWidth: w, naturalHeight: h, hasAlpha: true };
@@ -426,8 +439,9 @@ function encodePdfJsImageToDataUrl(
   const pixelCount = w * h;
   const rgba = new Uint8ClampedArray(pixelCount * 4);
   let hasAlpha = false;
+  const isGrayscale1Bpp = imgObj.kind === 1 || raw.length < pixelCount;
 
-  if (raw.length >= pixelCount * 4) {
+  if (!isGrayscale1Bpp && raw.length >= pixelCount * 4) {
     for (let i = 0; i < pixelCount * 4; i += 4) {
       rgba[i] = raw[i];
       rgba[i + 1] = raw[i + 1];
@@ -436,14 +450,14 @@ function encodePdfJsImageToDataUrl(
       rgba[i + 3] = a;
       if (a < 255) hasAlpha = true;
     }
-  } else if (raw.length >= pixelCount * 3) {
+  } else if (!isGrayscale1Bpp && raw.length >= pixelCount * 3) {
     for (let p = 0, s = 0, d = 0; p < pixelCount; p++, s += 3, d += 4) {
       rgba[d] = raw[s];
       rgba[d + 1] = raw[s + 1];
       rgba[d + 2] = raw[s + 2];
       rgba[d + 3] = 255;
     }
-  } else if (raw.length >= pixelCount) {
+  } else if (!isGrayscale1Bpp && raw.length >= pixelCount) {
     // 8-bit grayscale or alpha mask
     const tint = maskTintHex ? hexToRgbTuple(maskTintHex) : null;
     for (let p = 0, d = 0; p < pixelCount; p++, d += 4) {
@@ -765,10 +779,12 @@ export async function analyzeOperatorListBounds(
               (await resolvePdfJsObject(page.objs, args[0])) ||
               (await resolvePdfJsObject(page.commonObjs, args[0], 600));
           }
-          const encoded = encodePdfJsImageToDataUrl(
-            imgObj,
-            isMask ? state.fillColor : undefined
-          );
+          const effectiveMaskTint = isMask
+            ? state.fillColor === 'transparent'
+              ? '#111827'
+              : state.fillColor
+            : undefined;
+          const encoded = encodePdfJsImageToDataUrl(imgObj, effectiveMaskTint);
           if (encoded) {
             imageResources[resourceId] = {
               id: resourceId,
@@ -1355,6 +1371,8 @@ export async function renderPdfPagesForStudio(
       if (!ctx) {
         throw new Error('Failed to create 2D canvas context for PDF rendering');
       }
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       await page.render({
         canvasContext: ctx,
@@ -1774,6 +1792,8 @@ export async function renderSinglePagePreview(
       canvas.height = Math.round(viewport.height);
       const ctx = canvas.getContext('2d');
       if (!ctx) return null;
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
       await page.render({ canvasContext: ctx, viewport, canvas }).promise;
       const dataUrl =
         scale <= 0.6

@@ -216,7 +216,9 @@ export default function App() {
   const activeProject =
     projects.find((p) => p.id === activeProjectId) || null;
 
-  const handleSaveProject = (updated: PDFProject) => {
+  const handleSaveProject = async (
+    updated: PDFProject
+  ): Promise<{ ok: boolean; error?: string }> => {
     setProjects((prev) => {
       const exists = prev.some((p) => p.id === updated.id);
       if (exists) {
@@ -224,14 +226,22 @@ export default function App() {
       }
       return [updated, ...prev];
     });
-    void saveProjectLocal(updated);
+    try {
+      await saveProjectLocal(updated);
+      return { ok: true };
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Failed to persist project locally';
+      console.error('Save project failed:', err);
+      return { ok: false, error: message };
+    }
   };
 
   const handleProjectCreated = (
     project: PDFProject,
     openImmediately: boolean
   ) => {
-    handleSaveProject(project);
+    void handleSaveProject(project);
     setActiveProjIdState(project.id);
     setActiveProjectId(project.id);
     if (openImmediately) {
@@ -268,8 +278,12 @@ export default function App() {
     void deleteProjectLocal(id);
   };
 
-  const handleSaveSnapshot = (project: PDFProject, note: string) => {
+  const handleSaveSnapshot = async (
+    project: PDFProject,
+    note: string
+  ): Promise<{ ok: boolean; version?: number; error?: string }> => {
     const now = new Date().toISOString();
+    const savedVersion = project.version;
     const updated = appendOperationLog(
       {
         ...project,
@@ -277,7 +291,7 @@ export default function App() {
         updatedAt: now,
         versions: [
           {
-            version: project.version,
+            version: savedVersion,
             savedAt: now,
             note,
             elementsSnapshot: structuredClone(project.elements),
@@ -291,13 +305,17 @@ export default function App() {
         ].slice(0, 40),
       },
       'Save Version',
-      `Saved v${project.version}: ${note}`
+      `Saved v${savedVersion}: ${note}`
     );
-    handleSaveProject(updated);
-    void clearUnsavedDraft(project.id);
+    const saveRes = await handleSaveProject(updated);
+    await clearUnsavedDraft(project.id);
     setRecoverableDrafts((prev) =>
       prev.filter((d) => d.projectId !== project.id)
     );
+    if (!saveRes.ok) {
+      return { ok: false, version: savedVersion, error: saveRes.error };
+    }
+    return { ok: true, version: savedVersion };
   };
 
   const handleRestoreVersion = (

@@ -32,6 +32,7 @@ import {
   generateSerialPreview,
 } from '../utils/serialEngine';
 import { presetToGrid, ptToUnit, unitToPt } from '../utils/units';
+import { GlassButton } from './glass';
 import { PageConfigurationModal } from './PageConfigurationModal';
 
 interface BulkGeneratorViewProps {
@@ -227,8 +228,8 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
   return (
     <div className="flex-1 flex flex-col desktop:flex-row min-h-full desktop:h-screen desktop:overflow-hidden">
       {/* Left Configuration Column */}
-      <div className="w-full desktop:w-[540px] shrink-0 border-b desktop:border-b-0 desktop:border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0E131D] flex flex-col desktop:overflow-hidden">
-        <div className="px-4 tablet:px-5 py-3.5 tablet:py-4 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2.5">
+      <div className="w-full desktop:w-[540px] shrink-0 border-b desktop:border-b-0 desktop:border-r border-slate-200/80 dark:border-white/10 glass-level-2 flex flex-col desktop:overflow-hidden">
+        <div className="px-4 tablet:px-5 py-3.5 tablet:py-4 border-b border-slate-200/75 dark:border-white/10 flex flex-wrap items-center justify-between gap-2.5">
           <div className="min-w-0">
             <h1 className="text-sm tablet:text-base font-display font-semibold text-slate-900 dark:text-slate-100 truncate">
               Bulk & Multi-Copy Engine
@@ -239,22 +240,22 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <button
-              type="button"
+            <GlassButton
+              variant="glass"
+              size="sm"
               onClick={() => setShowPageSetupModal(true)}
-              className="min-h-[40px] desktop:min-h-0 px-2.5 py-1.5 rounded-md text-xs font-medium border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1.5 whitespace-nowrap touch-manipulation"
             >
               <Maximize2 className="w-3.5 h-3.5" />
               {pageConfig.customPresetName || pageConfig.sizePreset}
-            </button>
-            <button
-              type="button"
+            </GlassButton>
+            <GlassButton
+              variant="primary"
+              size="sm"
               onClick={onGoToExport}
-              className="min-h-[40px] desktop:min-h-0 px-3 py-1.5 rounded-md text-xs font-medium bg-blue-600 text-white hover:bg-blue-700 flex items-center gap-1.5 whitespace-nowrap touch-manipulation"
             >
               <Download className="w-3.5 h-3.5" />
               Export
-            </button>
+            </GlassButton>
           </div>
         </div>
 
@@ -1432,7 +1433,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
 
       {/* Right Live Imposition Preview */}
       {(viewport.isDesktop || effectiveSubTab === 'preview') && (
-      <div className="flex-1 overflow-auto bg-slate-200/75 dark:bg-[#080B11] p-4 tablet:p-6 flex flex-col items-center justify-center min-h-[380px]">
+      <div className="flex-1 overflow-auto glass-level-1 p-4 tablet:p-6 flex flex-col items-center justify-center min-h-[380px]">
         <div className="mb-3 flex flex-wrap items-center justify-center gap-4 text-xs text-slate-600 dark:text-slate-400">
           <span className="font-semibold text-slate-900 dark:text-slate-100">
             Live Sheet Imposition Preview (Page 1)

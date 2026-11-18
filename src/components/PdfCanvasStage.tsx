@@ -18,6 +18,10 @@ import {
   SourceFitConfig,
 } from '../types/pdfStudio';
 import { useViewport } from '../hooks/useViewport';
+import {
+  computeSmartSnapAndGuides,
+  getElementsInMarquee,
+} from '../utils/alignmentEngine';
 import { clampRect } from '../utils/geometryEngine';
 import { ptToUnit } from '../utils/units';
 
@@ -32,12 +36,15 @@ interface PdfCanvasStageProps {
   showRulers: boolean;
   showGrid: boolean;
   snapToGrid: boolean;
+  snapToObjects?: boolean;
+  snapThresholdPt?: number;
   showAlignmentGuides: boolean;
   gridSizePt: number;
   cropMode: boolean;
   fitConfig: SourceFitConfig;
   activeSourceBox: RectPt;
   detectedContentBox?: RectPt;
+  highlightedElementId?: string | null;
   onZoomChange?: (zoom: number) => void;
   onOpenProperties?: () => void;
   onDuplicateElement?: (id: string) => void;
@@ -76,12 +83,15 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
   showRulers,
   showGrid,
   snapToGrid,
+  snapToObjects = true,
+  snapThresholdPt = 6,
   showAlignmentGuides,
   gridSizePt,
   cropMode,
   fitConfig,
   activeSourceBox,
   detectedContentBox,
+  highlightedElementId,
   onZoomChange,
   onOpenProperties,
   onDuplicateElement,
@@ -148,12 +158,15 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
     selectedIds,
     elements,
     snapToGrid,
+    snapToObjects,
+    snapThresholdPt,
     showAlignmentGuides,
     gridSizePt,
     zoom,
     canvasW,
     canvasH,
     interactionMode,
+    cropMode,
     viewportWidth: viewport.width,
   });
   callbacksRef.current = {
@@ -165,14 +178,25 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
     selectedIds,
     elements,
     snapToGrid,
+    snapToObjects,
+    snapThresholdPt,
     showAlignmentGuides,
     gridSizePt,
     zoom,
     canvasW,
     canvasH,
     interactionMode,
+    cropMode,
     viewportWidth: viewport.width,
   };
+
+  const marqueeRef = useRef<{
+    active: boolean;
+    startX: number;
+    startY: number;
+    rectNode: Konva.Rect | null;
+    shiftHeld: boolean;
+  }>({ active: false, startX: 0, startY: 0, rectNode: null, shiftHeld: false });
 
   const stageW = Math.round(canvasW * zoom);
   const stageH = Math.round(canvasH * zoom);
@@ -280,9 +304,96 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
 
     stage.on('mousedown touchstart', (e) => {
       if (e.target === stage) {
-        callbacksRef.current.onSelectIds([]);
         setInlineEditId(null);
         setContextMenu(null);
+        const evt = e.evt as MouseEvent;
+        const isMouse = evt && 'button' in evt && !('touches' in evt && (evt as unknown as TouchEvent).touches?.length);
+        const pos = stage.getPointerPosition();
+        if (
+          isMouse &&
+          evt.button === 0 &&
+          pos &&
+          callbacksRef.current.interactionMode === 'edit' &&
+          !callbacksRef.current.cropMode
+        ) {
+          const z = callbacksRef.current.zoom;
+          const sx = pos.x / z;
+          const sy = pos.y / z;
+          const marqueeRect = new Konva.Rect({
+            x: sx,
+            y: sy,
+            width: 0,
+            height: 0,
+            fill: 'rgba(37, 99, 235, 0.12)',
+            stroke: '#2563EB',
+            strokeWidth: 1 / z,
+            dash: [4 / z, 2 / z],
+            listening: false,
+          });
+          guideLayer.add(marqueeRect);
+          marqueeRef.current = {
+            active: true,
+            startX: sx,
+            startY: sy,
+            rectNode: marqueeRect,
+            shiftHeld: Boolean(evt.shiftKey),
+          };
+        } else {
+          callbacksRef.current.onSelectIds([]);
+        }
+      }
+    });
+
+    stage.on('mousemove', () => {
+      const m = marqueeRef.current;
+      if (!m.active || !m.rectNode) return;
+      const pos = stage.getPointerPosition();
+      if (!pos) return;
+      const z = callbacksRef.current.zoom;
+      const cx = pos.x / z;
+      const cy = pos.y / z;
+      m.rectNode.setAttrs({
+        x: Math.min(m.startX, cx),
+        y: Math.min(m.startY, cy),
+        width: Math.abs(cx - m.startX),
+        height: Math.abs(cy - m.startY),
+      });
+      guideLayer.batchDraw();
+    });
+
+    stage.on('mouseup', () => {
+      const m = marqueeRef.current;
+      if (!m.active) return;
+      const rect = m.rectNode
+        ? {
+            x: m.rectNode.x(),
+            y: m.rectNode.y(),
+            width: m.rectNode.width(),
+            height: m.rectNode.height(),
+          }
+        : null;
+      m.rectNode?.destroy();
+      marqueeRef.current = {
+        active: false,
+        startX: 0,
+        startY: 0,
+        rectNode: null,
+        shiftHeld: false,
+      };
+      guideLayer.batchDraw();
+
+      if (rect && (rect.width > 4 || rect.height > 4)) {
+        const hitIds = getElementsInMarquee(callbacksRef.current.elements, rect);
+        if (m.shiftHeld) {
+          const merged = Array.from(
+            new Set([...callbacksRef.current.selectedIds, ...hitIds])
+          );
+          callbacksRef.current.onSelectIds(merged);
+        } else {
+          callbacksRef.current.onSelectIds(hitIds);
+        }
+      } else if (!m.shiftHeld) {
+        callbacksRef.current.onSelectIds([]);
       }
     });
 
@@ -429,77 +540,71 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
     });
     nodeMapRef.current.clear();
 
-    const snap = (val: number) => {
-      if (!callbacksRef.current.snapToGrid) return val;
-      const step = Math.max(2, callbacksRef.current.gridSizePt);
-      return Math.round(val / step) * step;
-    };
-
     const drawGuides = (activeEl: DocumentElement, nx: number, ny: number) => {
       guideLayer.destroyChildren();
-      if (!callbacksRef.current.showAlignmentGuides) {
-        guideLayer.batchDraw();
-        return { x: nx, y: ny };
-      }
+      const others = callbacksRef.current.elements.filter(
+        (o) =>
+          o.id !== activeEl.id &&
+          !(
+            callbacksRef.current.selectedIds.length > 1 &&
+            callbacksRef.current.selectedIds.includes(o.id)
+          )
+      );
+      const res = computeSmartSnapAndGuides(
+        {
+          x: nx,
+          y: ny,
+          width: activeEl.width,
+          height: activeEl.height,
+        },
+        others,
+        {
+          canvasW: callbacksRef.current.canvasW,
+          canvasH: callbacksRef.current.canvasH,
+          snapToGrid: callbacksRef.current.snapToGrid,
+          gridSizePt: callbacksRef.current.gridSizePt,
+          snapToObjects: callbacksRef.current.snapToObjects,
+          showAlignmentGuides: callbacksRef.current.showAlignmentGuides,
+          snapThresholdPt: callbacksRef.current.snapThresholdPt,
+        }
+      );
 
-      let snappedX = nx;
-      let snappedY = ny;
-      const tol = 4;
-      const cx = nx + activeEl.width / 2;
-      const cy = ny + activeEl.height / 2;
-
-      for (const other of callbacksRef.current.elements) {
-        if (other.id === activeEl.id || !other.visible) continue;
-        if (Math.abs(nx - other.x) < tol) {
-          snappedX = other.x;
+      for (const g of res.guides) {
+        if (g.orientation === 'v') {
           guideLayer.add(
             new Konva.Line({
-              points: [other.x, 0, other.x, pageConfig.heightPt],
-              stroke: '#2563EB',
+              points: [g.pos, g.start, g.pos, g.end],
+              stroke: g.kind === 'spacing' ? '#10B981' : '#2563EB',
               strokeWidth: 0.9 / callbacksRef.current.zoom,
-              dash: [3, 3],
+              dash: [3 / callbacksRef.current.zoom, 3 / callbacksRef.current.zoom],
             })
           );
-        }
-        const ocx = other.x + other.width / 2;
-        if (Math.abs(cx - ocx) < tol) {
-          snappedX = ocx - activeEl.width / 2;
+        } else {
           guideLayer.add(
             new Konva.Line({
-              points: [ocx, 0, ocx, pageConfig.heightPt],
-              stroke: '#2563EB',
+              points: [g.start, g.pos, g.end, g.pos],
+              stroke: g.kind === 'spacing' ? '#10B981' : '#2563EB',
               strokeWidth: 0.9 / callbacksRef.current.zoom,
-              dash: [3, 3],
+              dash: g.kind === 'spacing' ? undefined : [3 / callbacksRef.current.zoom, 3 / callbacksRef.current.zoom],
             })
           );
-        }
-        if (Math.abs(ny - other.y) < tol) {
-          snappedY = other.y;
-          guideLayer.add(
-            new Konva.Line({
-              points: [0, other.y, pageConfig.widthPt, other.y],
-              stroke: '#2563EB',
-              strokeWidth: 0.9 / callbacksRef.current.zoom,
-              dash: [3, 3],
-            })
-          );
-        }
-        const ocy = other.y + other.height / 2;
-        if (Math.abs(cy - ocy) < tol) {
-          snappedY = ocy - activeEl.height / 2;
-          guideLayer.add(
-            new Konva.Line({
-              points: [0, ocy, pageConfig.widthPt, ocy],
-              stroke: '#2563EB',
-              strokeWidth: 0.9 / callbacksRef.current.zoom,
-              dash: [3, 3],
-            })
-          );
+          if (g.kind === 'spacing' && g.label) {
+            guideLayer.add(
+              new Konva.Text({
+                x: (g.start + g.end) / 2 - 14,
+                y: g.pos - 12 / callbacksRef.current.zoom,
+                text: g.label,
+                fontSize: 9 / callbacksRef.current.zoom,
+                fill: '#10B981',
+                fontStyle: 'bold',
+              })
+            );
+          }
         }
       }
 
       guideLayer.batchDraw();
-      return { x: snappedX, y: snappedY };
+      return { x: res.x, y: res.y };
     };
 
     for (const el of elements) {
@@ -810,9 +915,7 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
       });
 
       group.on('dragmove', () => {
-        const rawX = snap(group.x());
-        const rawY = snap(group.y());
-        const guided = drawGuides(el, rawX, rawY);
+        const guided = drawGuides(el, group.x(), group.y());
         group.x(guided.x);
         group.y(guided.y);
       });
@@ -826,9 +929,24 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
         const dx = nx - el.x;
         const dy = ny - el.y;
 
+        const currSel = callbacksRef.current.selectedIds;
         if (el.groupId) {
           const members = callbacksRef.current.elements.filter(
-            (m) => m.groupId === el.groupId
+            (m) => m.groupId === el.groupId && !m.locked
+          );
+          callbacksRef.current.onUpdateElementsBatch(
+            members.map((m) => ({
+              id: m.id,
+              patch: {
+                x: Number((m.x + dx).toFixed(2)),
+                y: Number((m.y + dy).toFixed(2)),
+                eraseOriginal: m.isUserAdded ? false : true,
+              },
+            }))
+          );
+        } else if (currSel.length > 1 && currSel.includes(el.id)) {
+          const members = callbacksRef.current.elements.filter(
+            (m) => currSel.includes(m.id) && !m.locked
           );
           callbacksRef.current.onUpdateElementsBatch(
             members.map((m) => ({
@@ -870,6 +988,21 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
         });
       });
 
+      if (highlightedElementId === el.id) {
+        group.add(
+          new Konva.Rect({
+            x: -3 / zoom,
+            y: -3 / zoom,
+            width: el.width + 6 / zoom,
+            height: el.height + 6 / zoom,
+            stroke: '#F59E0B',
+            strokeWidth: 2 / zoom,
+            dash: [4 / zoom, 2 / zoom],
+            listening: false,
+          })
+        );
+      }
+
       layer.add(group);
       nodeMapRef.current.set(el.id, group);
     }
@@ -892,6 +1025,7 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
     cropMode,
     interactionMode,
     isTouchLargeHandles,
+    highlightedElementId,
   ]);
 
   // Render content boundary indicator & interactive visual crop handles
@@ -1250,11 +1384,11 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
             }
             className={
               viewport.isMobile
-                ? 'fixed inset-x-3 bottom-4 z-50 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#111827] shadow-2xl p-2 pb-safe'
-                : 'fixed z-50 w-56 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#111827] shadow-2xl p-1.5'
+                ? 'fixed inset-x-3 bottom-4 z-50 rounded-2xl border glass-level-4 p-2 pb-safe'
+                : 'fixed z-50 w-56 rounded-2xl border glass-level-4 p-1.5'
             }
           >
-            <div className="px-3 py-2 flex items-center justify-between border-b border-slate-200 dark:border-slate-800 mb-1">
+            <div className="px-3 py-2 flex items-center justify-between border-b border-slate-200/80 dark:border-white/10 mb-1">
               <div className="min-w-0">
                 <div className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
                   {contextElement.text || contextElement.type}
@@ -1394,9 +1528,9 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
 
       {/* Table Cell Editor Modal */}
       {tableElement && tableElement.tableData && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-end tablet:items-center justify-center p-2 tablet:p-4">
-          <div className="w-full max-w-xl max-h-[85dvh] rounded-t-xl tablet:rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#111827] p-4 tablet:p-5 shadow-2xl flex flex-col">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800 shrink-0">
+        <div className="fixed inset-0 z-50 bg-slate-950/45 dark:bg-black/65 backdrop-blur-sm flex items-end tablet:items-center justify-center p-2 tablet:p-4">
+          <div className="w-full max-w-xl max-h-[85dvh] rounded-t-3xl tablet:rounded-2xl border glass-level-4 p-4 tablet:p-5 flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200/80 dark:border-white/10 shrink-0">
               <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
                 Edit Table Cells
               </h3>

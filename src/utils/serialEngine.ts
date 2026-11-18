@@ -104,15 +104,24 @@ export function generateSerialPreview(
   let outOfRangeCount = 0;
 
   const pagesToCheck = Math.min(totalOutputPages, 500);
+  const maxRuleBlockIndex = rules.reduce(
+    (max, r) => Math.max(max, Number.isFinite(r.blockIndex) ? r.blockIndex : 0),
+    0
+  );
+  const effectiveSlotCount = Math.max(1, copiesPerPage, maxRuleBlockIndex + 1);
 
   for (let p = 0; p < pagesToCheck; p++) {
-    for (let s = 0; s < copiesPerPage; s++) {
+    for (let s = 0; s < effectiveSlotCount; s++) {
       for (const rule of rules) {
         const rulesForField = rules.filter(
           (r) => r.targetFieldKey === rule.targetFieldKey
         );
         // If multiple rules target the same fieldKey, only apply the rule matching this slot/blockIndex
         if (rulesForField.length > 1 && rule.blockIndex !== s) {
+          continue;
+        }
+        // When copiesPerPage is smaller than blockIndex+1, skip single-rule duplication past copiesPerPage
+        if (rulesForField.length <= 1 && s >= copiesPerPage) {
           continue;
         }
 

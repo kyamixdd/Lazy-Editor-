@@ -1,4 +1,4 @@
-import { PDFProject, ValidationIssue } from '../types/pdfStudio';
+import { AssetFontItem, PDFProject, ValidationIssue } from '../types/pdfStudio';
 import { computeSheetLayout } from './geometryEngine';
 import { generateSerialPreview } from './serialEngine';
 import { validatePageConfigDimensions } from './units';
@@ -11,9 +11,30 @@ const STANDARD_PDF_FONTS = new Set([
   'Courier',
 ]);
 
-export function validateProject(project: PDFProject): ValidationIssue[] {
+const WEB_FALLBACK_FONTS = new Set([
+  'Plus Jakarta Sans',
+  'DM Sans',
+  'JetBrains Mono',
+]);
+
+export function validateProject(
+  project: PDFProject,
+  customFonts: AssetFontItem[] = []
+): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
-  const { pageConfig, elements, copiesConfig, serialRules, bulkConfig, dataColumns, dataRows } = project;
+  const {
+    pageConfig,
+    elements,
+    copiesConfig,
+    serialRules,
+    bulkConfig,
+    dataColumns,
+    dataRows,
+  } = project;
+
+  const fontMap = new Map(
+    customFonts.map((f) => [f.fontFamily.toLowerCase(), f])
+  );
 
   // 1. Page dimensions & margins check (prevents invalid PDF MediaBox & negative printable area)
   const dimCheck = validatePageConfigDimensions({
@@ -30,6 +51,7 @@ export function validateProject(project: PDFProject): ValidationIssue[] {
       id: 'qc-page-dims',
       severity: 'error',
       category: 'page_dimensions',
+      pageNumber: 1,
       message: dimCheck.errors.join(' '),
       autoFixLabel:
         pageConfig.widthPt >= 36 && pageConfig.heightPt >= 36
@@ -42,6 +64,7 @@ export function validateProject(project: PDFProject): ValidationIssue[] {
       id: `qc-page-warn-${issues.length}`,
       severity: 'warning',
       category: 'page_dimensions',
+      pageNumber: 1,
       message: warn,
     });
   }
@@ -50,9 +73,12 @@ export function validateProject(project: PDFProject): ValidationIssue[] {
   const visibleElements = elements.filter((e) => e.visible);
 
   for (const el of visibleElements) {
-    const elPageMeta = project.originalPages.find((p) => p.pageNumber === el.pageNumber) || project.originalPages[0];
+    const elPageMeta =
+      project.originalPages.find((p) => p.pageNumber === el.pageNumber) ||
+      project.originalPages[0];
     const spaceW = elPageMeta?.widthPt || pageConfig.widthPt;
     const spaceH = elPageMeta?.heightPt || pageConfig.heightPt;
+
     // Out of template boundaries
     if (
       el.x < 0 ||
@@ -102,29 +128,106 @@ export function validateProject(project: PDFProject): ValidationIssue[] {
       }
     }
 
-    // Missing images
-    if (el.type === 'image' && el.isUserAdded && !el.imageDataUrl) {
-      issues.push({
-        id: `qc-img-${el.id}`,
-        severity: 'error',
-        category: 'missing_image',
-        elementId: el.id,
-        pageNumber: el.pageNumber,
-        message: `Image element on Page ${el.pageNumber} has no image source attached.`,
-      });
+    // Missing images & Effective DPI Resolution Check (Module 5)
+    if (el.type === 'image') {
+      if (el.isUserAdded && !el.imageDataUrl) {
+        issues.push({
+          id: `qc-img-${el.id}`,
+          severity: 'error',
+          category: 'missing_image',
+          elementId: el.id,
+          pageNumber: el.pageNumber,
+          message: `Image element on Page ${el.pageNumber} has no image source attached.`,
+        });
+      } else if (el.imageNaturalWidth && el.imageNaturalHeight && el.width > 1 && el.height > 1) {
+        const dpiX = el.imageNaturalWidth / (el.width / 72);
+        const dpiY = el.imageNaturalHeight / (el.height / 72);
+        const effDpi = Math.round(Math.min(dpiX, dpiY));
+        if (effDpi < 72) {
+          issues.push({
+            id: `qc-img-dpi-${el.id}`,
+            severity: 'error',
+            category: 'image_resolution',
+            elementId: el.id,
+            pageNumber: el.pageNumber,
+            effectiveDpi: effDpi,
+            message: `Critically low image resolution (${effDpi} DPI) on Page ${el.pageNumber} ("${el.text || 'Image'}"). Minimum 150 DPI recommended for print.`,
+          });
+        } else if (effDpi < 150) {
+          issues.push({
+            id: `qc-img-dpi-${el.id}`,
+            severity: 'warning',
+            category: 'image_resolution',
+            elementId: el.id,
+            pageNumber: el.pageNumber,
+            effectiveDpi: effDpi,
+            message: `Low image resolution (${effDpi} DPI) on Page ${el.pageNumber} ("${el.text || 'Image'}"). May appear pixelated in 300 DPI print.`,
+          });
+        }
+      }
     }
 
-    // Unexpected font substitution
-    if (!STANDARD_PDF_FONTS.has(el.fontFamily) && !project.exportConfig.embedFonts) {
-      issues.push({
-        id: `qc-font-${el.id}`,
-        severity: 'warning',
-        category: 'font_substitution',
-        elementId: el.id,
-        pageNumber: el.pageNumber,
-        message: `Font "${el.fontFamily}" on "${el.text.slice(0, 20)}" will substitute to Helvetica during PDF export.`,
-        autoFixLabel: 'Enable Font Fallback',
-      });
+    // Custom Font Availability, License Embedding Restriction & Font Substitution Check (Module 5 & 8)
+    const famLower = (el.fontFamily || '').toLowerCase();
+    const matchedCustom = fontMap.get(famLower);
+    const isStandard = STANDARD_PDF_FONTS.has(el.fontFamily);
+    if (!isStandard) {
+      if (matchedCustom) {
+        if (!matchedCustom.canEmbedInPdf) {
+          issues.push({
+            id: `qc-font-lic-${el.id}`,
+            severity: 'warning',
+            category: 'font_license',
+            elementId: el.id,
+            pageNumber: el.pageNumber,
+            message: `Font "${el.fontFamily}" has restricted embedding license (${matchedCustom.embeddingPermission}). Export will fall back to Helvetica.`,
+            detail: matchedCustom.licenseNote,
+          });
+        }
+      } else if (WEB_FALLBACK_FONTS.has(el.fontFamily)) {
+        if (!project.exportConfig.embedFonts) {
+          issues.push({
+            id: `qc-font-${el.id}`,
+            severity: 'warning',
+            category: 'font_substitution',
+            elementId: el.id,
+            pageNumber: el.pageNumber,
+            message: `Font "${el.fontFamily}" on "${el.text.slice(0, 20)}" will substitute to Helvetica during PDF export.`,
+            autoFixLabel: 'Enable Font Fallback',
+          });
+        }
+      } else {
+        issues.push({
+          id: `qc-font-missing-${el.id}`,
+          severity: 'warning',
+          category: 'missing_font',
+          elementId: el.id,
+          pageNumber: el.pageNumber,
+          message: `Font "${el.fontFamily}" on Page ${el.pageNumber} is not embedded or present in Asset Library; PDF export substitutes Helvetica.`,
+        });
+      }
+    }
+
+    // Unexpected Layout Drift Check vs original detected geometry (Module 5)
+    if (!el.isUserAdded && el.sourceOriginalRect) {
+      const dx = Math.abs(el.x - el.sourceOriginalRect.x);
+      const dy = Math.abs(el.y - el.sourceOriginalRect.y);
+      const wRatio =
+        el.sourceOriginalRect.width > 6
+          ? Math.abs(el.width - el.sourceOriginalRect.width) /
+            el.sourceOriginalRect.width
+          : 0;
+      if (dx > 30 || dy > 30 || wRatio > 0.65) {
+        issues.push({
+          id: `qc-drift-${el.id}`,
+          severity: 'warning',
+          category: 'layout_drift',
+          elementId: el.id,
+          pageNumber: el.pageNumber,
+          message: `Large layout shift on "${el.text.slice(0, 20) || el.type}" (moved ${Math.round(dx)}×${Math.round(dy)}pt from original PDF coordinate).`,
+          autoFixLabel: 'Revert Position',
+        });
+      }
     }
 
     // Flagged for manual AI review
@@ -169,17 +272,25 @@ export function validateProject(project: PDFProject): ValidationIssue[] {
   }
 
   // 4. Misaligned receipt blocks check
-  const blockMap = new Map<string, { minX: number; minY: number; width: number }>();
+  const blockMap = new Map<string, { minX: number; minY: number; width: number; pageNumber: number; firstId: string }>();
   for (const el of visibleElements) {
     if (!el.blockId) continue;
     const prev = blockMap.get(el.blockId);
     if (!prev) {
-      blockMap.set(el.blockId, { minX: el.x, minY: el.y, width: el.width });
+      blockMap.set(el.blockId, {
+        minX: el.x,
+        minY: el.y,
+        width: el.width,
+        pageNumber: el.pageNumber,
+        firstId: el.id,
+      });
     } else {
       blockMap.set(el.blockId, {
         minX: Math.min(prev.minX, el.x),
         minY: Math.min(prev.minY, el.y),
         width: Math.max(prev.width, el.width),
+        pageNumber: prev.pageNumber,
+        firstId: prev.firstId,
       });
     }
   }
@@ -194,6 +305,8 @@ export function validateProject(project: PDFProject): ValidationIssue[] {
           id: `qc-align-${bId}`,
           severity: 'warning',
           category: 'misaligned_block',
+          elementId: box.firstId,
+          pageNumber: box.pageNumber,
           message: `Receipt/document block "${bId}" is horizontally misaligned by ${deltaX.toFixed(1)}pt relative to "${blocks[0][0]}".`,
           autoFixLabel: 'Align Blocks',
         });
@@ -208,6 +321,7 @@ export function validateProject(project: PDFProject): ValidationIssue[] {
       id: 'qc-crop-invalid',
       severity: 'error',
       category: 'page_dimensions',
+      pageNumber: 1,
       message: 'Selected source crop region is smaller than 12×12pt.',
       autoFixLabel: 'Reset Crop',
     });
@@ -218,6 +332,7 @@ export function validateProject(project: PDFProject): ValidationIssue[] {
       id: 'qc-imposition-bounds',
       severity: 'error',
       category: 'out_of_bounds',
+      pageNumber: 1,
       message: 'Margins and grid spacing exceed available output page dimensions.',
       autoFixLabel: 'Enable Fit-to-Page',
     });
@@ -227,6 +342,7 @@ export function validateProject(project: PDFProject): ValidationIssue[] {
         id: 'qc-imposition-overlap',
         severity: 'error',
         category: 'overlap',
+        pageNumber: 1,
         message: `${layout.overlapPairs.length} copy slot pair(s) overlap on the output sheet. Reduce scale or increase spacing.`,
         autoFixLabel: 'Enable Fit-to-Page',
       });
@@ -236,6 +352,7 @@ export function validateProject(project: PDFProject): ValidationIssue[] {
         id: 'qc-imposition-overflow',
         severity: 'error',
         category: 'clipping',
+        pageNumber: 1,
         message: `Placed content (${Math.round(layout.slots[0]?.placedWidthPt || 0)}×${Math.round(layout.slots[0]?.placedHeightPt || 0)}pt) clips or extends beyond cell/page boundaries.`,
         autoFixLabel: 'Enable Fit-to-Page',
       });
@@ -271,6 +388,7 @@ export function validateProject(project: PDFProject): ValidationIssue[] {
         id: 'qc-printable-area-warn',
         severity: 'warning',
         category: 'out_of_bounds',
+        pageNumber: 1,
         message:
           'Content extends beyond the configured printable margin area. Consider switching to Auto-Fit or reducing margins.',
         autoFixLabel: exceedsMargins ? 'Enable Fit-to-Page' : undefined,

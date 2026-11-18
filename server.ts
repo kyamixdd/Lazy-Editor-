@@ -44,9 +44,11 @@ function writeStoredProjects(projects: Record<string, unknown>[]) {
 function getGeminiClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
-    throw new Error(
+    const err = new Error(
       'GEMINI_API_KEY is not configured. Please add your Gemini API key in Settings > Secrets.'
-    );
+    ) as Error & { code?: string };
+    err.code = 'MISSING_API_KEY';
+    throw err;
   }
   return new GoogleGenAI({
     apiKey,
@@ -56,6 +58,57 @@ function getGeminiClient(): GoogleGenAI {
       },
     },
   });
+}
+
+function classifyGeminiHttpError(err: unknown): {
+  status: number;
+  code: string;
+  error: string;
+} {
+  const errObj = err as { code?: string; status?: number; message?: string };
+  const message =
+    err instanceof Error ? err.message : String(err || 'Gemini AI request failed');
+  const lower = message.toLowerCase();
+
+  if (errObj?.code === 'MISSING_API_KEY' || lower.includes('not configured')) {
+    return {
+      status: 503,
+      code: 'MISSING_API_KEY',
+      error:
+        'GEMINI_API_KEY is not configured. Local PDF Scan and all editing/export tools remain active.',
+    };
+  }
+  if (
+    errObj?.status === 429 ||
+    lower.includes('429') ||
+    lower.includes('resource_exhausted') ||
+    lower.includes('quota')
+  ) {
+    return {
+      status: 429,
+      code: 'QUOTA_EXHAUSTED',
+      error:
+        'Gemini API quota exhausted or rate-limited. Continue using Local PDF Scan and full editor/export features without AI credits.',
+    };
+  }
+  if (
+    errObj?.status === 403 ||
+    errObj?.status === 400 ||
+    lower.includes('permission_denied') ||
+    lower.includes('api_key_invalid')
+  ) {
+    return {
+      status: 403,
+      code: 'API_KEY_INVALID',
+      error:
+        'Gemini API key was rejected or lacks permission. Please verify Settings > Secrets.',
+    };
+  }
+  return {
+    status: 500,
+    code: 'AI_UNAVAILABLE',
+    error: message,
+  };
 }
 
 // Health endpoint
@@ -349,6 +402,8 @@ app.post('/api/ai/analyze-pdf', async (req, res) => {
     // Analyze pages in batches (page-by-page ensures high precision & avoids token truncation on large PDFs)
     for (const page of pages) {
       const compactTextItems = (page.extractedTextItems || []).slice(0, 220);
+      const mimeMatch = page.imageBase64.match(/^data:(image\/\w+);base64,/);
+      const imageMimeType = mimeMatch ? mimeMatch[1] : 'image/png';
       const imageBase64Clean = page.imageBase64.replace(
         /^data:image\/\w+;base64,/,
         ''
@@ -384,7 +439,7 @@ Instructions:
           parts: [
             {
               inlineData: {
-                mimeType: 'image/png',
+                mimeType: imageMimeType,
                 data: imageBase64Clean,
               },
             },
@@ -532,9 +587,8 @@ Instructions:
     });
   } catch (err) {
     console.error('AI analyze-pdf error:', err);
-    const message =
-      err instanceof Error ? err.message : 'AI PDF analysis failed';
-    res.status(500).json({ error: message });
+    const classified = classifyGeminiHttpError(err);
+    res.status(classified.status).json({ error: classified.error, code: classified.code });
   }
 });
 
@@ -671,9 +725,8 @@ Rules:
     res.json(plan);
   } catch (err) {
     console.error('AI edit-command error:', err);
-    const message =
-      err instanceof Error ? err.message : 'AI editing command failed';
-    res.status(500).json({ error: message });
+    const classified = classifyGeminiHttpError(err);
+    res.status(classified.status).json({ error: classified.error, code: classified.code });
   }
 });
 

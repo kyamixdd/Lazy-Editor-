@@ -1,3 +1,4 @@
+import fontkit from '@pdf-lib/fontkit';
 import JSZip from 'jszip';
 import {
   clip,
@@ -15,6 +16,7 @@ import {
   StandardFonts,
 } from 'pdf-lib';
 import {
+  AssetFontItem,
   DocumentElement,
   PDFProject,
 } from '../types/pdfStudio';
@@ -45,9 +47,33 @@ interface FontBundle {
   timesBold: PDFFont;
   courier: PDFFont;
   courierBold: PDFFont;
+  custom: Map<string, PDFFont>;
 }
 
-async function embedStandardFonts(doc: PDFDocument): Promise<FontBundle> {
+async function embedFontsForDoc(
+  doc: PDFDocument,
+  customFonts: AssetFontItem[] = [],
+  allowCustomEmbedding = true
+): Promise<FontBundle> {
+  const custom = new Map<string, PDFFont>();
+  if (allowCustomEmbedding && customFonts.length > 0) {
+    try {
+      doc.registerFontkit(fontkit);
+      for (const cf of customFonts) {
+        if (!cf.canEmbedInPdf || cf.format === 'woff') continue;
+        try {
+          const bytes = base64ToUint8Array(cf.dataBase64);
+          const embedded = await doc.embedFont(bytes, { subset: true });
+          custom.set(cf.fontFamily.toLowerCase(), embedded);
+        } catch (err) {
+          console.warn(`Could not embed custom font "${cf.fontFamily}":`, err);
+        }
+      }
+    } catch {
+      // Fallback safely to StandardFonts
+    }
+  }
+
   return {
     helvetica: await doc.embedFont(StandardFonts.Helvetica),
     helveticaBold: await doc.embedFont(StandardFonts.HelveticaBold),
@@ -57,11 +83,15 @@ async function embedStandardFonts(doc: PDFDocument): Promise<FontBundle> {
     timesBold: await doc.embedFont(StandardFonts.TimesRomanBold),
     courier: await doc.embedFont(StandardFonts.Courier),
     courierBold: await doc.embedFont(StandardFonts.CourierBold),
+    custom,
   };
 }
 
 function pickFont(el: DocumentElement, fonts: FontBundle): PDFFont {
   const fam = (el.fontFamily || '').toLowerCase();
+  const customHit = fonts.custom.get(fam);
+  if (customHit) return customHit;
+
   const isBold = el.fontWeight === 'bold';
   const isItalic = el.fontStyle === 'italic';
 
@@ -129,7 +159,6 @@ async function drawElementOntoPage(
     };
   };
 
-  // Mask original coordinates cleanly when original detected item was edited, moved, or deleted
   if (el.eraseOriginal && el.sourceOriginalRect) {
     const r = el.sourceOriginalRect;
     const pos = toPagePt(r.x - 1, localHeight - r.y - r.height - 1);
@@ -145,7 +174,6 @@ async function drawElementOntoPage(
 
   if (!el.visible) return;
 
-  // Background fill for element
   if (el.backgroundColor && el.backgroundColor !== 'transparent') {
     const pos = toPagePt(x, pdfYBottom, el.rotation ? -el.rotation : 0);
     page.drawRectangle({
@@ -161,7 +189,6 @@ async function drawElementOntoPage(
 
   const isModifiedOrAdded = Boolean(el.isUserAdded || el.eraseOriginal);
 
-  // Border / Shape / Line: only draw if added or modified by user (original PDF keeps its native vectors)
   if (el.type === 'shape' || el.type === 'border') {
     if (isModifiedOrAdded) {
       if (el.shapeKind === 'circle') {
@@ -214,7 +241,6 @@ async function drawElementOntoPage(
     return;
   }
 
-  // Image (cached per PDFDocument for high-speed 250+ page generation)
   if (el.type === 'image' && el.imageDataUrl) {
     try {
       let embedded = imageCache.get(el.imageDataUrl);
@@ -243,7 +269,6 @@ async function drawElementOntoPage(
     return;
   }
 
-  // Table
   if (el.type === 'table' && el.tableData && isModifiedOrAdded) {
     const { rows, borderColor, headerBgColor, headerRow, cellPadding } =
       el.tableData;
@@ -293,7 +318,6 @@ async function drawElementOntoPage(
     return;
   }
 
-  // Text rendering: draw if added, modified, or dynamically overridden by serial/dataset
   const shouldDrawText = overrideText !== null || isModifiedOrAdded;
   if (!shouldDrawText) return;
 
@@ -448,7 +472,7 @@ function buildDynamicOverridesForSlot(
       const matchingRules = project.serialRules.filter(
         (r) => r.targetFieldKey === rule.targetFieldKey
       );
-      if (matchingRules.length > 1 && rule.blockIndex !== slotZeroIdx) {
+      if (matchingRules.length > 1 && copiesPerPage > 1 && rule.blockIndex !== slotZeroIdx) {
         continue;
       }
       const res = computeSerialValueForSlot(
@@ -460,11 +484,31 @@ function buildDynamicOverridesForSlot(
         matchingRules.length,
         rule.blockIndex
       );
-      overrides.set(rule.targetFieldKey, res.value);
+      if (matchingRules.length > 1) {
+        overrides.set(`__block_${rule.blockIndex}::${rule.targetFieldKey}`, res.value);
+        if (rule.blockIndex === slotZeroIdx) {
+          overrides.set(rule.targetFieldKey, res.value);
+        }
+      } else {
+        overrides.set(rule.targetFieldKey, res.value);
+      }
     }
   }
 
   return overrides;
+}
+
+function resolveBlockIndex(blockId?: string): number | null {
+  if (!blockId) return null;
+  const letterMatch = blockId.match(/block[-_]?([A-Z])$/i);
+  if (letterMatch) {
+    return letterMatch[1].toUpperCase().charCodeAt(0) - 65;
+  }
+  const numMatch = blockId.match(/(\d+)$/);
+  if (numMatch) {
+    return Math.max(0, parseInt(numMatch[1], 10) - 1);
+  }
+  return null;
 }
 
 async function renderSlotOntoPage(
@@ -606,10 +650,17 @@ async function renderSlotOntoPage(
           }
         : undefined,
     };
-    const override =
-      overrides && el.fieldKey && overrides.has(el.fieldKey)
-        ? overrides.get(el.fieldKey)!
-        : null;
+    let override: string | null = null;
+    if (overrides && el.fieldKey) {
+      const bIdx = resolveBlockIndex(el.blockId);
+      const blockSpecificKey =
+        bIdx !== null ? `__block_${bIdx}::${el.fieldKey}` : null;
+      if (blockSpecificKey && overrides.has(blockSpecificKey)) {
+        override = overrides.get(blockSpecificKey)!;
+      } else if (overrides.has(el.fieldKey)) {
+        override = overrides.get(el.fieldKey)!;
+      }
+    }
     await drawElementOntoPage(
       outDoc,
       outPage,
@@ -639,10 +690,15 @@ async function renderSlotOntoPage(
 async function buildSingleModifiedTemplatePage(
   project: PDFProject,
   sourcePageNumber = 1,
-  overrides?: Map<string, string>
+  overrides?: Map<string, string>,
+  customFonts: AssetFontItem[] = []
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
-  const fonts = await embedStandardFonts(doc);
+  const fonts = await embedFontsForDoc(
+    doc,
+    customFonts,
+    project.exportConfig.embedFonts
+  );
   const imageCache = new Map<string, PDFImage>();
   const embeddedPageCache = new Map<string, PDFEmbeddedPage>();
   const layout = computeSheetLayout(project, sourcePageNumber);
@@ -712,19 +768,43 @@ async function buildSingleModifiedTemplatePage(
   return doc.save();
 }
 
+export interface ExportJobControl {
+  isCancelled: () => boolean;
+  waitWhilePaused: () => Promise<void>;
+}
+
 export async function generateExportBytes(
   project: PDFProject,
   options: {
     onProgress?: (stage: string, current: number, total: number) => void;
     extraMergePdfBytes?: Uint8Array[];
+    customFonts?: AssetFontItem[];
+    control?: ExportJobControl;
   } = {}
 ): Promise<{
   data: Uint8Array;
   fileName: string;
   mimeType: string;
 }> {
-  const { onProgress, extraMergePdfBytes = [] } = options;
+  const {
+    onProgress,
+    extraMergePdfBytes = [],
+    customFonts = [],
+    control,
+  } = options;
   const { exportConfig, pageConfig, copiesConfig, bulkConfig } = project;
+
+  const checkControl = async () => {
+    if (control?.isCancelled()) {
+      throw new Error('Export cancelled by user.');
+    }
+    if (control) {
+      await control.waitWhilePaused();
+      if (control.isCancelled()) {
+        throw new Error('Export cancelled by user.');
+      }
+    }
+  };
 
   const rawBleed = Math.max(0, exportConfig.bleedPt || pageConfig.bleedPt || 0);
   const bleed =
@@ -754,12 +834,17 @@ export async function generateExportBytes(
     ? Math.max(1, copiesConfig.columns * copiesConfig.rows)
     : 1;
 
-  // Handle "Merge PDFs" mode
   if (exportConfig.mode === 'merge') {
     onProgress?.('Merging PDF documents', 1, extraMergePdfBytes.length + 1);
     const mergedDoc = await PDFDocument.create();
     for (let p = 1; p <= Math.max(1, project.pageCount); p++) {
-      const baseBytes = await buildSingleModifiedTemplatePage(project, p);
+      await checkControl();
+      const baseBytes = await buildSingleModifiedTemplatePage(
+        project,
+        p,
+        undefined,
+        customFonts
+      );
       const baseLoaded = await PDFDocument.load(baseBytes);
       const basePages = await mergedDoc.copyPages(
         baseLoaded,
@@ -769,6 +854,7 @@ export async function generateExportBytes(
     }
 
     for (let i = 0; i < extraMergePdfBytes.length; i++) {
+      await checkControl();
       onProgress?.('Merging PDF documents', i + 2, extraMergePdfBytes.length + 1);
       const extraDoc = await PDFDocument.load(extraMergePdfBytes[i], {
         ignoreEncryption: true,
@@ -785,11 +871,11 @@ export async function generateExportBytes(
     };
   }
 
-  // Handle "Separate Document Exports" (ZIP of 1 PDF per copy/record)
   if (exportConfig.mode === 'separate_documents') {
     const zip = new JSZip();
     const totalDocs = Math.min(250, totalPages * copiesPerPage);
     for (let i = 0; i < totalDocs; i++) {
+      await checkControl();
       const pIdx = Math.floor(i / copiesPerPage);
       const sIdx = i % copiesPerPage;
       onProgress?.('Generating separate document PDFs', i + 1, totalDocs);
@@ -802,7 +888,8 @@ export async function generateExportBytes(
       const singleBytes = await buildSingleModifiedTemplatePage(
         project,
         1,
-        overrides
+        overrides,
+        customFonts
       );
       zip.file(`document_${String(i + 1).padStart(4, '0')}.pdf`, singleBytes);
       if (i % 10 === 0) await new Promise((r) => setTimeout(r, 0));
@@ -815,9 +902,12 @@ export async function generateExportBytes(
     };
   }
 
-  // Build master output PDF document
   const outDoc = await PDFDocument.create();
-  const fonts = await embedStandardFonts(outDoc);
+  const fonts = await embedFontsForDoc(
+    outDoc,
+    customFonts,
+    exportConfig.embedFonts
+  );
   const imageCache = new Map<string, PDFImage>();
   const embeddedPageCache = new Map<string, PDFEmbeddedPage>();
 
@@ -832,7 +922,6 @@ export async function generateExportBytes(
     }
   }
 
-  // Precompute layout plans per template page so export matches live preview 1:1
   const effectiveProject =
     exportConfig.customWidthPt || exportConfig.customHeightPt
       ? {
@@ -858,6 +947,7 @@ export async function generateExportBytes(
   const selectedPagesSet = parsePageRange(exportConfig.selectedPagesRange, totalPages);
 
   for (let pageZero = 0; pageZero < totalPages; pageZero++) {
+    await checkControl();
     const humanPageNum =
       (isBulkOrImposition ? bulkConfig.startPageNumber : 1) + pageZero;
     if (
@@ -921,7 +1011,6 @@ export async function generateExportBytes(
       );
     }
 
-    // Optional Page Numbering
     if (exportConfig.addPageNumbers) {
       const label = (exportConfig.pageNumberFormat || 'Page {page} of {total}')
         .replace(/\{page\}/g, String(humanPageNum))
@@ -936,7 +1025,6 @@ export async function generateExportBytes(
       });
     }
 
-    // Optional Watermark
     if (exportConfig.watermarkText.trim()) {
       const wmText = exportConfig.watermarkText.trim();
       const wmSize = Math.min(64, outW * 0.08);
@@ -967,22 +1055,25 @@ export async function generateExportBytes(
       outPage.setRotation(degrees(pageConfig.rotation));
     }
 
-    if (pageZero % 20 === 0) {
+    if (pageZero % 8 === 0) {
       await new Promise((r) => setTimeout(r, 0));
     }
   }
 
-  // Individual page ZIP export
   if (exportConfig.mode === 'individual_pages') {
     const zip = new JSZip();
     const count = outDoc.getPageCount();
     for (let i = 0; i < count; i++) {
+      await checkControl();
       onProgress?.('Splitting individual pages', i + 1, count);
       const single = await PDFDocument.create();
       const [copied] = await single.copyPages(outDoc, [i]);
       single.addPage(copied);
       const bytes = await single.save();
       zip.file(`page_${String(i + 1).padStart(4, '0')}.pdf`, bytes);
+      if (i % 8 === 0) {
+        await new Promise((r) => setTimeout(r, 0));
+      }
     }
     const zipBytes = await zip.generateAsync({ type: 'uint8array' });
     return {
@@ -992,7 +1083,6 @@ export async function generateExportBytes(
     };
   }
 
-  // Flattened PDF or Compressed PDF
   if (exportConfig.mode === 'flattened' || exportConfig.mode === 'compress') {
     const rawPdfBytes = await outDoc.save();
     let binary = '';
@@ -1009,6 +1099,7 @@ export async function generateExportBytes(
         : Math.min(3, exportConfig.dpi / 72);
 
     for (let i = 1; i <= count; i++) {
+      await checkControl();
       onProgress?.(
         exportConfig.mode === 'flattened'
           ? 'Flattening PDF pages'

@@ -1,5 +1,73 @@
 import * as XLSX from 'xlsx';
-import { DataColumn, DataRow } from '../types/pdfStudio';
+import {
+  ConditionalFieldRule,
+  DataColumn,
+  DataQualityReport,
+  DataRow,
+} from '../types/pdfStudio';
+
+function evaluateConditionClause(
+  lhsRaw: string,
+  operator: ConditionalFieldRule['operator'],
+  rhsRaw: string
+): boolean {
+  const lhs = lhsRaw.trim();
+  const rhs = rhsRaw.trim();
+  switch (operator) {
+    case 'is_empty':
+      return lhs.length === 0;
+    case 'not_empty':
+      return lhs.length > 0;
+    case 'equals':
+      return lhs.toLowerCase() === rhs.toLowerCase();
+    case 'not_equals':
+      return lhs.toLowerCase() !== rhs.toLowerCase();
+    case 'contains':
+      return lhs.toLowerCase().includes(rhs.toLowerCase());
+    case 'gt': {
+      const a = Number(lhs.replace(/[^0-9.-]/g, ''));
+      const b = Number(rhs.replace(/[^0-9.-]/g, ''));
+      return Number.isFinite(a) && Number.isFinite(b) && a > b;
+    }
+    case 'lt': {
+      const a = Number(lhs.replace(/[^0-9.-]/g, ''));
+      const b = Number(rhs.replace(/[^0-9.-]/g, ''));
+      return Number.isFinite(a) && Number.isFinite(b) && a < b;
+    }
+    default:
+      return false;
+  }
+}
+
+export function applyColumnConditionRules(
+  baseFormatted: string,
+  column: DataColumn,
+  row: DataRow
+): string {
+  if (!column.conditionRules || column.conditionRules.length === 0) {
+    return baseFormatted;
+  }
+  for (const rule of column.conditionRules) {
+    const colVal =
+      rule.whenColumn === column.name
+        ? baseFormatted
+        : String(row[rule.whenColumn] ?? '');
+    const matched = evaluateConditionClause(
+      colVal,
+      rule.operator,
+      rule.compareValue
+    );
+    if (matched) {
+      return rule.thenValue
+        .replace(/\{VALUE\}/g, baseFormatted)
+        .replace(/\{ROW\}/g, String(row[rule.whenColumn] ?? ''));
+    }
+    if (rule.elseValue !== undefined && rule.elseValue !== '') {
+      return rule.elseValue.replace(/\{VALUE\}/g, baseFormatted);
+    }
+  }
+  return baseFormatted;
+}
 
 export function formatCellValue(
   rawValue: string | number | undefined,
@@ -7,50 +75,92 @@ export function formatCellValue(
   row: DataRow,
   allColumns: DataColumn[]
 ): string {
+  let result = '';
   if (column.type === 'formula') {
-    return evaluateFormula(column.formula || String(rawValue || ''), row, allColumns);
+    result = evaluateFormula(
+      column.formula || String(rawValue || ''),
+      row,
+      allColumns
+    );
+    return applyColumnConditionRules(result, column, row);
   }
-  if (rawValue === undefined || rawValue === null || rawValue === '') return '';
+  if (rawValue === undefined || rawValue === null || rawValue === '') {
+    return applyColumnConditionRules('', column, row);
+  }
 
   if (column.type === 'currency') {
     const num = Number(String(rawValue).replace(/[^0-9.-]/g, ''));
-    if (!Number.isFinite(num)) return String(rawValue);
-    const sym = column.currencySymbol || '$';
-    return `${sym}${num.toLocaleString('en-US', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })}`;
+    if (!Number.isFinite(num)) {
+      result = String(rawValue);
+    } else {
+      const sym = column.currencySymbol || '$';
+      result = `${sym}${num.toLocaleString('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}`;
+    }
+    return applyColumnConditionRules(result, column, row);
   }
 
   if (column.type === 'number') {
     const num = Number(rawValue);
-    return Number.isFinite(num) ? num.toLocaleString('en-US') : String(rawValue);
+    if (!Number.isFinite(num)) {
+      result = String(rawValue);
+    } else if (column.numberDecimals !== undefined) {
+      result = num.toLocaleString('en-US', {
+        minimumFractionDigits: column.numberDecimals,
+        maximumFractionDigits: column.numberDecimals,
+      });
+    } else {
+      result = num.toLocaleString('en-US');
+    }
+    return applyColumnConditionRules(result, column, row);
   }
 
   if (column.type === 'date') {
     const parsed = new Date(String(rawValue));
-    if (Number.isNaN(parsed.getTime())) return String(rawValue);
-    const y = parsed.getFullYear();
-    const m = String(parsed.getMonth() + 1).padStart(2, '0');
-    const d = String(parsed.getDate()).padStart(2, '0');
-    switch (column.dateFormat) {
-      case 'MM/DD/YYYY':
-        return `${m}/${d}/${y}`;
-      case 'DD/MM/YYYY':
-        return `${d}/${m}/${y}`;
-      case 'MMM D, YYYY':
-        return parsed.toLocaleDateString('en-US', {
-          month: 'short',
-          day: 'numeric',
-          year: 'numeric',
-        });
-      case 'YYYY-MM-DD':
-      default:
-        return `${y}-${m}-${d}`;
+    if (Number.isNaN(parsed.getTime())) {
+      result = String(rawValue);
+    } else {
+      const y = parsed.getFullYear();
+      const m = String(parsed.getMonth() + 1).padStart(2, '0');
+      const d = String(parsed.getDate()).padStart(2, '0');
+      switch (column.dateFormat) {
+        case 'MM/DD/YYYY':
+          result = `${m}/${d}/${y}`;
+          break;
+        case 'DD/MM/YYYY':
+          result = `${d}/${m}/${y}`;
+          break;
+        case 'MMM D, YYYY':
+          result = parsed.toLocaleDateString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+          });
+          break;
+        case 'YYYY-MM-DD':
+        default:
+          result = `${y}-${m}-${d}`;
+          break;
+      }
     }
+    return applyColumnConditionRules(result, column, row);
   }
 
-  return String(rawValue);
+  return applyColumnConditionRules(String(rawValue), column, row);
+}
+
+function resolveFormulaToken(token: string, row: DataRow): string {
+  const clean = token.trim();
+  if (
+    (clean.startsWith('"') && clean.endsWith('"')) ||
+    (clean.startsWith("'") && clean.endsWith("'"))
+  ) {
+    return clean.slice(1, -1);
+  }
+  if (row[clean] !== undefined) return String(row[clean]);
+  return clean;
 }
 
 export function evaluateFormula(
@@ -61,6 +171,59 @@ export function evaluateFormula(
   const exprRaw = formulaInput.trim();
   if (!exprRaw.startsWith('=')) return exprRaw;
   let expr = exprRaw.slice(1).trim();
+
+  // Support IF(cond, trueVal, falseVal) e.g. =IF(amount > 500, "VIP", "Standard")
+  const ifMatch = expr.match(/^IF\((.+)\)$/i);
+  if (ifMatch) {
+    const args: string[] = [];
+    let current = '';
+    let inQuotes = false;
+    let quoteChar = '';
+    for (const ch of ifMatch[1]) {
+      if ((ch === '"' || ch === "'") && !inQuotes) {
+        inQuotes = true;
+        quoteChar = ch;
+        current += ch;
+      } else if (ch === quoteChar && inQuotes) {
+        inQuotes = false;
+        current += ch;
+      } else if (ch === ',' && !inQuotes) {
+        args.push(current.trim());
+        current = '';
+      } else {
+        current += ch;
+      }
+    }
+    if (current.trim()) args.push(current.trim());
+
+    if (args.length >= 2) {
+      const condStr = args[0];
+      const trueBranch = resolveFormulaToken(args[1], row);
+      const falseBranch = args[2] ? resolveFormulaToken(args[2], row) : '';
+      const opMatch = condStr.match(/^(.+?)\s*(==|!=|>=|<=|>|<|CONTAINS)\s*(.+)$/i);
+      if (opMatch) {
+        const lhs = resolveFormulaToken(opMatch[1], row);
+        const op = opMatch[2].toUpperCase();
+        const rhs = resolveFormulaToken(opMatch[3], row);
+        let ok = false;
+        if (op === '==') ok = lhs.toLowerCase() === rhs.toLowerCase();
+        else if (op === '!=') ok = lhs.toLowerCase() !== rhs.toLowerCase();
+        else if (op === 'CONTAINS') ok = lhs.toLowerCase().includes(rhs.toLowerCase());
+        else {
+          const na = Number(lhs.replace(/[^0-9.-]/g, ''));
+          const nb = Number(rhs.replace(/[^0-9.-]/g, ''));
+          if (Number.isFinite(na) && Number.isFinite(nb)) {
+            if (op === '>') ok = na > nb;
+            if (op === '<') ok = na < nb;
+            if (op === '>=') ok = na >= nb;
+            if (op === '<=') ok = na <= nb;
+          }
+        }
+        return ok ? trueBranch : falseBranch;
+      }
+      return resolveFormulaToken(condStr, row) ? trueBranch : falseBranch;
+    }
+  }
 
   // Support UPPER(col), LOWER(col), CONCAT(a, b), SUM(a, b)
   const upperMatch = expr.match(/^UPPER\((.+)\)$/i);
@@ -124,6 +287,72 @@ export function evaluateFormula(
   return '#ERR';
 }
 
+export function analyzeDataQuality(
+  columns: DataColumn[],
+  rows: DataRow[],
+  duplicateKeyColumns: string[] = [],
+  mappedFieldKeys: string[] = []
+): DataQualityReport {
+  const keyGroups = new Map<string, { rowIds: string[]; rowIndices: number[] }>();
+  const missingValues: DataQualityReport['missingValues'] = [];
+
+  const requiredCols = columns.filter(
+    (c) =>
+      c.type !== 'formula' &&
+      (c.required || mappedFieldKeys.includes(c.name))
+  );
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+
+    // Check missing required/mapped values
+    for (const col of requiredCols) {
+      const val = row[col.name];
+      if (val === undefined || val === null || String(val).trim() === '') {
+        missingValues.push({
+          rowId: row._rowId,
+          rowIndex: i + 1,
+          columnName: col.name,
+        });
+      }
+    }
+
+    // Check duplicate key records (O(N))
+    if (duplicateKeyColumns.length > 0) {
+      const keyParts = duplicateKeyColumns.map((k) =>
+        String(row[k] ?? '').trim().toLowerCase()
+      );
+      if (keyParts.some((p) => p.length > 0)) {
+        const composite = keyParts.join(' | ');
+        const existing = keyGroups.get(composite);
+        if (existing) {
+          existing.rowIds.push(row._rowId);
+          existing.rowIndices.push(i + 1);
+        } else {
+          keyGroups.set(composite, {
+            rowIds: [row._rowId],
+            rowIndices: [i + 1],
+          });
+        }
+      }
+    }
+  }
+
+  const duplicates = Array.from(keyGroups.entries())
+    .filter(([, g]) => g.rowIds.length > 1)
+    .map(([key, g]) => ({
+      key,
+      rowIds: g.rowIds,
+      rowIndices: g.rowIndices,
+    }));
+
+  return {
+    duplicates,
+    missingValues,
+    totalIssues: duplicates.length + missingValues.length,
+  };
+}
+
 export async function parseSpreadsheetFile(file: File): Promise<{
   columns: DataColumn[];
   rows: DataRow[];
@@ -174,7 +403,11 @@ export async function parseSpreadsheetFile(file: File): Promise<{
   return { columns, rows };
 }
 
-export function exportRowsToCsv(columns: DataColumn[], rows: DataRow[], fileName: string): void {
+export function exportRowsToCsv(
+  columns: DataColumn[],
+  rows: DataRow[],
+  fileName: string
+): void {
   const exportData = rows.map((row) => {
     const out: Record<string, string | number> = {};
     for (const col of columns) {

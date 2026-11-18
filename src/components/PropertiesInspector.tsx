@@ -11,6 +11,7 @@ import {
   ChevronsDown,
   ChevronsUp,
   Copy,
+  Cpu,
   Crop,
   Italic,
   Loader2,
@@ -21,12 +22,16 @@ import {
   RotateCcw,
   Scan,
   Send,
+  Sparkles,
   Trash2,
   Unlock,
   X,
 } from 'lucide-react';
 import {
   AiEditPlan,
+  AssetFontItem,
+  AssetPaletteItem,
+  AssetTextStyleItem,
   BoundaryMode,
   DocumentElement,
   MeasurementUnit,
@@ -39,6 +44,8 @@ import {
   SourceFitConfig,
 } from '../types/pdfStudio';
 import { useViewport } from '../hooks/useViewport';
+import { formatFriendlyAiError } from '../utils/aiEnhancedAnalysis';
+import { AlignMode } from '../utils/alignmentEngine';
 import { clampRect } from '../utils/geometryEngine';
 import {
   applyOrientationChange,
@@ -64,7 +71,12 @@ interface PropertiesInspectorProps {
   redetectingBounds: boolean;
   currentPage: number;
   dataColumnNames: string[];
+  customFonts?: AssetFontItem[];
+  savedTextStyles?: AssetTextStyleItem[];
+  savedPalettes?: AssetPaletteItem[];
+  panelWidthPx?: number;
   isDrawer?: boolean;
+  hideDrawerHeader?: boolean;
   onCloseDrawer?: () => void;
   onReorderElement?: (
     id: string,
@@ -73,11 +85,21 @@ interface PropertiesInspectorProps {
   onUpdateElement: (id: string, patch: Partial<DocumentElement>) => void;
   onDeleteSelected: () => void;
   onDuplicateSelected: () => void;
+  onAlignSelected?: (mode: AlignMode) => void;
+  onDistributeSelected?: (axis: 'horizontal' | 'vertical') => void;
+  onEqualSpaceSelected?: (axis: 'horizontal' | 'vertical', gapPt?: number) => void;
+  onBatchUpdateSelected?: (patch: Partial<DocumentElement>) => void;
+  onGroupToggle?: () => void;
+  onSaveAsTextStyle?: (el: DocumentElement) => void;
   onUpdatePageConfig: (patch: Partial<PageConfig>) => void;
   onUpdateFitConfig: (patch: Partial<SourceFitConfig>) => void;
   onToggleCropMode: () => void;
   onRedetectBounds: () => void;
   onApplyAiPlan: (plan: AiEditPlan) => void;
+  aiSummary?: string;
+  aiEnhancing?: boolean;
+  aiEnhanceNotice?: { kind: 'info' | 'warning'; message: string } | null;
+  onRunAiEnhancedAnalysis?: () => void;
   onOpenPageSetup?: () => void;
 }
 
@@ -119,17 +141,32 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
   redetectingBounds,
   currentPage,
   dataColumnNames,
+  customFonts = [],
+  savedTextStyles = [],
+  savedPalettes = [],
+  panelWidthPx,
   isDrawer = false,
+  hideDrawerHeader = false,
   onCloseDrawer,
   onReorderElement,
   onUpdateElement,
   onDeleteSelected,
   onDuplicateSelected,
+  onAlignSelected,
+  onDistributeSelected,
+  onEqualSpaceSelected,
+  onBatchUpdateSelected,
+  onGroupToggle,
+  onSaveAsTextStyle,
   onUpdatePageConfig,
   onUpdateFitConfig,
   onToggleCropMode,
   onRedetectBounds,
   onApplyAiPlan,
+  aiSummary,
+  aiEnhancing = false,
+  aiEnhanceNotice = null,
+  onRunAiEnhancedAnalysis,
   onOpenPageSetup,
 }) => {
   const viewport = useViewport();
@@ -137,6 +174,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [pendingPlan, setPendingPlan] = useState<AiEditPlan | null>(null);
+  const [equalGapPt, setEqualGapPt] = useState<number>(12);
 
   const el = selectedElements.length === 1 ? selectedElements[0] : null;
   const unit = pageConfig.unit;
@@ -176,9 +214,14 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
           currentPage,
         }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data.error || 'AI assistant request failed');
+        const friendly = formatFriendlyAiError(
+          data.error || 'AI assistant request failed',
+          res.status,
+          data.code
+        );
+        throw new Error(friendly.message);
       }
       const plan = data as AiEditPlan;
       if (!plan.requiresConfirmation && plan.operations.length <= 1) {
@@ -196,15 +239,21 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
 
   return (
     <aside
-      style={isDrawer ? { maxHeight: `${viewport.visualHeight}px` } : undefined}
+      style={
+        isDrawer
+          ? { maxHeight: `${viewport.visualHeight}px` }
+          : panelWidthPx
+          ? { width: `${panelWidthPx}px` }
+          : undefined
+      }
       className={
         isDrawer
-          ? 'w-full h-full bg-white dark:bg-[#0E131D] flex flex-col overflow-hidden'
-          : 'w-80 shrink-0 border-l border-slate-200 dark:border-slate-800 bg-white dark:bg-[#0E131D] flex flex-col h-full overflow-hidden'
+          ? 'w-full h-full bg-transparent flex flex-col overflow-hidden'
+          : 'w-80 shrink-0 border-l glass-level-2 flex flex-col h-full overflow-hidden'
       }
     >
-      {isDrawer && (
-        <div className="px-4 py-2 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between shrink-0">
+      {isDrawer && !hideDrawerHeader && (
+        <div className="px-4 py-2 border-b border-slate-200/70 dark:border-white/10 flex items-center justify-between shrink-0">
           <span className="text-xs font-semibold text-slate-900 dark:text-slate-100">
             Inspector & AI Controls
           </span>
@@ -212,7 +261,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
             <button
               type="button"
               onClick={onCloseDrawer}
-              className="min-w-[44px] min-h-[44px] -mr-2 flex items-center justify-center rounded-md text-slate-500 hover:text-slate-900 dark:hover:text-slate-100"
+              className="min-w-[44px] min-h-[44px] -mr-2 flex items-center justify-center rounded-xl text-slate-500 hover:text-slate-900 dark:hover:text-slate-100"
               aria-label="Close inspector"
             >
               <X className="w-4 h-4" />
@@ -222,15 +271,15 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
       )}
 
       {/* Inspector Tabs */}
-      <div className="grid grid-cols-3 border-b border-slate-200 dark:border-slate-800 text-xs font-medium shrink-0">
+      <div className="grid grid-cols-3 border-b border-slate-200/70 dark:border-white/10 text-xs font-medium shrink-0 px-2 pt-1.5 gap-1">
         {(['element', 'page', 'ai'] as const).map((tab) => (
           <button
             key={tab}
             type="button"
             onClick={() => onTabChange(tab)}
-            className={`min-h-[44px] tablet:min-h-[38px] text-center transition-colors border-b-2 ${
+            className={`min-h-[40px] tablet:min-h-[34px] text-center transition-colors rounded-t-xl border-b-2 ${
               activeTab === tab
-                ? 'border-blue-600 text-blue-600 dark:text-blue-400'
+                ? 'border-blue-500 text-blue-600 dark:text-blue-400 bg-blue-500/8'
                 : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
             }`}
           >
@@ -254,11 +303,129 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
             )}
 
             {selectedElements.length > 1 && (
-              <div className="space-y-3">
-                <div className="font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
-                  {selectedElements.length} Elements Selected
+              <div className="space-y-3.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
+                    {selectedElements.length} Elements Selected
+                  </span>
+                  {onGroupToggle && (
+                    <button
+                      type="button"
+                      onClick={onGroupToggle}
+                      className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium"
+                    >
+                      {selectedElements[0]?.groupId ? 'Ungroup' : 'Group'}
+                    </button>
+                  )}
                 </div>
-                <div className="flex gap-2">
+
+                {onAlignSelected && (
+                  <div>
+                    <div className="text-[10px] font-medium text-slate-500 dark:text-slate-400 mb-1.5">
+                      Align Selection
+                    </div>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {(
+                        [
+                          ['left', 'Left'],
+                          ['center', 'Center'],
+                          ['right', 'Right'],
+                          ['top', 'Top'],
+                          ['middle', 'Middle'],
+                          ['bottom', 'Bottom'],
+                        ] as const
+                      ).map(([mode, label]) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          onClick={() => onAlignSelected(mode)}
+                          className="py-1.5 px-2 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium"
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {onDistributeSelected && selectedElements.length >= 3 && (
+                  <div>
+                    <div className="text-[10px] font-medium text-slate-500 dark:text-slate-400 mb-1.5">
+                      Distribute Evenly
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => onDistributeSelected('horizontal')}
+                        className="py-1.5 px-2 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium"
+                      >
+                        Distribute H
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onDistributeSelected('vertical')}
+                        className="py-1.5 px-2 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium"
+                      >
+                        Distribute V
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {onEqualSpaceSelected && (
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400">
+                        Equal Spacing (pt)
+                      </span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={equalGapPt}
+                        onChange={(e) => setEqualGapPt(Math.max(0, Number(e.target.value) || 0))}
+                        className="w-14 px-1.5 py-0.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent text-[11px] text-center tabular-nums"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => onEqualSpaceSelected('horizontal', equalGapPt)}
+                        className="py-1.5 px-2 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium"
+                      >
+                        Equal Space H
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onEqualSpaceSelected('vertical', equalGapPt)}
+                        className="py-1.5 px-2 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium"
+                      >
+                        Equal Space V
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {onBatchUpdateSelected && (
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => onBatchUpdateSelected({ locked: true })}
+                      className="py-1.5 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium"
+                    >
+                      Lock All
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onBatchUpdateSelected({ locked: false })}
+                      className="py-1.5 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium"
+                    >
+                      Unlock All
+                    </button>
+                  </div>
+                )}
+
+                <div className="flex gap-2 pt-1 border-t border-slate-200 dark:border-slate-800">
                   <button
                     type="button"
                     onClick={onDuplicateSelected}
@@ -587,11 +754,23 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                           }
                           className={`mt-0.5 w-full px-2 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#111827] ${inputHeightClass}`}
                         >
-                          {FONT_OPTIONS.map((f) => (
-                            <option key={f} value={f}>
-                              {f}
-                            </option>
-                          ))}
+                          <optgroup label="Standard PDF Fonts">
+                            {FONT_OPTIONS.map((f) => (
+                              <option key={f} value={f}>
+                                {f}
+                              </option>
+                            ))}
+                          </optgroup>
+                          {customFonts.length > 0 && (
+                            <optgroup label="Asset Library Fonts">
+                              {customFonts.map((cf) => (
+                                <option key={cf.id} value={cf.fontFamily}>
+                                  {cf.fontFamily}
+                                  {!cf.canEmbedInPdf ? ' [No PDF Embed]' : ''}
+                                </option>
+                              ))}
+                            </optgroup>
+                          )}
                         </select>
                       </label>
                       <div className="block">
@@ -779,6 +958,78 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                         </div>
                       </div>
                     </div>
+
+                    {/* Saved Asset Text Styles & Brand Palettes */}
+                    {(savedTextStyles.length > 0 || savedPalettes.length > 0 || onSaveAsTextStyle) && (
+                      <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-medium text-slate-500">
+                            Saved Library Styles
+                          </span>
+                          {onSaveAsTextStyle && (
+                            <button
+                              type="button"
+                              onClick={() => onSaveAsTextStyle(el)}
+                              className="text-[10px] text-blue-600 dark:text-blue-400 hover:underline font-medium"
+                            >
+                              + Save Current Style
+                            </button>
+                          )}
+                        </div>
+                        {savedTextStyles.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5">
+                            {savedTextStyles.map((st) => (
+                              <button
+                                key={st.id}
+                                type="button"
+                                onClick={() =>
+                                  onUpdateElement(el.id, {
+                                    fontFamily: st.fontFamily,
+                                    fontSize: st.fontSize,
+                                    fontWeight: st.fontWeight,
+                                    fontStyle: st.fontStyle,
+                                    color: st.color,
+                                    align: st.align,
+                                    eraseOriginal: el.isUserAdded ? false : true,
+                                  })
+                                }
+                                className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 hover:border-blue-500 text-[10px] font-medium"
+                              >
+                                {st.name}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {savedPalettes.length > 0 && (
+                          <div className="space-y-1">
+                            {savedPalettes.map((pal) => (
+                              <div key={pal.id} className="flex items-center gap-1.5">
+                                <span className="text-[10px] text-slate-400 truncate w-20">
+                                  {pal.name}
+                                </span>
+                                <div className="flex items-center gap-1">
+                                  {pal.colors.map((hex) => (
+                                    <button
+                                      key={hex}
+                                      type="button"
+                                      title={`Apply ${hex}`}
+                                      onClick={() =>
+                                        onUpdateElement(el.id, {
+                                          color: hex,
+                                          eraseOriginal: el.isUserAdded ? false : true,
+                                        })
+                                      }
+                                      style={{ backgroundColor: hex }}
+                                      className="w-5 h-5 rounded border border-slate-300 dark:border-slate-700"
+                                    />
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -1413,9 +1664,67 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
 
         {activeTab === 'ai' && (
           <div className="space-y-4">
-            <p className="text-slate-500 dark:text-slate-400 leading-relaxed">
-              Issue natural-language instructions to edit document elements directly. Significant changes show an exact preview diff before applying.
-            </p>
+            {/* Scanning Mode Transparency & Optional AI-Enhanced Analysis */}
+            <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#111827] space-y-2.5">
+              <div className="flex items-start gap-2">
+                <Cpu className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                <div>
+                  <div className="text-[11px] font-semibold text-slate-900 dark:text-slate-100">
+                    Local PDF Scan — Active (No AI credits required)
+                  </div>
+                  <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                    {aiSummary ||
+                      'Text, coordinates, fonts, borders, tables, and repeated blocks are extracted locally with PDF.js.'}
+                  </p>
+                </div>
+              </div>
+
+              {onRunAiEnhancedAnalysis && (
+                <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-2">
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                    <span className="font-semibold text-slate-700 dark:text-slate-200">
+                      AI-Enhanced Analysis (Optional):
+                    </span>{' '}
+                    Requires Gemini API access and may consume AI quota to refine semantic field roles and layout relationships.
+                  </div>
+                  <button
+                    type="button"
+                    disabled={aiEnhancing}
+                    onClick={onRunAiEnhancedAnalysis}
+                    className="w-full py-2 px-3 rounded-md border border-blue-500/50 bg-blue-600/10 text-blue-600 dark:text-blue-400 hover:bg-blue-600/20 font-medium flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    {aiEnhancing ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Sparkles className="w-3.5 h-3.5" />
+                    )}
+                    {aiEnhancing
+                      ? 'Running AI-Enhanced Analysis...'
+                      : 'AI-Enhanced Analysis'}
+                  </button>
+                  {aiEnhanceNotice && (
+                    <div
+                      className={`p-2 rounded border text-[11px] leading-relaxed ${
+                        aiEnhanceNotice.kind === 'warning'
+                          ? 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                          : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                      }`}
+                    >
+                      {aiEnhanceNotice.message}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="pt-1 border-t border-slate-200 dark:border-slate-800 space-y-3">
+              <div className="font-semibold text-slate-900 dark:text-slate-100">
+                AI Editing Assistant (Optional)
+              </div>
+              <p className="text-slate-500 dark:text-slate-400 leading-relaxed">
+                Issue natural-language instructions to edit document elements directly. Requires Gemini API access; significant changes show an exact preview diff before applying.
+              </p>
+            </div>
 
             <form
               onSubmit={(e) => {

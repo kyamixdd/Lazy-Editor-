@@ -496,10 +496,10 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
     : 1;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-0 tablet:p-4">
-      <div className="w-full h-[100dvh] tablet:h-auto tablet:max-w-5xl tablet:max-h-[92dvh] rounded-none tablet:rounded-xl border-0 tablet:border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#0E131D] shadow-2xl flex flex-col overflow-hidden">
+    <div className="fixed inset-0 z-50 bg-slate-950/45 dark:bg-black/65 backdrop-blur-sm flex items-center justify-center p-0 tablet:p-4">
+      <div className="w-full h-[100dvh] tablet:h-auto tablet:max-w-5xl tablet:max-h-[92dvh] rounded-none tablet:rounded-2xl border-0 tablet:border glass-level-4 flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="px-4 tablet:px-5 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 shrink-0 pt-safe">
+        <div className="px-4 tablet:px-5 py-3 border-b border-slate-200/80 dark:border-white/10 flex items-center justify-between gap-3 shrink-0 pt-safe">
           <div className="flex items-center gap-2.5 min-w-0">
             <Maximize2 className="w-4 h-4 text-blue-500 shrink-0" />
             <div className="min-w-0">
@@ -514,7 +514,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="min-w-[44px] min-h-[44px] -mr-2 flex items-center justify-center rounded text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800"
+            className="min-w-[44px] min-h-[44px] -mr-2 flex items-center justify-center rounded-xl text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 hover:bg-slate-200/60 dark:hover:bg-white/10 transition-colors"
             aria-label="Close page setup"
           >
             <X className="w-4 h-4" />
@@ -523,7 +523,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
 
         {/* Mobile Tab Switcher */}
         {viewport.isMobile && (
-          <div className="grid grid-cols-3 border-b border-slate-200 dark:border-slate-800 text-xs font-medium shrink-0 bg-slate-50 dark:bg-[#0B0F17]">
+          <div className="grid grid-cols-3 border-b border-slate-200/75 dark:border-white/10 text-xs font-medium shrink-0 glass-level-2">
             {(
               [
                 ['paper', 'Paper & Size'],
@@ -535,9 +535,9 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                 key={id}
                 type="button"
                 onClick={() => setMobileTab(id)}
-                className={`min-h-[44px] border-b-2 transition-colors ${
+                className={`min-h-[44px] border-b-2 transition-colors whitespace-nowrap ${
                   mobileTab === id
-                    ? 'border-blue-600 text-blue-600 dark:text-blue-400 bg-white dark:bg-[#0E131D]'
+                    ? 'border-blue-500 text-blue-600 dark:text-blue-400 bg-white/60 dark:bg-white/8'
                     : 'border-transparent text-slate-500 dark:text-slate-400'
                 }`}
               >
@@ -1166,7 +1166,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
 
           {/* Right Live Scaled Page Preview & Validation */}
           <div
-            className={`flex-1 bg-slate-100 dark:bg-[#080B11] p-4 tablet:p-6 flex flex-col items-center justify-between overflow-y-auto ${
+            className={`flex-1 glass-level-1 p-4 tablet:p-6 flex flex-col items-center justify-between overflow-y-auto ${
               !showPreviewSection ? 'hidden' : ''
             }`}
           >
@@ -1360,7 +1360,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="px-4 tablet:px-5 py-3 border-t border-slate-200 dark:border-slate-800 flex flex-col tablet:flex-row tablet:items-center justify-between gap-2.5 shrink-0 bg-slate-50 dark:bg-[#0B0F17] text-xs pb-safe">
+        <div className="px-4 tablet:px-5 py-3 border-t border-slate-200/80 dark:border-white/10 flex flex-col tablet:flex-row tablet:items-center justify-between gap-2.5 shrink-0 glass-level-2 text-xs pb-safe">
           <div className="text-slate-500 dark:text-slate-400 tabular-nums truncate">
             {draftPage.customPresetName
               ? `Preset: ${draftPage.customPresetName}`
@@ -1372,7 +1372,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 tablet:flex-none min-h-[44px] tablet:min-h-0 px-3.5 py-2 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 font-medium"
+              className="flex-1 tablet:flex-none min-h-[44px] tablet:min-h-[38px] px-3.5 py-2 rounded-xl border border-slate-300/80 dark:border-white/15 hover:bg-slate-100/70 dark:hover:bg-white/10 font-medium whitespace-nowrap"
             >
               Cancel
             </button>
@@ -1380,7 +1380,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
               type="button"
               disabled={!dimValidation.valid}
               onClick={handleApplyAndClose}
-              className="flex-1 tablet:flex-none min-h-[44px] tablet:min-h-0 px-4 py-2 rounded bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-45 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+              className="flex-1 tablet:flex-none min-h-[44px] tablet:min-h-[38px] px-4 py-2 rounded-xl bg-gradient-to-b from-blue-500 to-blue-600 text-white font-medium hover:to-blue-700 shadow-sm disabled:opacity-45 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 whitespace-nowrap"
             >
               <Save className="w-3.5 h-3.5" />
               Apply Configuration

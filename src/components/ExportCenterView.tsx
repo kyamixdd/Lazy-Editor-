@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Download,
   FolderOpen,
+  Layers,
   Loader2,
   Maximize2,
   ShieldCheck,
@@ -13,7 +14,15 @@ import {
   Wrench,
 } from 'lucide-react';
 import { PDFDocument } from 'pdf-lib';
-import { ExportConfig, ExportMode, PageConfig, PDFProject, ValidationIssue } from '../types/pdfStudio';
+import {
+  AssetFontItem,
+  BatchJob,
+  ExportConfig,
+  ExportMode,
+  PageConfig,
+  PDFProject,
+  ValidationIssue,
+} from '../types/pdfStudio';
 import { generateExportBytes } from '../utils/pdfExporter';
 import {
   renderPdfPagesForStudio,
@@ -30,13 +39,18 @@ import {
   ptToUnit,
 } from '../utils/units';
 import { validateProject } from '../utils/validationEngine';
+import { GlassButton, GlassCard } from './glass';
 import { PageConfigurationModal } from './PageConfigurationModal';
 
 interface ExportCenterViewProps {
   project: PDFProject;
+  customFonts?: AssetFontItem[];
   onUpdateProject: (updated: PDFProject) => void;
   onJumpToEditor: () => void;
+  onInspectElement?: (pageNumber: number, elementId?: string) => void;
   onReopenAsProject: (proj: PDFProject) => void;
+  onEnqueueBatch?: (proj: PDFProject) => void;
+  onRecordExportActivity?: (job: BatchJob) => void;
 }
 
 const EXPORT_MODES: Array<{ id: ExportMode; label: string; desc: string }> = [
@@ -54,9 +68,13 @@ const EXPORT_MODES: Array<{ id: ExportMode; label: string; desc: string }> = [
 
 export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
   project,
+  customFonts = [],
   onUpdateProject,
   onJumpToEditor,
+  onInspectElement,
   onReopenAsProject,
+  onEnqueueBatch,
+  onRecordExportActivity,
 }) => {
   const { exportConfig } = project;
   const [isExporting, setIsExporting] = useState(false);
@@ -78,7 +96,10 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
   const [mergeFiles, setMergeFiles] = useState<Array<{ name: string; bytes: Uint8Array }>>([]);
   const mergeInputRef = useRef<HTMLInputElement>(null);
 
-  const issues = useMemo(() => validateProject(project), [project]);
+  const issues = useMemo(
+    () => validateProject(project, customFonts),
+    [project, customFonts]
+  );
   const layoutSummary = useMemo(() => computeSheetLayout(project, 1), [project]);
   const errorIssues = issues.filter((i) => i.severity === 'error');
   const warningIssues = issues.filter((i) => i.severity === 'warning');
@@ -168,6 +189,22 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
           verticalSpacingPt: Math.min(project.copiesConfig.verticalSpacingPt, 14),
         },
       });
+    } else if (issue.category === 'layout_drift' && issue.elementId) {
+      onUpdateProject({
+        ...project,
+        elements: project.elements.map((el) =>
+          el.id === issue.elementId && el.sourceOriginalRect
+            ? {
+                ...el,
+                x: el.sourceOriginalRect.x,
+                y: el.sourceOriginalRect.y,
+                width: el.sourceOriginalRect.width,
+                height: el.sourceOriginalRect.height,
+                eraseOriginal: false,
+              }
+            : el
+        ),
+      });
     } else if (issue.category === 'font_substitution') {
       updateExport({ embedFonts: true });
     }
@@ -195,10 +232,12 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
     setExportError(null);
     setIsExporting(true);
     setExportProgress({ stage: 'Preparing PDF export', current: 0, total: 1 });
+    const startedAt = new Date().toISOString();
 
     try {
       const result = await generateExportBytes(project, {
         extraMergePdfBytes: mergeFiles.map((m) => m.bytes),
+        customFonts,
         onProgress: (stage, current, total) => {
           setExportProgress({ stage, current, total });
         },
@@ -236,14 +275,42 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
         verifiedHeightPt,
       });
 
+      onRecordExportActivity?.({
+        id: `exp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        projectId: project.id,
+        projectName: project.name,
+        status: 'completed',
+        progressCurrent: verifiedPageCount || 1,
+        progressTotal: verifiedPageCount || 1,
+        stage: `Exported (${exportConfig.mode.replace(/_/g, ' ')})`,
+        outputFileName: result.fileName,
+        outputMimeType: result.mimeType,
+        outputSizeBytes: result.data.byteLength,
+        createdAt: startedAt,
+        startedAt,
+        completedAt: new Date().toISOString(),
+      });
+
       const a = document.createElement('a');
       a.href = url;
       a.download = result.fileName;
       a.click();
     } catch (err) {
-      setExportError(
-        err instanceof Error ? err.message : 'PDF export failed'
-      );
+      const message = err instanceof Error ? err.message : 'PDF export failed';
+      setExportError(message);
+      onRecordExportActivity?.({
+        id: `exp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        projectId: project.id,
+        projectName: project.name,
+        status: 'failed',
+        progressCurrent: 0,
+        progressTotal: 1,
+        stage: `Export failed (${exportConfig.mode.replace(/_/g, ' ')})`,
+        error: message,
+        createdAt: startedAt,
+        startedAt,
+        completedAt: new Date().toISOString(),
+      });
     } finally {
       setIsExporting(false);
     }
@@ -337,7 +404,7 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
   return (
     <div className="flex-1 overflow-y-auto p-4 tablet:p-6 desktop:p-8 max-w-6xl mx-auto w-full space-y-5 tablet:space-y-6">
       {/* Header */}
-      <div className="flex flex-col tablet:flex-row tablet:items-center tablet:justify-between gap-4 pb-5 border-b border-slate-200 dark:border-slate-800">
+      <div className="flex flex-col tablet:flex-row tablet:items-center tablet:justify-between gap-4 pb-5 border-b border-slate-200/80 dark:border-white/10">
         <div>
           <h1 className="text-xl tablet:text-2xl font-display font-semibold tracking-tight text-slate-900 dark:text-slate-100">
             Export Center & Quality Control
@@ -348,19 +415,29 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-          <button
-            type="button"
+          {onEnqueueBatch && (
+            <GlassButton
+              variant="glass"
+              size="md"
+              onClick={() => onEnqueueBatch(project)}
+            >
+              <Layers className="w-3.5 h-3.5" />
+              Add to Batch Queue
+            </GlassButton>
+          )}
+          <GlassButton
+            variant="glass"
+            size="md"
             onClick={() => setShowPageSetupModal(true)}
-            className="min-h-[44px] tablet:min-h-0 px-3.5 py-2.5 rounded-md text-xs font-medium border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1.5 whitespace-nowrap touch-manipulation"
           >
             <Maximize2 className="w-3.5 h-3.5" />
             Page Setup ({project.pageConfig.customPresetName || project.pageConfig.sizePreset})
-          </button>
-          <button
-            type="button"
+          </GlassButton>
+          <GlassButton
+            variant="primary"
+            size="md"
             disabled={isExporting || errorIssues.length > 0}
             onClick={() => void handleExport()}
-            className="min-h-[44px] tablet:min-h-0 px-5 py-2.5 rounded-md text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-45 disabled:cursor-not-allowed flex items-center gap-2 whitespace-nowrap shrink-0 touch-manipulation"
           >
             {isExporting ? (
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -368,13 +445,13 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
               <Download className="w-4 h-4" />
             )}
             {isExporting ? 'Generating PDF...' : 'Generate & Download'}
-          </button>
+          </GlassButton>
         </div>
       </div>
 
       {/* Quality Control Panel */}
-      <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] overflow-hidden">
-        <div className="px-4 tablet:px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+      <GlassCard level={3} padding="none" className="overflow-hidden">
+        <div className="px-4 tablet:px-5 py-3.5 border-b border-slate-200/75 dark:border-white/10 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
             <ShieldCheck className="w-4 h-4 text-blue-500" />
             Pre-Export Quality Control Check
@@ -434,10 +511,17 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
                       {issue.autoFixLabel}
                     </button>
                   )}
-                  {issue.elementId && (
+                  {(issue.elementId || issue.pageNumber) && (
                     <button
                       type="button"
-                      onClick={onJumpToEditor}
+                      onClick={() =>
+                        onInspectElement
+                          ? onInspectElement(
+                              issue.pageNumber || 1,
+                              issue.elementId
+                            )
+                          : onJumpToEditor()
+                      }
                       className="min-h-[36px] tablet:min-h-0 px-2.5 py-1 rounded text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 font-medium"
                     >
                       Inspect
@@ -448,7 +532,7 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
             ))}
           </div>
         )}
-      </div>
+      </GlassCard>
 
       {/* Progress & Errors */}
       {isExporting && (
@@ -589,10 +673,10 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
                 key={m.id}
                 type="button"
                 onClick={() => updateExport({ mode: m.id })}
-                className={`p-3.5 rounded-lg border text-left transition-colors ${
+                className={`p-3.5 rounded-2xl border text-left transition-[border-color,background-color,transform] duration-150 ${
                   exportConfig.mode === m.id
-                    ? 'border-blue-600 bg-blue-600/10'
-                    : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] hover:border-slate-400 dark:hover:border-slate-600'
+                    ? 'border-blue-500/70 bg-blue-500/12 shadow-[inset_0_1px_0_rgba(255,255,255,0.2)]'
+                    : 'glass-level-3 hover:border-blue-500/40'
                 }`}
               >
                 <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">
@@ -606,7 +690,7 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
           </div>
 
           {exportConfig.mode === 'merge' && (
-            <div className="p-4 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] space-y-3 text-xs">
+            <GlassCard level={3} padding="md" className="space-y-3 text-xs">
               <div className="flex items-center justify-between">
                 <span className="font-semibold">Additional PDFs to Append</span>
                 <input
@@ -617,14 +701,14 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
                   className="hidden"
                   onChange={(e) => void handleMergeFilesPicked(e.target.files)}
                 />
-                <button
-                  type="button"
+                <GlassButton
+                  variant="glass"
+                  size="sm"
                   onClick={() => mergeInputRef.current?.click()}
-                  className="px-3 py-1.5 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-1.5"
                 >
                   <Upload className="w-3.5 h-3.5" />
                   Add PDFs
-                </button>
+                </GlassButton>
               </div>
               {mergeFiles.length > 0 && (
                 <ul className="space-y-1 text-slate-600 dark:text-slate-300">
@@ -646,11 +730,11 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
                   ))}
                 </ul>
               )}
-            </div>
+            </GlassCard>
           )}
 
           {exportConfig.mode === 'selected_pages' && (
-            <div className="p-4 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] text-xs">
+            <GlassCard level={3} padding="md" className="text-xs">
               <label className="block">
                 <span className="font-medium text-slate-700 dark:text-slate-300">
                   Page Range (e.g. 1-3, 5)
@@ -661,15 +745,15 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
                   onChange={(e) =>
                     updateExport({ selectedPagesRange: e.target.value })
                   }
-                  className="mt-1.5 w-full px-3 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent font-mono"
+                  className="mt-1.5 w-full min-h-[40px] px-3 py-1.5 rounded-xl border border-slate-300/80 dark:border-white/15 bg-white/60 dark:bg-white/5 font-mono"
                 />
               </label>
-            </div>
+            </GlassCard>
           )}
         </div>
 
         {/* Right Options Panel */}
-        <div className="p-5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#111827] space-y-4 text-xs h-fit">
+        <GlassCard level={3} padding="md" className="space-y-4 text-xs h-fit">
           <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
             Print & Output Options
           </h2>
@@ -682,7 +766,7 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
                 onChange={(e) =>
                   updateExport({ dpi: Number(e.target.value) as 72 | 150 | 300 | 600 })
                 }
-                className="mt-1 w-full px-2 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0E131D]"
+                className="mt-1 w-full min-h-[38px] px-2 py-1.5 rounded-xl border border-slate-300/80 dark:border-white/15 bg-white/80 dark:bg-[#0E131D]"
               >
                 <option value={72}>72 DPI (Screen)</option>
                 <option value={150}>150 DPI (Standard)</option>
@@ -799,7 +883,7 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
               </span>
             </div>
           </div>
-        </div>
+        </GlassCard>
       </div>
 
       <PageConfigurationModal

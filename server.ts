@@ -42,11 +42,14 @@ function writeStoredProjects(projects: Record<string, unknown>[]) {
   fs.writeFileSync(PROJECTS_FILE, JSON.stringify(projects, null, 2), 'utf-8');
 }
 
-function getGeminiClient(): GoogleGenAI {
-  const apiKey = process.env.GEMINI_API_KEY;
+function getGeminiClient(req?: express.Request): GoogleGenAI {
+  // A user-provided key is accepted per request and never persisted by this server.
+  // The server environment key remains available as an optional operator fallback.
+  const headerKey = req?.get('x-gemini-api-key');
+  const apiKey = (typeof headerKey === 'string' ? headerKey.trim() : '') || process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
     const err = new Error(
-      'GEMINI_API_KEY is not configured. Please add your Gemini API key in the server GEMINI_API_KEY environment variable.'
+      'No Gemini API key is configured. Add your own key in Settings > AI & Gemini.'
     ) as Error & { code?: string };
     err.code = 'MISSING_API_KEY';
     throw err;
@@ -76,7 +79,7 @@ function classifyGeminiHttpError(err: unknown): {
       status: 503,
       code: 'MISSING_API_KEY',
       error:
-        'GEMINI_API_KEY is not configured. Local PDF Scan and all editing/export tools remain active.',
+        'No Gemini API key was supplied. Add your Gemini key in Settings > AI & Gemini. Local scanning and PDF editing remain available.',
     };
   }
   if (
@@ -101,7 +104,7 @@ function classifyGeminiHttpError(err: unknown): {
       status: 403,
       code: 'API_KEY_INVALID',
       error:
-        'Gemini API key was rejected or lacks permission. Verify the server GEMINI_API_KEY environment variable.',
+        'Gemini API key was rejected or lacks permission. Verify your Gemini API key in Settings > AI & Gemini.',
     };
   }
   if (errObj?.status === 400 || lower.includes('invalid_argument')) {
@@ -390,6 +393,27 @@ app.post('/api/pdf/create-starter', async (req, res) => {
   }
 });
 
+// Validate a user-supplied Gemini key without storing or logging it.
+app.post('/api/ai/validate-key', async (req, res) => {
+  try {
+    const key = req.get('x-gemini-api-key')?.trim();
+    if (!key || key.length < 20 || key.length > 512) {
+      res.status(400).json({ ok: false, error: 'Enter a valid Gemini API key.' });
+      return;
+    }
+    const ai = getGeminiClient(req);
+    await ai.models.generateContent({
+      model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+      contents: 'Reply with the single word OK.',
+      config: { maxOutputTokens: 8 },
+    });
+    res.json({ ok: true, message: 'Gemini API key verified successfully.' });
+  } catch (err) {
+    const classified = classifyGeminiHttpError(err);
+    res.status(classified.status).json({ ok: false, error: classified.error, code: classified.code });
+  }
+});
+
 // Gemini Multimodal PDF Analysis Endpoint
 app.post('/api/ai/analyze-pdf', async (req, res) => {
   try {
@@ -417,7 +441,7 @@ app.post('/api/ai/analyze-pdf', async (req, res) => {
       return;
     }
 
-    const ai = getGeminiClient();
+    const ai = getGeminiClient(req);
     const allElements: Record<string, unknown>[] = [];
     const pageSummaries: string[] = [];
 
@@ -458,7 +482,7 @@ Instructions:
 6. Suggest a clean 'fieldKey' for dynamic/data-mappable fields (like "invoice_number", "receipt_number", "customer_name", "date", "total_amount").`;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
+        model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
         contents: {
           parts: [
             {

@@ -3472,6 +3472,8 @@ export const EditorView: React.FC<EditorViewProps> = ({
                       imageUploadRef.current?.click();
                     } else if (t === 'duplicate') {
                       handleDuplicateSelected();
+                    } else if (t === 'group') {
+                      handleGroupToggle();
                     } else if (t === 'crop') {
                       setCropMode((v) => !v);
                     } else if (t === 'search') {

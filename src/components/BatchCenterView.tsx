@@ -804,6 +804,10 @@ export const BatchCenterView: React.FC<BatchCenterViewProps> = ({
                               progressCurrent: 0,
                               stage: 'Re-queued for retry',
                               error: undefined,
+                              outputBlob: undefined,
+                              outputFileName: undefined,
+                              outputMimeType: undefined,
+                              outputSizeBytes: undefined,
                               completedAt: undefined,
                             };
                             onSaveBatchJob(retried);

@@ -2885,6 +2885,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     </button>
                     <button
                       type="button"
+                      hidden={isToolHidden('search')}
                       onClick={() => {
                         setShowSearchBar((v) => !v);
                         onTrackRecentTool?.('search');
@@ -3061,6 +3062,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     </button>
                     <button
                       type="button"
+                      hidden={isToolHidden('block')}
                       onClick={handleCreateDocumentBlock}
                       className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
                     >
@@ -3366,6 +3368,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                         </button>
                         <button
                           type="button"
+                          hidden={isToolHidden('qc')}
                           hidden={isToolHidden('qc')}
                           onClick={() => onNavigateSection('preflight')}
                           className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"

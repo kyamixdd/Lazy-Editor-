@@ -1010,6 +1010,8 @@ export interface BatchJob {
   outputFileName?: string;
   outputMimeType?: string;
   outputSizeBytes?: number;
+  /** IndexedDB-persisted export payload so completed jobs remain downloadable after reload. */
+  outputBlob?: Blob;
   error?: string;
   createdAt: string;
   startedAt?: string;

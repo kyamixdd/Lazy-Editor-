@@ -96,7 +96,7 @@ export async function runOptionalAiEnhancedAnalysis(
       const rendered = await renderPdfPagesForStudio(pdfBytes, {
         renderScale: 1.5,
         enableOcrFallback: false,
-        maxPagesForAi: 12,
+        maxPagesForAi: Math.max(1, project.pageCount),
       });
       pagesPayload = rendered.pages.map((p) => ({
         pageNumber: p.pageNumber,
@@ -116,7 +116,6 @@ export async function runOptionalAiEnhancedAnalysis(
     } else {
       pagesPayload = project.originalPages
         .filter((p) => Boolean(p.previewImageDataUrl))
-        .slice(0, 12)
         .map((p) => ({
           pageNumber: p.pageNumber,
           widthPt: p.widthPt,

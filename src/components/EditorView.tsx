@@ -2844,7 +2844,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   </>
                 )}
 
-                {activeCategory === 'text' && (
+                {activeCategory === 'text' && !isToolHidden('text') && (
                   <>
                     <button
                       type="button"
@@ -2920,7 +2920,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   </>
                 )}
 
-                {activeCategory === 'images' && (
+                {activeCategory === 'images' && !isToolHidden('image') && (
                   <>
                     <button
                       type="button"
@@ -2930,7 +2930,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                       <ImageIcon className="w-3.5 h-3.5" />
                       Upload Image / Logo
                     </button>
-                    <div ref={assetMenuRef} className="relative">
+                    <div ref={assetMenuRef} className="relative" hidden={isToolHidden('assets')}>
                       <button
                         type="button"
                         onClick={() => setShowAssetInsertMenu((v) => !v)}
@@ -3034,7 +3034,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                         ['line', 'Line', Minus],
                         ['arrow', 'Arrow', ArrowUpRight],
                       ] as const
-                    ).map(([toolId, label, Icon]) => (
+                    ).filter(([toolId]) => !isToolHidden(toolId)).map(([toolId, label, Icon]) => (
                       <button
                         key={toolId}
                         type="button"
@@ -3052,6 +3052,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     <div className="h-4 w-px bg-black/15 dark:bg-white/15 mx-0.5" />
                     <button
                       type="button"
+                      hidden={isToolHidden('table')}
                       onClick={() => addNewElement('table')}
                       className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
                     >
@@ -3227,6 +3228,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     <div className="h-4 w-px bg-black/15 dark:bg-white/15 mx-0.5" />
                     <button
                       type="button"
+                      hidden={isToolHidden('rulers')}
                       onClick={() => setShowRulers((v) => !v)}
                       className={`px-2 py-1 rounded-lg flex items-center gap-1 whitespace-nowrap ${
                         showRulers ? 'studio-active-surface' : 'hover:bg-black/5 dark:hover:bg-white/10'
@@ -3237,6 +3239,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     </button>
                     <button
                       type="button"
+                      hidden={isToolHidden('grid')}
                       onClick={() => setShowGrid((v) => !v)}
                       className={`px-2 py-1 rounded-lg flex items-center gap-1 whitespace-nowrap ${
                         showGrid ? 'studio-active-surface' : 'hover:bg-black/5 dark:hover:bg-white/10'
@@ -3247,6 +3250,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     </button>
                     <button
                       type="button"
+                      hidden={isToolHidden('snap')}
                       onClick={handleToggleSnapAndGuides}
                       className={`px-2 py-1 rounded-lg flex items-center gap-1 whitespace-nowrap ${
                         snapToGrid && showGuides
@@ -3259,6 +3263,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     </button>
                     <button
                       type="button"
+                      hidden={isToolHidden('crop')}
                       onClick={() => {
                         setCropMode((v) => {
                           const next = !v;
@@ -3296,6 +3301,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     </button>
                     <button
                       type="button"
+                      hidden={isToolHidden('dupPage')}
                       onClick={handleDuplicatePage}
                       className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
                     >
@@ -3304,6 +3310,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     </button>
                     <button
                       type="button"
+                      hidden={isToolHidden('history')}
                       onClick={() => setShowVersionModal(true)}
                       className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
                     >
@@ -3359,6 +3366,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                         </button>
                         <button
                           type="button"
+                          hidden={isToolHidden('qc')}
                           onClick={() => onNavigateSection('preflight')}
                           className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
                         >
@@ -3367,6 +3375,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                         </button>
                         <button
                           type="button"
+                          hidden={isToolHidden('qc')}
                           onClick={() => onNavigateSection('compare')}
                           className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
                         >

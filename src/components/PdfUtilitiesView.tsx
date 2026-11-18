@@ -85,8 +85,8 @@ export const PdfUtilitiesView: React.FC<PdfUtilitiesViewProps> = ({
     author: '',
     subject: '',
     keywords: '',
-    creator: 'PDF Studio AI',
-    producer: 'PDF Studio AI',
+    creator: 'Lazy Editor',
+    producer: 'Lazy Editor',
     pageCount: activeProject?.pageCount || 0,
   });
 

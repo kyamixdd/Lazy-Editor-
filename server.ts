@@ -656,7 +656,7 @@ app.post('/api/ai/edit-command', async (req, res) => {
       return;
     }
 
-    const ai = getGeminiClient();
+    const ai = getGeminiClient(req);
 
     const compactElements = (currentElements || []).map(
       (el: Record<string, unknown>) => ({
@@ -699,7 +699,7 @@ Rules:
 - Never invent non-existent targetIds.`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-4-hydrogen',
+      model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
       contents: prompt,
       config: {
         thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },

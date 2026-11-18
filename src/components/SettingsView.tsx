@@ -12,7 +12,6 @@ import {
 import {
   APP_COPYRIGHT_YEAR,
   APP_PRODUCT_NAME,
-  APP_SUITE_NAME,
   APP_VERSION,
   DEVELOPER_PROFILE,
 } from '../config/appInfo';
@@ -201,7 +200,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <BrandMark size="md" />
             <div className="min-w-0">
               <div className="text-sm font-display font-semibold text-[#101010] dark:text-white truncate">
-                {APP_PRODUCT_NAME} · {APP_SUITE_NAME}
+                {APP_PRODUCT_NAME}
               </div>
               <div className="mt-0.5 text-[#555555] dark:text-[#B5B5B5] truncate tabular-nums">
                 Version {APP_VERSION} · Developed by {DEVELOPER_PROFILE.name} · © {APP_COPYRIGHT_YEAR}

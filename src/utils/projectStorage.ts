@@ -169,39 +169,8 @@ export async function saveProjectLocal(project: PDFProject): Promise<void> {
     tx.onabort = () => reject(tx.error || new Error('IndexedDB save aborted'));
   });
 
-  // Sync lightweight project metadata + JSON layout to server persistence
-  try {
-    const payload = {
-      ...project,
-      originalPages: project.originalPages.map((p) => ({
-        pageNumber: p.pageNumber,
-        sourcePdfPageNumber: p.sourcePdfPageNumber,
-        widthPt: p.widthPt,
-        heightPt: p.heightPt,
-        orientation: p.orientation,
-      })),
-      versions: (project.versions || []).slice(0, 12).map((v) => ({
-        ...v,
-        elementsSnapshot: v.elementsSnapshot.map((el) =>
-          el.imageDataUrl && el.imageDataUrl.length > 4096
-            ? { ...el, imageDataUrl: undefined }
-            : el
-        ),
-      })),
-      sourcePdfBase64: undefined,
-      imageResources: undefined,
-    };
-    const res = await fetch('/api/projects', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      console.warn('Server project sync responded with', res.status);
-    }
-  } catch {
-    // Offline or server sync fallback silently continues with IndexedDB
-  }
+  // IndexedDB is the authoritative local store. Server-side project sync is
+  // intentionally not attempted until authenticated per-user persistence exists.
 }
 
 export async function deleteProjectLocal(id: string): Promise<void> {
@@ -213,11 +182,6 @@ export async function deleteProjectLocal(id: string): Promise<void> {
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
-  try {
-    await fetch(`/api/projects/${encodeURIComponent(id)}`, { method: 'DELETE' });
-  } catch {
-    // Ignore network errors on local delete
-  }
 }
 
 export async function clearAllProjectsLocal(): Promise<void> {

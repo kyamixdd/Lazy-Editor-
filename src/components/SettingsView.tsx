@@ -238,16 +238,16 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </div>
             </div>
           </div>
-          <GlassButton
-            variant="glass"
-            size="md"
-            onClick={() => onNavigate('about')}
-            className="shrink-0"
-          >
-            <Info className="w-3.5 h-3.5 text-[#101010] dark:text-white" />
-            About Us
-            <ArrowRight className="w-3.5 h-3.5" />
-          </GlassButton>
+          <div className="flex flex-wrap gap-2 shrink-0">
+            <GlassButton variant="glass" size="md" onClick={() => onNavigate('user-manual')}>
+              <Keyboard className="w-3.5 h-3.5" /> User Manual <ArrowRight className="w-3.5 h-3.5" />
+            </GlassButton>
+            <GlassButton variant="glass" size="md" onClick={() => onNavigate('about')}>
+              <Info className="w-3.5 h-3.5 text-[#101010] dark:text-white" />
+              About Us
+              <ArrowRight className="w-3.5 h-3.5" />
+            </GlassButton>
+          </div>
         </GlassCard>
       )}
 

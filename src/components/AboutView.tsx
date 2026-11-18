@@ -105,7 +105,7 @@ export const AboutView: React.FC<AboutViewProps> = ({ onNavigate }) => {
 
       {/* Primary Two-Column Layout: Product Overview + Developer Profile */}
       <div className="grid grid-cols-1 desktop:grid-cols-12 gap-4 tablet:gap-5 items-stretch">
-        {/* Left: About Lazy Editor Studio */}
+        {/* Left: About Lazy Editor */}
         <GlassCard
           level={3}
           padding="lg"

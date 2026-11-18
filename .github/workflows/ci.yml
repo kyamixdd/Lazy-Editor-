@@ -24,3 +24,16 @@ jobs:
         run: npm run lint
       - name: Build production bundle
         run: npm run build
+      - name: Smoke-test the Express server
+        run: |
+          npm start > /tmp/lazy-editor-server.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:3000/api/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/lazy-editor-server.log
+          exit 1

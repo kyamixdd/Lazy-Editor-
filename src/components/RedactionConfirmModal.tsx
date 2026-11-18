@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -8,6 +8,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { AssetFontItem, PDFProject } from '../types/pdfStudio';
+import { triggerBytesDownload } from '../utils/downloadHelper';
 import { generateExportBytes } from '../utils/pdfExporter';
 import {
   applyTrueRedactionsToProject,
@@ -32,6 +33,7 @@ export const RedactionConfirmModal: React.FC<RedactionConfirmModalProps> = ({
   onApplyRedactions,
 }) => {
   const [verifying, setVerifying] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [verificationResult, setVerificationResult] = useState<{
     clean: boolean;
     foundLeaks: string[];
@@ -39,11 +41,19 @@ export const RedactionConfirmModal: React.FC<RedactionConfirmModalProps> = ({
   } | null>(null);
   const [testedTerms, setTestedTerms] = useState<string[]>([]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    setVerificationResult(null);
+    setErrorMsg(null);
+    setTestedTerms([]);
+  }, [isOpen, project.id]);
+
   const summary = useMemo(() => inspectPendingRedactions(project), [project]);
 
   const handleApplyPermanently = () => {
     const res = applyTrueRedactionsToProject(project);
     if (res.appliedRedactionCount === 0) return;
+    setErrorMsg(null);
     setTestedTerms(summary.overlappingTextStrings);
     onApplyRedactions(
       res.updatedProject,
@@ -54,6 +64,7 @@ export const RedactionConfirmModal: React.FC<RedactionConfirmModalProps> = ({
   const handleExportAndVerify = async () => {
     setVerifying(true);
     setVerificationResult(null);
+    setErrorMsg(null);
     try {
       let targetProject = project;
       const termsToAudit =
@@ -75,17 +86,15 @@ export const RedactionConfirmModal: React.FC<RedactionConfirmModalProps> = ({
       const audit = await verifyPdfBytesRedactionClean(exported.data, termsToAudit);
       setVerificationResult(audit);
 
-      const copy = new Uint8Array(exported.data.byteLength);
-      copy.set(exported.data);
-      const blob = new Blob([copy.buffer], { type: exported.mimeType });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${targetProject.name.replace(/\s+/g, '_')}_redacted.${
-        exported.mimeType === 'application/zip' ? 'zip' : 'pdf'
-      }`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      triggerBytesDownload(
+        exported.data,
+        `${targetProject.name.replace(/\s+/g, '_')}_redacted.${
+          exported.mimeType === 'application/zip' ? 'zip' : 'pdf'
+        }`,
+        exported.mimeType
+      );
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Redaction verification & export failed.');
     } finally {
       setVerifying(false);
     }
@@ -204,6 +213,14 @@ export const RedactionConfirmModal: React.FC<RedactionConfirmModalProps> = ({
             </div>
             <div className="text-[11px] text-[#555555] dark:text-[#B5B5B5] tabular-nums">
               PDF.js text extraction audit scanned exported bytes ({verificationResult.extractedCharCount} extractable chars total).
+            </div>
+          </GlassCard>
+        )}
+        {errorMsg && (
+          <GlassCard level={3} padding="sm" className="border-red-500/40 text-red-700 dark:text-red-300">
+            <div className="font-semibold flex items-center gap-1.5">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              {errorMsg}
             </div>
           </GlassCard>
         )}

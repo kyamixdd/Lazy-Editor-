@@ -20,6 +20,7 @@ import {
 import { inspectFontBinary } from '../utils/fontUtils';
 import { uint8ArrayToBase64 } from '../utils/pdfRenderer';
 import { GlassCard, GlassSegmentedControl } from './glass';
+import { NumericDraftInput } from './NumericDraftInput';
 
 interface AssetLibraryViewProps {
   assets: AssetLibraryItem[];
@@ -42,6 +43,10 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
 }) => {
   const shouldReduceMotion = useReducedMotion();
   const [tab, setTab] = useState<AssetTab>('fonts');
+  const [uploadNotice, setUploadNotice] = useState<{
+    kind: 'info' | 'error';
+    message: string;
+  } | null>(null);
   const fontInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
 
@@ -65,24 +70,47 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
   );
 
   const handleUploadFonts = async (files: FileList | null) => {
-    if (!files) return;
-    for (const file of Array.from(files)) {
-      const buf = new Uint8Array(await file.arrayBuffer());
-      const meta = inspectFontBinary(buf, file.name);
-      const item: AssetFontItem = {
-        id: `font-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        kind: 'font',
-        name: file.name,
-        fontFamily: meta.fontFamily,
-        format: meta.format,
-        dataBase64: uint8ArrayToBase64(buf),
-        fsType: meta.fsType,
-        embeddingPermission: meta.embeddingPermission,
-        canEmbedInPdf: meta.canEmbedInPdf,
-        licenseNote: meta.licenseNote,
-        createdAt: new Date().toISOString(),
-      };
-      onSaveAsset(item);
+    if (!files || files.length === 0) return;
+    setUploadNotice(null);
+    let loaded = 0;
+    try {
+      for (const file of Array.from(files)) {
+        const buf = new Uint8Array(await file.arrayBuffer());
+        const meta = inspectFontBinary(buf, file.name);
+        const item: AssetFontItem = {
+          id: `font-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          kind: 'font',
+          name: file.name,
+          fontFamily: meta.fontFamily,
+          format: meta.format,
+          dataBase64: uint8ArrayToBase64(buf),
+          fsType: meta.fsType,
+          embeddingPermission: meta.embeddingPermission,
+          canEmbedInPdf: meta.canEmbedInPdf,
+          licenseNote: meta.licenseNote,
+          createdAt: new Date().toISOString(),
+        };
+        onSaveAsset(item);
+        loaded++;
+      }
+      if (loaded > 0) {
+        setUploadNotice({
+          kind: 'info',
+          message: `Imported ${loaded} custom font${loaded === 1 ? '' : 's'}.`,
+        });
+      }
+    } catch (err) {
+      setUploadNotice({
+        kind: 'error',
+        message:
+          err instanceof Error
+            ? `Font import failed: ${err.message}`
+            : 'Font import failed.',
+      });
+    } finally {
+      if (fontInputRef.current) {
+        fontInputRef.current.value = '';
+      }
     }
   };
 
@@ -90,36 +118,64 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
     files: FileList | null,
     kind: 'logo' | 'image' = 'logo'
   ) => {
-    if (!files) return;
-    for (const file of Array.from(files)) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const rawUrl = String(reader.result || '');
-        const img = new Image();
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          canvas.width = img.naturalWidth || 200;
-          canvas.height = img.naturalHeight || 150;
-          const ctx = canvas.getContext('2d');
-          let normalizedUrl = rawUrl;
-          if (ctx) {
-            ctx.drawImage(img, 0, 0);
-            normalizedUrl = canvas.toDataURL('image/png');
-          }
-          const item: AssetImageItem = {
-            id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            kind,
-            name: file.name,
-            dataUrl: normalizedUrl,
-            naturalWidth: img.naturalWidth || canvas.width,
-            naturalHeight: img.naturalHeight || canvas.height,
-            createdAt: new Date().toISOString(),
+    if (!files || files.length === 0) return;
+    setUploadNotice(null);
+    try {
+      for (const file of Array.from(files)) {
+        await new Promise<void>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onerror = () =>
+            reject(new Error(`Failed to read image "${file.name}".`));
+          reader.onload = () => {
+            const rawUrl = String(reader.result || '');
+            const img = new Image();
+            img.onerror = () =>
+              reject(new Error(`Unsupported or corrupted image "${file.name}".`));
+            img.onload = () => {
+              const canvas = document.createElement('canvas');
+              canvas.width = img.naturalWidth || 200;
+              canvas.height = img.naturalHeight || 150;
+              const ctx = canvas.getContext('2d');
+              let normalizedUrl = rawUrl;
+              if (ctx) {
+                ctx.drawImage(img, 0, 0);
+                normalizedUrl = canvas.toDataURL('image/png');
+              }
+              const naturalWidth = img.naturalWidth || canvas.width;
+              const naturalHeight = img.naturalHeight || canvas.height;
+              canvas.width = 0;
+              canvas.height = 0;
+              const item: AssetImageItem = {
+                id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                kind,
+                name: file.name,
+                dataUrl: normalizedUrl,
+                naturalWidth,
+                naturalHeight,
+                createdAt: new Date().toISOString(),
+              };
+              onSaveAsset(item);
+              resolve();
+            };
+            img.src = rawUrl;
           };
-          onSaveAsset(item);
-        };
-        img.src = rawUrl;
-      };
-      reader.readAsDataURL(file);
+          reader.readAsDataURL(file);
+        });
+      }
+      setUploadNotice({
+        kind: 'info',
+        message: `Imported ${files.length} image asset${files.length === 1 ? '' : 's'}.`,
+      });
+    } catch (err) {
+      setUploadNotice({
+        kind: 'error',
+        message:
+          err instanceof Error ? err.message : 'Image import failed.',
+      });
+    } finally {
+      if (imageInputRef.current) {
+        imageInputRef.current.value = '';
+      }
     }
   };
 
@@ -160,6 +216,25 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
           { value: 'palettes', label: 'Color Palettes', count: palettes.length },
         ]}
       />
+
+      {uploadNotice && (
+        <div
+          className={`px-3.5 py-2.5 rounded-xl border text-xs flex items-center justify-between gap-2 ${
+            uploadNotice.kind === 'error'
+              ? 'border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-300'
+              : 'border-black/15 dark:border-white/15 glass-level-3 text-[#101010] dark:text-white'
+          }`}
+        >
+          <span>{uploadNotice.message}</span>
+          <button
+            type="button"
+            onClick={() => setUploadNotice(null)}
+            className="text-[11px] font-medium hover:underline shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       <AnimatePresence mode="wait" initial={false}>
         <motion.div
@@ -496,12 +571,10 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
             </label>
             <label className="w-20">
               <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">Size (pt)</span>
-              <input
-                type="number"
-                min="6"
-                max="72"
+              <NumericDraftInput
                 value={styleSize}
-                onChange={(e) => setStyleSize(Number(e.target.value) || 12)}
+                commitOptions={{ min: 6, max: 72, integer: true }}
+                onCommit={setStyleSize}
                 className="mt-1 w-full px-2 py-1.5 rounded-lg border studio-input tabular-nums"
               />
             </label>

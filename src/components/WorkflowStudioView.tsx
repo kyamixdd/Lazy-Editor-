@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowDown,
@@ -86,9 +86,28 @@ export const WorkflowStudioView: React.FC<WorkflowStudioViewProps> = ({
   } | null>(null);
   const [newStepKind, setNewStepKind] =
     useState<WorkflowStepKind>('preflight_check');
+  const [runError, setRunError] = useState<string | null>(null);
 
   const cancelRef = useRef(false);
   const pausedRef = useRef(false);
+  const downloadObjectUrlRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    downloadObjectUrlRef.current = downloadUrl?.url || null;
+  }, [downloadUrl]);
+
+  useEffect(() => {
+    return () => {
+      if (downloadObjectUrlRef.current) {
+        URL.revokeObjectURL(downloadObjectUrlRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (projects.some((p) => p.id === targetProjectId)) return;
+    setTargetProjectId(activeProject?.id || projects[0]?.id || '');
+  }, [projects, activeProject?.id, targetProjectId]);
 
   const selectedWorkflow =
     allWorkflows.find((w) => w.id === selectedWorkflowId) || allWorkflows[0];
@@ -182,6 +201,7 @@ export const WorkflowStudioView: React.FC<WorkflowStudioViewProps> = ({
     pausedRef.current = false;
     setIsPaused(false);
     setIsRunning(true);
+    setRunError(null);
     setLiveResults([]);
     setLastRunLog(null);
     setLastPassport(null);
@@ -190,51 +210,59 @@ export const WorkflowStudioView: React.FC<WorkflowStudioViewProps> = ({
       setDownloadUrl(null);
     }
 
-    const res = await executeWorkflowChain(selectedWorkflow, targetProject, {
-      customFonts,
-      profiles,
-      serialBatches,
-      allowCriticalOverride,
-      onStepUpdate: (_idx, _latest, all) => {
-        setLiveResults(all);
-      },
-      control: {
-        isCancelled: () => cancelRef.current,
-        waitWhilePaused: async () => {
-          while (pausedRef.current && !cancelRef.current) {
-            await new Promise((r) => setTimeout(r, 200));
-          }
+    try {
+      const res = await executeWorkflowChain(selectedWorkflow, targetProject, {
+        customFonts,
+        profiles,
+        serialBatches,
+        allowCriticalOverride,
+        onStepUpdate: (_idx, _latest, all) => {
+          setLiveResults(all);
         },
-      },
-    });
+        control: {
+          isCancelled: () => cancelRef.current,
+          waitWhilePaused: async () => {
+            while (pausedRef.current && !cancelRef.current) {
+              await new Promise((r) => setTimeout(r, 200));
+            }
+          },
+        },
+      });
 
-    setLastRunLog(res.runLog);
-    if (res.updatedProject) {
-      onUpdateProject(res.updatedProject);
+      setLastRunLog(res.runLog);
+      if (res.updatedProject) {
+        onUpdateProject(res.updatedProject);
+      }
+      if (res.passport) {
+        setLastPassport(res.passport);
+        onSavePassport(res.passport);
+      }
+      if (res.pdfBytes && res.pdfBytes.byteLength > 0) {
+        const blob = new Blob([res.pdfBytes.slice().buffer], {
+          type: res.mimeType || 'application/pdf',
+        });
+        setDownloadUrl({
+          url: URL.createObjectURL(blob),
+          fileName: res.fileName || `${targetProject.name}.pdf`,
+          sizeBytes: res.pdfBytes.byteLength,
+        });
+      }
+      if (!selectedWorkflow.isPreset) {
+        onSaveWorkflow({
+          ...selectedWorkflow,
+          lastRunAt: res.runLog.finishedAt,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    } catch (err) {
+      setRunError(
+        err instanceof Error ? err.message : 'Workflow execution failed unexpectedly.'
+      );
+    } finally {
+      setIsRunning(false);
+      setIsPaused(false);
+      pausedRef.current = false;
     }
-    if (res.passport) {
-      setLastPassport(res.passport);
-      onSavePassport(res.passport);
-    }
-    if (res.pdfBytes && res.pdfBytes.byteLength > 0) {
-      const blob = new Blob([res.pdfBytes.slice().buffer], {
-        type: res.mimeType || 'application/pdf',
-      });
-      setDownloadUrl({
-        url: URL.createObjectURL(blob),
-        fileName: res.fileName || `${targetProject.name}.pdf`,
-        sizeBytes: res.pdfBytes.byteLength,
-      });
-    }
-    if (!selectedWorkflow.isPreset) {
-      onSaveWorkflow({
-        ...selectedWorkflow,
-        lastRunAt: res.runLog.finishedAt,
-      });
-    }
-    setIsRunning(false);
-    setIsPaused(false);
-    pausedRef.current = false;
   };
 
   return (
@@ -303,6 +331,12 @@ export const WorkflowStudioView: React.FC<WorkflowStudioViewProps> = ({
           )}
         </div>
       </div>
+
+      {runError && (
+        <div className="p-3 rounded-xl border border-red-500/40 bg-red-500/10 text-xs text-red-600 dark:text-red-400">
+          {runError}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 desktop:grid-cols-12 gap-5">
         {/* Saved Workflows & Presets List */}

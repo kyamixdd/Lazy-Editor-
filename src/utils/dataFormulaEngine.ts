@@ -5,6 +5,7 @@ import {
   DataQualityReport,
   DataRow,
 } from '../types/pdfStudio';
+import { triggerBlobDownload } from './downloadHelper';
 
 function evaluateConditionClause(
   lhsRaw: string,
@@ -419,10 +420,8 @@ export function exportRowsToCsv(
   const ws = XLSX.utils.json_to_sheet(exportData);
   const csv = XLSX.utils.sheet_to_csv(ws);
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = fileName.endsWith('.csv') ? fileName : `${fileName}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
+  triggerBlobDownload(
+    blob,
+    fileName.endsWith('.csv') ? fileName : `${fileName}.csv`
+  );
 }

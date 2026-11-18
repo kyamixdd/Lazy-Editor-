@@ -27,6 +27,7 @@ import {
   buildProfileFromProject,
   computeTemplateDna,
 } from '../utils/templateProfileEngine';
+import { triggerBlobDownload } from '../utils/downloadHelper';
 import { GlassButton, GlassCard, GlassSegmentedControl } from './glass';
 import { TemplateDnaModal } from './TemplateDnaModal';
 import { VersionHistoryModal } from './VersionHistoryModal';
@@ -74,6 +75,10 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
   const [tagsInput, setTagsInput] = useState('');
   const [historyProjectId, setHistoryProjectId] = useState<string | null>(null);
   const [dnaProfileId, setDnaProfileId] = useState<string | null>(null);
+  const [importNotice, setImportNotice] = useState<{
+    kind: 'info' | 'error';
+    message: string;
+  } | null>(null);
   const lastHistoryProjectRef = useRef<PDFProject | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
 
@@ -166,12 +171,7 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
     const blob = new Blob([JSON.stringify(configOnly, null, 2)], {
       type: 'application/json',
     });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${proj.name.replace(/\s+/g, '_')}_template.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    triggerBlobDownload(blob, `${proj.name.replace(/\s+/g, '_')}_template.json`);
   };
 
   const handleExportProfileJson = (profile: TemplateAutomationProfile) => {
@@ -185,22 +185,22 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
     const blob = new Blob([JSON.stringify(clean, null, 2)], {
       type: 'application/json',
     });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${profile.name.replace(/\s+/g, '_')}_profile.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    triggerBlobDownload(blob, `${profile.name.replace(/\s+/g, '_')}_profile.json`);
   };
 
   const handleImportTemplateJson = async (file: File | undefined) => {
     if (!file) return;
+    setImportNotice(null);
     try {
       const text = await file.text();
       const parsed = JSON.parse(text) as
         | PDFProject
         | TemplateAutomationProfile;
-      if (!parsed || !Array.isArray(parsed.elements)) {
+      if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.elements)) {
+        setImportNotice({
+          kind: 'error',
+          message: `Invalid template/profile JSON in "${file.name}".`,
+        });
         return;
       }
       const now = new Date().toISOString();
@@ -216,6 +216,10 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
         };
         onSaveProfile(importedProfile);
         setFilter('profiles');
+        setImportNotice({
+          kind: 'info',
+          message: `Imported automation profile "${importedProfile.name}".`,
+        });
       } else {
         const imported: PDFProject = {
           ...(parsed as PDFProject),
@@ -225,9 +229,23 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
           updatedAt: now,
         };
         onSaveProject(imported);
+        setImportNotice({
+          kind: 'info',
+          message: `Imported template "${imported.name}".`,
+        });
       }
     } catch (err) {
-      console.error('Failed to import template JSON:', err);
+      setImportNotice({
+        kind: 'error',
+        message:
+          err instanceof Error
+            ? `Failed to import "${file.name}": ${err.message}`
+            : `Failed to import "${file.name}".`,
+      });
+    } finally {
+      if (importInputRef.current) {
+        importInputRef.current.value = '';
+      }
     }
   };
 
@@ -289,6 +307,25 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
           )}
         </div>
       </div>
+
+      {importNotice && (
+        <div
+          className={`mt-4 px-3.5 py-2.5 rounded-xl border text-xs flex items-center justify-between gap-2 ${
+            importNotice.kind === 'error'
+              ? 'border-red-500/40 bg-red-500/10 text-red-700 dark:text-red-300'
+              : 'border-black/15 dark:border-white/15 glass-level-3 text-[#101010] dark:text-white'
+          }`}
+        >
+          <span>{importNotice.message}</span>
+          <button
+            type="button"
+            onClick={() => setImportNotice(null)}
+            className="text-[11px] font-medium hover:underline shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Filter Tabs + Folder & Tag Search */}
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
@@ -541,6 +578,12 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
                           type="text"
                           value={renameText}
                           onChange={(e) => setRenameText(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Escape') {
+                              e.preventDefault();
+                              setRenamingId(null);
+                            }
+                          }}
                           autoFocus
                           className="flex-1 px-2.5 py-1 text-xs rounded-lg border studio-input"
                         />

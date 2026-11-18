@@ -21,6 +21,7 @@ import { ExportCenterView } from './components/ExportCenterView';
 import { NewProjectView } from './components/NewProjectView';
 import { PdfUtilitiesView } from './components/PdfUtilitiesView';
 import { PreflightView } from './components/PreflightView';
+import { ScanInspectorView } from './components/ScanInspectorView';
 import { SettingsView } from './components/SettingsView';
 import { SidebarNav } from './components/SidebarNav';
 import { TemplatesView } from './components/TemplatesView';
@@ -247,6 +248,7 @@ export default function App() {
     setActiveProjIdState(null);
     setActiveProjectId(null);
     if (
+      activeSection === 'scan-inspector' ||
       activeSection === 'editor' ||
       activeSection === 'bulk-generator' ||
       activeSection === 'data-manager' ||
@@ -747,6 +749,10 @@ export default function App() {
                   settings={settings}
                   onProjectCreated={handleProjectCreated}
                   onUpdateProject={handleSaveProject}
+                  onInspectScan={(proj) => {
+                    handleProjectCreated(proj, false);
+                    setActiveSection('scan-inspector');
+                  }}
                 />
               )}
 
@@ -765,6 +771,15 @@ export default function App() {
                   onSaveSnapshot={handleSaveSnapshot}
                   onRestoreVersion={handleRestoreVersion}
                   onNavigate={setActiveSection}
+                />
+              )}
+
+              {activeSection === 'scan-inspector' && activeProject && (
+                <ScanInspectorView
+                  project={activeProject}
+                  settings={settings}
+                  onUpdateProject={handleSaveProject}
+                  onInspectInEditor={handleInspectElement}
                 />
               )}
 

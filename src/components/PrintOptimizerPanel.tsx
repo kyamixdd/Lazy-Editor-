@@ -20,6 +20,7 @@ import {
   LayoutCandidateEvaluation,
 } from '../utils/printOptimizerEngine';
 import { ptToUnit, unitToPt } from '../utils/units';
+import { NumericDraftInput } from './NumericDraftInput';
 
 interface PrintOptimizerPanelProps {
   project: PDFProject;
@@ -113,15 +114,12 @@ export const PrintOptimizerPanel: React.FC<PrintOptimizerPanelProps> = ({
             <span className="text-[10px] text-[#888888] dark:text-[#858585]">
               Minimum Readable Font (pt)
             </span>
-            <input
-              type="number"
-              min="3"
-              max="18"
-              step="0.5"
+            <NumericDraftInput
               value={printOpt.minReadableFontPt}
-              onChange={(e) =>
+              commitOptions={{ min: 3, max: 18, decimals: 1 }}
+              onCommit={(val) =>
                 updatePrintOpt({
-                  minReadableFontPt: Math.max(3, Number(e.target.value) || 6),
+                  minReadableFontPt: Math.max(3, Math.min(18, val)),
                 })
               }
               className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
@@ -291,13 +289,12 @@ export const PrintOptimizerPanel: React.FC<PrintOptimizerPanelProps> = ({
                 <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                   Back X Calibration ({unit})
                 </span>
-                <input
-                  type="number"
-                  step="0.2"
+                <NumericDraftInput
                   value={ptToUnit(printOpt.backSideOffsetXPt, unit)}
-                  onChange={(e) =>
+                  commitOptions={{ decimals: 2 }}
+                  onCommit={(val) =>
                     updatePrintOpt({
-                      backSideOffsetXPt: unitToPt(Number(e.target.value) || 0, unit),
+                      backSideOffsetXPt: unitToPt(val, unit),
                     })
                   }
                   className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
@@ -307,13 +304,12 @@ export const PrintOptimizerPanel: React.FC<PrintOptimizerPanelProps> = ({
                 <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                   Back Y Calibration ({unit})
                 </span>
-                <input
-                  type="number"
-                  step="0.2"
+                <NumericDraftInput
                   value={ptToUnit(printOpt.backSideOffsetYPt, unit)}
-                  onChange={(e) =>
+                  commitOptions={{ decimals: 2 }}
+                  onCommit={(val) =>
                     updatePrintOpt({
-                      backSideOffsetYPt: unitToPt(Number(e.target.value) || 0, unit),
+                      backSideOffsetYPt: unitToPt(val, unit),
                     })
                   }
                   className="mt-0.5 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"

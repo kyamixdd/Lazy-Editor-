@@ -1,14 +1,29 @@
 import * as pdfjsLib from 'pdfjs-dist';
-import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { createWorker } from 'tesseract.js';
 import {
   DetectedPageBounds,
+  ExtractedImageResource,
   OriginalPageMeta,
   RectPt,
+  VectorPathCommand,
 } from '../types/pdfStudio';
+import {
+  RawImagePlacement,
+  RawTextRun,
+  RawVectorPath,
+} from './scanPrimitives';
+import { rectIntersectionArea } from './spatialIndex';
 
-if (typeof pdfjsWorker === 'string' && pdfjsWorker.length > 0) {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+if (typeof window !== 'undefined') {
+  void import('pdfjs-dist/build/pdf.worker.min.mjs?url')
+    .then((mod) => {
+      if (typeof mod.default === 'string' && mod.default.length > 0) {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = mod.default;
+      }
+    })
+    .catch(() => {
+      // Non-browser environment (e.g. Node unit tests)
+    });
 }
 
 // True LRU cache of rendered page previews & thumbnails keyed by pdfSignature + pageNumber + scale
@@ -101,6 +116,11 @@ export interface ExtractedTextItem {
   rotation?: number;
   confidence?: number;
   fromOcr?: boolean;
+  baselineY?: number;
+  transformMatrix?: [number, number, number, number, number, number];
+  charSpacingPt?: number;
+  wordSpacingPt?: number;
+  hasEOL?: boolean;
 }
 
 export interface ExtractedVectorPrimitive {
@@ -123,8 +143,12 @@ export interface RenderedPdfPageData {
   orientation: 'portrait' | 'landscape';
   imageBase64: string;
   extractedTextItems: ExtractedTextItem[];
+  rawTextRuns: RawTextRun[];
+  rawVectorPaths: RawVectorPath[];
+  rawImagePlacements: RawImagePlacement[];
   vectorPrimitives?: ExtractedVectorPrimitive[];
   usedOcr: boolean;
+  ocrRegionsCount: number;
   detectedBounds: DetectedPageBounds;
 }
 
@@ -191,8 +215,9 @@ function applyPoint(m: number[], px: number, py: number): [number, number] {
 }
 
 function rgbUnitToHex(r: number, g: number, b: number): string {
+  const isUnit = r <= 1 && g <= 1 && b <= 1;
   const clamp255 = (v: number) => {
-    const scaled = v <= 1 && (r <= 1 && g <= 1 && b <= 1) ? v * 255 : v;
+    const scaled = isUnit ? v * 255 : v;
     return Math.max(0, Math.min(255, Math.round(scaled)));
   };
   const toHex = (n: number) => clamp255(n).toString(16).padStart(2, '0');
@@ -204,6 +229,16 @@ function cmykToHex(c: number, m: number, y: number, k: number): string {
   const g = 1 - Math.min(1, m * (1 - k) + k);
   const b = 1 - Math.min(1, y * (1 - k) + k);
   return rgbUnitToHex(r, g, b);
+}
+
+function hexToRgbTuple(hex: string): [number, number, number] {
+  const clean = (hex || '#111827').replace('#', '');
+  if (clean.length !== 6) return [17, 24, 39];
+  return [
+    parseInt(clean.slice(0, 2), 16) || 0,
+    parseInt(clean.slice(2, 4), 16) || 0,
+    parseInt(clean.slice(4, 6), 16) || 0,
+  ];
 }
 
 function resolveFontMetadata(
@@ -251,15 +286,13 @@ function sampleTextColorFromCanvas(
     if (sw <= 0 || sh <= 0) return '#111827';
 
     const data = ctx.getImageData(sx, sy, sw, sh).data;
-    // Sample outer corner of page as background reference (default white)
     const bgData = ctx.getImageData(0, 0, 1, 1).data;
     const bgR = bgData[3] > 20 ? bgData[0] : 255;
     const bgG = bgData[3] > 20 ? bgData[1] : 255;
     const bgB = bgData[3] > 20 ? bgData[2] : 255;
 
-    let bestDist = 35;
+    const bestDist = 35;
     let bestHex = '#111827';
-    // Collect top saturated/contrasting ink pixels and average near max contrast
     const step = sw * sh > 2500 ? 2 : 1;
     let sumR = 0;
     let sumG = 0;
@@ -306,19 +339,244 @@ function sampleTextColorFromCanvas(
   }
 }
 
+interface PdfJsImageLike {
+  width?: number;
+  height?: number;
+  kind?: number;
+  data?: Uint8ClampedArray | Uint8Array;
+  bitmap?: ImageBitmap;
+  interpolate?: boolean;
+}
+
+async function resolvePdfJsObject(
+  objs: pdfjsLib.PDFPageProxy['objs'],
+  name: string,
+  timeoutMs = 1500
+): Promise<PdfJsImageLike | null> {
+  if (!name) return null;
+  try {
+    if (objs.has(name)) {
+      return (objs.get(name) as PdfJsImageLike) || null;
+    }
+  } catch {
+    // Fall through to callback form
+  }
+
+  return new Promise<PdfJsImageLike | null>((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(null);
+      }
+    }, timeoutMs);
+
+    try {
+      objs.get(name, (data: unknown) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve((data as PdfJsImageLike) || null);
+        }
+      });
+    } catch {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolve(null);
+      }
+    }
+  });
+}
+
+/**
+ * Pass 4 Helper: Converts a genuine decoded PDF.js XObject or inline image buffer
+ * into a lossless PNG data URL (NEVER a page screenshot).
+ */
+function encodePdfJsImageToDataUrl(
+  imgObj: PdfJsImageLike | null,
+  maskTintHex?: string
+): {
+  dataUrl: string;
+  naturalWidth: number;
+  naturalHeight: number;
+  hasAlpha: boolean;
+} | null {
+  if (!imgObj || typeof document === 'undefined') return null;
+
+  if (imgObj.bitmap && imgObj.bitmap.width > 0 && imgObj.bitmap.height > 0) {
+    const w = imgObj.bitmap.width;
+    const h = imgObj.bitmap.height;
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(imgObj.bitmap, 0, 0);
+    const dataUrl = c.toDataURL('image/png');
+    releaseCanvas(c);
+    return { dataUrl, naturalWidth: w, naturalHeight: h, hasAlpha: true };
+  }
+
+  const w = imgObj.width || 0;
+  const h = imgObj.height || 0;
+  const raw = imgObj.data;
+  if (!raw || w <= 0 || h <= 0) return null;
+
+  const pixelCount = w * h;
+  const rgba = new Uint8ClampedArray(pixelCount * 4);
+  let hasAlpha = false;
+
+  if (raw.length >= pixelCount * 4) {
+    for (let i = 0; i < pixelCount * 4; i += 4) {
+      rgba[i] = raw[i];
+      rgba[i + 1] = raw[i + 1];
+      rgba[i + 2] = raw[i + 2];
+      const a = raw[i + 3];
+      rgba[i + 3] = a;
+      if (a < 255) hasAlpha = true;
+    }
+  } else if (raw.length >= pixelCount * 3) {
+    for (let p = 0, s = 0, d = 0; p < pixelCount; p++, s += 3, d += 4) {
+      rgba[d] = raw[s];
+      rgba[d + 1] = raw[s + 1];
+      rgba[d + 2] = raw[s + 2];
+      rgba[d + 3] = 255;
+    }
+  } else if (raw.length >= pixelCount) {
+    // 8-bit grayscale or alpha mask
+    const tint = maskTintHex ? hexToRgbTuple(maskTintHex) : null;
+    for (let p = 0, d = 0; p < pixelCount; p++, d += 4) {
+      const v = raw[p];
+      if (tint && maskTintHex) {
+        rgba[d] = tint[0];
+        rgba[d + 1] = tint[1];
+        rgba[d + 2] = tint[2];
+        rgba[d + 3] = 255 - v;
+        hasAlpha = true;
+      } else {
+        rgba[d] = v;
+        rgba[d + 1] = v;
+        rgba[d + 2] = v;
+        rgba[d + 3] = 255;
+      }
+    }
+  } else {
+    // 1-bpp monochrome image mask (kind === 1)
+    const rowBytes = Math.ceil(w / 8);
+    const tint = hexToRgbTuple(maskTintHex || '#111827');
+    hasAlpha = Boolean(maskTintHex);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const byteIdx = y * rowBytes + (x >> 3);
+        const bit = (raw[byteIdx] >> (7 - (x & 7))) & 1;
+        const d = (y * w + x) * 4;
+        if (maskTintHex) {
+          rgba[d] = tint[0];
+          rgba[d + 1] = tint[1];
+          rgba[d + 2] = tint[2];
+          rgba[d + 3] = bit === 0 ? 255 : 0;
+        } else {
+          const val = bit ? 255 : 0;
+          rgba[d] = val;
+          rgba[d + 1] = val;
+          rgba[d + 2] = val;
+          rgba[d + 3] = 255;
+        }
+      }
+    }
+  }
+
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext('2d');
+  if (!ctx) return null;
+  const imageData = new ImageData(rgba, w, h);
+  ctx.putImageData(imageData, 0, 0);
+  const dataUrl = c.toDataURL('image/png');
+  releaseCanvas(c);
+
+  return { dataUrl, naturalWidth: w, naturalHeight: h, hasAlpha };
+}
+
+function sampleCubicBezierPoints(
+  x0: number,
+  y0: number,
+  cx1: number,
+  cy1: number,
+  cx2: number,
+  cy2: number,
+  x3: number,
+  y3: number,
+  steps = 6
+): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (let s = 1; s <= steps; s++) {
+    const t = s / steps;
+    const mt = 1 - t;
+    const x =
+      mt * mt * mt * x0 +
+      3 * mt * mt * t * cx1 +
+      3 * mt * t * t * cx2 +
+      t * t * t * x3;
+    const y =
+      mt * mt * mt * y0 +
+      3 * mt * mt * t * cy1 +
+      3 * mt * t * t * cy2 +
+      t * t * t * y3;
+    out.push([x, y]);
+  }
+  return out;
+}
+
+function sampleQuadBezierPoints(
+  x0: number,
+  y0: number,
+  cx: number,
+  cy: number,
+  x2: number,
+  y2: number,
+  steps = 5
+): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (let s = 1; s <= steps; s++) {
+    const t = s / steps;
+    const mt = 1 - t;
+    const x = mt * mt * x0 + 2 * mt * t * cx + t * t * x2;
+    const y = mt * mt * y0 + 2 * mt * t * cy + t * t * y2;
+    out.push([x, y]);
+  }
+  return out;
+}
+
+/**
+ * Pass 3 & Pass 4 Core Operator Inspector:
+ * Walks the PDF page operator list with full graphics state (CTM stack, stroke/fill color,
+ * dash patterns, caps/joins, opacity/alpha, clipping paths), decodes all path geometry
+ * (lines, rects, rounded rects, Bezier curves, polygons), AND extracts actual embedded
+ * image resources from page.objs / page.commonObjs / inline images.
+ */
 export async function analyzeOperatorListBounds(
   page: pdfjsLib.PDFPageProxy,
   baseTransform: number[],
   pageW: number,
-  pageH: number
+  pageH: number,
+  pageNumber = 1,
+  sharedImageResources?: Record<string, ExtractedImageResource>
 ): Promise<{
   vectorBBox?: RectPt;
   imageBBox?: RectPt;
   vectorPrimitives: ExtractedVectorPrimitive[];
+  rawVectorPaths: RawVectorPath[];
+  rawImagePlacements: RawImagePlacement[];
 }> {
   const vectorRects: RectPt[] = [];
   const imageRects: RectPt[] = [];
   const vectorPrimitives: ExtractedVectorPrimitive[] = [];
+  const rawVectorPaths: RawVectorPath[] = [];
+  const rawImagePlacements: RawImagePlacement[] = [];
+  const imageResources = sharedImageResources || {};
 
   const parseColorArg = (args: unknown[]): string | null => {
     if (!Array.isArray(args) || args.length === 0) return null;
@@ -336,16 +594,32 @@ export async function analyzeOperatorListBounds(
   try {
     const opList = await page.getOperatorList();
     const { OPS } = pdfjsLib;
-    const stack: Array<{
+
+    interface GState {
       ctm: number[];
       strokeColor: string;
       fillColor: string;
       lineWidth: number;
-    }> = [];
-    let ctm = [...baseTransform];
-    let strokeColor = '#1E293B';
-    let fillColor = 'transparent';
-    let lineWidth = 1;
+      dashArray: number[];
+      lineCap: 'butt' | 'round' | 'square';
+      lineJoin: 'miter' | 'round' | 'bevel';
+      fillAlpha: number;
+      strokeAlpha: number;
+    }
+
+    const stack: GState[] = [];
+    let state: GState = {
+      ctm: [...baseTransform],
+      strokeColor: '#1E293B',
+      fillColor: 'transparent',
+      lineWidth: 1,
+      dashArray: [],
+      lineCap: 'butt',
+      lineJoin: 'miter',
+      fillAlpha: 1,
+      strokeAlpha: 1,
+    };
+
     const pageArea = pageW * pageH;
 
     const strokeOps = new Set<number>([
@@ -365,52 +639,74 @@ export async function analyzeOperatorListBounds(
       OPS.closeEOFillStroke,
     ]);
 
+    let zSeq = 0;
+
     for (let i = 0; i < opList.fnArray.length; i++) {
       const fn = opList.fnArray[i];
       const args = opList.argsArray[i];
 
       if (fn === OPS.save) {
         stack.push({
-          ctm: [...ctm],
-          strokeColor,
-          fillColor,
-          lineWidth,
+          ctm: [...state.ctm],
+          strokeColor: state.strokeColor,
+          fillColor: state.fillColor,
+          lineWidth: state.lineWidth,
+          dashArray: [...state.dashArray],
+          lineCap: state.lineCap,
+          lineJoin: state.lineJoin,
+          fillAlpha: state.fillAlpha,
+          strokeAlpha: state.strokeAlpha,
         });
       } else if (fn === OPS.restore) {
         const prev = stack.pop();
         if (prev) {
-          ctm = prev.ctm;
-          strokeColor = prev.strokeColor;
-          fillColor = prev.fillColor;
-          lineWidth = prev.lineWidth;
+          state = prev;
         } else {
-          ctm = [...baseTransform];
+          state.ctm = [...baseTransform];
         }
       } else if (fn === OPS.transform && Array.isArray(args) && args.length >= 6) {
-        ctm = mulMatrix(ctm, args as number[]);
+        state.ctm = mulMatrix(state.ctm, args as number[]);
       } else if (fn === OPS.setLineWidth && Array.isArray(args) && args.length >= 1) {
-        lineWidth = Math.max(0.5, Number(args[0]) || 1);
+        state.lineWidth = Math.max(0.25, Number(args[0]) || 1);
+      } else if (fn === OPS.setLineCap && Array.isArray(args) && args.length >= 1) {
+        const capNum = Number(args[0]);
+        state.lineCap = capNum === 1 ? 'round' : capNum === 2 ? 'square' : 'butt';
+      } else if (fn === OPS.setLineJoin && Array.isArray(args) && args.length >= 1) {
+        const joinNum = Number(args[0]);
+        state.lineJoin = joinNum === 1 ? 'round' : joinNum === 2 ? 'bevel' : 'miter';
+      } else if (fn === OPS.setDash && Array.isArray(args) && Array.isArray(args[0])) {
+        state.dashArray = (args[0] as number[])
+          .map((n) => Number(n))
+          .filter((n) => Number.isFinite(n) && n > 0);
+      } else if (fn === OPS.setGState && Array.isArray(args) && Array.isArray(args[0])) {
+        for (const pair of args[0] as Array<[string, unknown]>) {
+          if (!Array.isArray(pair) || pair.length < 2) continue;
+          const [key, val] = pair;
+          if (key === 'ca' && typeof val === 'number') state.fillAlpha = val;
+          else if (key === 'CA' && typeof val === 'number') state.strokeAlpha = val;
+          else if (key === 'LW' && typeof val === 'number') state.lineWidth = val;
+        }
       } else if (fn === OPS.setStrokeRGBColor && Array.isArray(args)) {
         const parsed = parseColorArg(args);
-        if (parsed) strokeColor = parsed;
+        if (parsed) state.strokeColor = parsed;
       } else if (fn === OPS.setFillRGBColor && Array.isArray(args)) {
         const parsed = parseColorArg(args);
-        if (parsed) fillColor = parsed;
+        if (parsed) state.fillColor = parsed;
       } else if (fn === OPS.setStrokeGray && Array.isArray(args) && args.length >= 1) {
         const v = Number(args[0]);
-        strokeColor = rgbUnitToHex(v, v, v);
+        state.strokeColor = rgbUnitToHex(v, v, v);
       } else if (fn === OPS.setFillGray && Array.isArray(args) && args.length >= 1) {
         const v = Number(args[0]);
-        fillColor = rgbUnitToHex(v, v, v);
+        state.fillColor = rgbUnitToHex(v, v, v);
       } else if (fn === OPS.setStrokeCMYKColor && Array.isArray(args) && args.length >= 4) {
-        strokeColor = cmykToHex(
+        state.strokeColor = cmykToHex(
           Number(args[0]),
           Number(args[1]),
           Number(args[2]),
           Number(args[3])
         );
       } else if (fn === OPS.setFillCMYKColor && Array.isArray(args) && args.length >= 4) {
-        fillColor = cmykToHex(
+        state.fillColor = cmykToHex(
           Number(args[0]),
           Number(args[1]),
           Number(args[2]),
@@ -419,9 +715,10 @@ export async function analyzeOperatorListBounds(
       } else if (
         fn === OPS.paintImageXObject ||
         fn === OPS.paintInlineImageXObject ||
-        fn === OPS.paintImageMaskXObject
+        fn === OPS.paintImageMaskXObject ||
+        fn === OPS.paintImageXObjectRepeat
       ) {
-        // Unit square [0..1, 0..1] in image space
+        const ctm = state.ctm;
         const corners = [
           applyPoint(ctm, 0, 0),
           applyPoint(ctm, 1, 0),
@@ -440,10 +737,86 @@ export async function analyzeOperatorListBounds(
           pageW,
           pageH
         );
+
+        if (rect.width < 3 || rect.height < 3) continue;
+
         if (rect.width * rect.height < pageArea * 0.97) {
           imageRects.push(rect);
         }
-        // Only emit interactive image objects when image is smaller than a full-page scan background
+
+        // Compute displayed rotation from CTM basis vector
+        const imgAngleRad = Math.atan2(ctm[1], ctm[0]);
+        const imgRot = Math.round(((imgAngleRad * 180) / Math.PI) % 360);
+
+        const isMask = fn === OPS.paintImageMaskXObject;
+        const isInline = fn === OPS.paintInlineImageXObject;
+        const objName =
+          typeof args?.[0] === 'string'
+            ? (args[0] as string)
+            : `inline-${pageNumber}-${rawImagePlacements.length + 1}`;
+        const resourceId = `imgres-${objName}`;
+
+        if (!imageResources[resourceId]) {
+          let imgObj: PdfJsImageLike | null = null;
+          if (isInline || isMask) {
+            imgObj = (args?.[0] as PdfJsImageLike) || null;
+          } else if (typeof args?.[0] === 'string') {
+            imgObj =
+              (await resolvePdfJsObject(page.objs, args[0])) ||
+              (await resolvePdfJsObject(page.commonObjs, args[0], 600));
+          }
+          const encoded = encodePdfJsImageToDataUrl(
+            imgObj,
+            isMask ? state.fillColor : undefined
+          );
+          if (encoded) {
+            imageResources[resourceId] = {
+              id: resourceId,
+              sourceXObjectName: objName,
+              dataUrl: encoded.dataUrl,
+              mimeType: 'image/png',
+              naturalWidth: encoded.naturalWidth,
+              naturalHeight: encoded.naturalHeight,
+              hasAlpha: encoded.hasAlpha,
+              hasMask: isMask,
+              isInlineImage: isInline,
+              usageCount: 1,
+            };
+          }
+        } else {
+          imageResources[resourceId].usageCount += 1;
+        }
+
+        const res = imageResources[resourceId];
+        zSeq++;
+        rawImagePlacements.push({
+          id: `el-p${pageNumber}-img-${rawImagePlacements.length + 1}`,
+          pageNumber,
+          resourceId,
+          sourceXObjectName: objName,
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+          rotation: Math.abs(imgRot) <= 1 ? 0 : imgRot,
+          transformMatrix: [
+            Number(ctm[0].toFixed(4)),
+            Number(ctm[1].toFixed(4)),
+            Number(ctm[2].toFixed(4)),
+            Number(ctm[3].toFixed(4)),
+            Number(ctm[4].toFixed(2)),
+            Number(ctm[5].toFixed(2)),
+          ],
+          naturalWidth: res?.naturalWidth || Math.round(rect.width),
+          naturalHeight: res?.naturalHeight || Math.round(rect.height),
+          hasAlpha: Boolean(res?.hasAlpha),
+          hasMask: isMask,
+          isInlineImage: isInline,
+          isImageMask: isMask,
+          zOrder: zSeq,
+          originalObjectRef: objName,
+        });
+
         if (
           rect.width * rect.height < pageArea * 0.85 &&
           rect.width >= 10 &&
@@ -458,57 +831,104 @@ export async function analyzeOperatorListBounds(
           });
         }
       } else if (fn === OPS.constructPath && Array.isArray(args) && args.length >= 2) {
-        // pdfjs-dist v6 format: args = [paintOpNumber, [Float32Array], minMaxFloat32Array]
-        // Legacy format: args = [subOpsArray, coordsArray]
+        const ctm = state.ctm;
         const isV6Format = typeof args[0] === 'number';
         let paintOp: number | undefined;
-        const pts: Array<[number, number]> = [];
-        let isClosedRectShape = false;
+        const commands: VectorPathCommand[] = [];
+        const sampledPts: Array<[number, number]> = [];
+        let isClosed = false;
+        let curX = 0;
+        let curY = 0;
+        let startX = 0;
+        let startY = 0;
 
         if (isV6Format) {
           paintOp = args[0] as number;
-          const minMax = args[2] as ArrayLike<number> | undefined;
           const pathBufWrap = args[1] as Array<ArrayLike<number>> | undefined;
           const buf = Array.isArray(pathBufWrap) ? pathBufWrap[0] : undefined;
 
-          if (minMax && minMax.length >= 4) {
-            const minX = minMax[0];
-            const minY = minMax[1];
-            const maxX = minMax[2];
-            const maxY = minMax[3];
-            pts.push(
-              applyPoint(ctm, minX, minY),
-              applyPoint(ctm, maxX, minY),
-              applyPoint(ctm, minX, maxY),
-              applyPoint(ctm, maxX, maxY)
-            );
-          }
-
-          // Inspect packed path buffer to distinguish thin lines vs closed shapes/rectangles
-          if (buf && buf.length >= 6) {
-            let lineSegments = 0;
-            let hasClose = false;
+          if (buf && buf.length >= 3) {
             let idx = 0;
             while (idx < buf.length) {
               const op = buf[idx];
-              if (op === 0 || op === 1) {
-                if (op === 1) lineSegments++;
-                if (pts.length === 0 && idx + 2 < buf.length) {
-                  pts.push(applyPoint(ctm, buf[idx + 1], buf[idx + 2]));
-                }
+              if (op === 0 && idx + 2 < buf.length) {
+                const [px, py] = applyPoint(ctm, buf[idx + 1], buf[idx + 2]);
+                curX = px;
+                curY = py;
+                startX = px;
+                startY = py;
+                sampledPts.push([px, py]);
+                commands.push({ op: 'M', args: [Number(px.toFixed(2)), Number(py.toFixed(2))] });
                 idx += 3;
-              } else if (op === 2) {
+              } else if (op === 1 && idx + 2 < buf.length) {
+                const [px, py] = applyPoint(ctm, buf[idx + 1], buf[idx + 2]);
+                curX = px;
+                curY = py;
+                sampledPts.push([px, py]);
+                commands.push({ op: 'L', args: [Number(px.toFixed(2)), Number(py.toFixed(2))] });
+                idx += 3;
+              } else if (op === 2 && idx + 6 < buf.length) {
+                const [c1x, c1y] = applyPoint(ctm, buf[idx + 1], buf[idx + 2]);
+                const [c2x, c2y] = applyPoint(ctm, buf[idx + 3], buf[idx + 4]);
+                const [px, py] = applyPoint(ctm, buf[idx + 5], buf[idx + 6]);
+                const curveSamples = sampleCubicBezierPoints(
+                  curX,
+                  curY,
+                  c1x,
+                  c1y,
+                  c2x,
+                  c2y,
+                  px,
+                  py,
+                  6
+                );
+                sampledPts.push(...curveSamples);
+                commands.push({
+                  op: 'C',
+                  args: [c1x, c1y, c2x, c2y, px, py].map((n) => Number(n.toFixed(2))),
+                });
+                curX = px;
+                curY = py;
                 idx += 7;
-              } else if (op === 3) {
+              } else if (op === 3 && idx + 4 < buf.length) {
+                const [cx, cy] = applyPoint(ctm, buf[idx + 1], buf[idx + 2]);
+                const [px, py] = applyPoint(ctm, buf[idx + 3], buf[idx + 4]);
+                const quadSamples = sampleQuadBezierPoints(curX, curY, cx, cy, px, py, 5);
+                sampledPts.push(...quadSamples);
+                commands.push({
+                  op: 'Q',
+                  args: [cx, cy, px, py].map((n) => Number(n.toFixed(2))),
+                });
+                curX = px;
+                curY = py;
                 idx += 5;
               } else if (op === 4) {
-                hasClose = true;
+                isClosed = true;
+                commands.push({ op: 'Z', args: [] });
+                curX = startX;
+                curY = startY;
                 idx += 1;
               } else {
                 break;
               }
             }
-            isClosedRectShape = hasClose || lineSegments >= 3;
+          } else {
+            const minMax = args[2] as ArrayLike<number> | undefined;
+            if (minMax && minMax.length >= 4) {
+              const p1 = applyPoint(ctm, minMax[0], minMax[1]);
+              const p2 = applyPoint(ctm, minMax[2], minMax[1]);
+              const p3 = applyPoint(ctm, minMax[2], minMax[3]);
+              const p4 = applyPoint(ctm, minMax[0], minMax[3]);
+              sampledPts.push(p1, p2, p3, p4);
+              commands.push(
+                { op: 'M', args: [p1[0], p1[1]] },
+                { op: 'L', args: [p2[0], p2[1]] },
+                { op: 'L', args: [p3[0], p3[1]] },
+                { op: 'L', args: [p4[0], p4[1]] },
+                { op: 'Z', args: [] }
+              );
+              isClosed = true;
+            }
           }
         } else {
           paintOp = i + 1 < opList.fnArray.length ? opList.fnArray[i + 1] : undefined;
@@ -517,24 +937,59 @@ export async function analyzeOperatorListBounds(
           if (Array.isArray(subOps) && Array.isArray(coords)) {
             let ci = 0;
             for (const sop of subOps) {
-              if ((sop === OPS.moveTo || sop === OPS.lineTo) && ci + 1 < coords.length) {
-                pts.push(applyPoint(ctm, coords[ci], coords[ci + 1]));
+              if (sop === OPS.moveTo && ci + 1 < coords.length) {
+                const [px, py] = applyPoint(ctm, coords[ci], coords[ci + 1]);
+                curX = px;
+                curY = py;
+                startX = px;
+                startY = py;
+                sampledPts.push([px, py]);
+                commands.push({ op: 'M', args: [Number(px.toFixed(2)), Number(py.toFixed(2))] });
+                ci += 2;
+              } else if (sop === OPS.lineTo && ci + 1 < coords.length) {
+                const [px, py] = applyPoint(ctm, coords[ci], coords[ci + 1]);
+                curX = px;
+                curY = py;
+                sampledPts.push([px, py]);
+                commands.push({ op: 'L', args: [Number(px.toFixed(2)), Number(py.toFixed(2))] });
                 ci += 2;
               } else if (sop === OPS.curveTo && ci + 5 < coords.length) {
-                pts.push(applyPoint(ctm, coords[ci], coords[ci + 1]));
-                pts.push(applyPoint(ctm, coords[ci + 2], coords[ci + 3]));
-                pts.push(applyPoint(ctm, coords[ci + 4], coords[ci + 5]));
+                const [c1x, c1y] = applyPoint(ctm, coords[ci], coords[ci + 1]);
+                const [c2x, c2y] = applyPoint(ctm, coords[ci + 2], coords[ci + 3]);
+                const [px, py] = applyPoint(ctm, coords[ci + 4], coords[ci + 5]);
+                sampledPts.push(
+                  ...sampleCubicBezierPoints(curX, curY, c1x, c1y, c2x, c2y, px, py, 6)
+                );
+                commands.push({
+                  op: 'C',
+                  args: [c1x, c1y, c2x, c2y, px, py].map((n) => Number(n.toFixed(2))),
+                });
+                curX = px;
+                curY = py;
                 ci += 6;
+              } else if (sop === OPS.closePath) {
+                isClosed = true;
+                commands.push({ op: 'Z', args: [] });
+                curX = startX;
+                curY = startY;
               } else if (sop === OPS.rectangle && ci + 3 < coords.length) {
-                isClosedRectShape = true;
+                isClosed = true;
                 const rx = coords[ci];
                 const ry = coords[ci + 1];
                 const rw = coords[ci + 2];
                 const rh = coords[ci + 3];
-                pts.push(applyPoint(ctm, rx, ry));
-                pts.push(applyPoint(ctm, rx + rw, ry));
-                pts.push(applyPoint(ctm, rx, ry + rh));
-                pts.push(applyPoint(ctm, rx + rw, ry + rh));
+                const p1 = applyPoint(ctm, rx, ry);
+                const p2 = applyPoint(ctm, rx + rw, ry);
+                const p3 = applyPoint(ctm, rx + rw, ry + rh);
+                const p4 = applyPoint(ctm, rx, ry + rh);
+                sampledPts.push(p1, p2, p3, p4);
+                commands.push(
+                  { op: 'M', args: [p1[0], p1[1]] },
+                  { op: 'L', args: [p2[0], p2[1]] },
+                  { op: 'L', args: [p3[0], p3[1]] },
+                  { op: 'L', args: [p4[0], p4[1]] },
+                  { op: 'Z', args: [] }
+                );
                 ci += 4;
               }
             }
@@ -543,12 +998,16 @@ export async function analyzeOperatorListBounds(
 
         const isStrokeOp = paintOp !== undefined && strokeOps.has(paintOp);
         const isFillOp = paintOp !== undefined && fillOps.has(paintOp);
-        const isClipOp =
-          paintOp === OPS.clip || paintOp === OPS.eoClip || paintOp === OPS.endPath;
+        const isClipOp = paintOp === OPS.clip || paintOp === OPS.eoClip;
+        const isCloseStroke =
+          paintOp === OPS.closeStroke ||
+          paintOp === OPS.closeFillStroke ||
+          paintOp === OPS.closeEOFillStroke;
+        if (isCloseStroke) isClosed = true;
 
-        if (pts.length >= 2) {
-          const xs = pts.map((p) => p[0]);
-          const ys = pts.map((p) => p[1]);
+        if (sampledPts.length >= 2 && (isStrokeOp || isFillOp)) {
+          const xs = sampledPts.map((p) => p[0]);
+          const ys = sampledPts.map((p) => p[1]);
           const rawW = Math.max(...xs) - Math.min(...xs);
           const rawH = Math.max(...ys) - Math.min(...ys);
           const rect = clampBox(
@@ -556,13 +1015,49 @@ export async function analyzeOperatorListBounds(
             pageW,
             pageH
           );
-          // Ignore full-page background rectangles (>96% area) and pure clipping paths
-          if (
-            !isClipOp &&
-            rect.width * rect.height < pageArea * 0.96 &&
-            (rawW > 1 || rawH > 1)
-          ) {
+
+          if ((rawW > 1 || rawH > 1) && rect.width * rect.height < pageArea * 0.96) {
             vectorRects.push(rect);
+            zSeq++;
+
+            const flatPts: number[] = [];
+            for (const p of sampledPts) {
+              flatPts.push(Number(p[0].toFixed(2)), Number(p[1].toFixed(2)));
+            }
+
+            rawVectorPaths.push({
+              id: `el-p${pageNumber}-vec-${rawVectorPaths.length + 1}`,
+              pageNumber,
+              commands,
+              points: flatPts,
+              bbox: rect,
+              isClosed,
+              isFilled: isFillOp,
+              isStroked: isStrokeOp,
+              isClippingPath: isClipOp,
+              strokeColor: isStrokeOp ? state.strokeColor : undefined,
+              fillColor:
+                isFillOp && state.fillColor !== 'transparent' ? state.fillColor : undefined,
+              strokeWidth: state.lineWidth,
+              dashArray: [...state.dashArray],
+              lineCap: state.lineCap,
+              lineJoin: state.lineJoin,
+              opacity: Number(
+                Math.min(
+                  isFillOp ? state.fillAlpha : 1,
+                  isStrokeOp ? state.strokeAlpha : 1
+                ).toFixed(2)
+              ),
+              transformMatrix: [
+                Number(ctm[0].toFixed(4)),
+                Number(ctm[1].toFixed(4)),
+                Number(ctm[2].toFixed(4)),
+                Number(ctm[3].toFixed(4)),
+                Number(ctm[4].toFixed(2)),
+                Number(ctm[5].toFixed(2)),
+              ],
+              zOrder: zSeq,
+            });
 
             if (!isFillOp && (rawH <= 3 || rawW <= 3)) {
               vectorPrimitives.push({
@@ -571,26 +1066,24 @@ export async function analyzeOperatorListBounds(
                 y: rect.y,
                 width: Math.max(4, Number(rawW.toFixed(2))),
                 height: Math.max(2, Number(rawH.toFixed(2))),
-                strokeColor,
-                lineWidth,
+                strokeColor: state.strokeColor,
+                lineWidth: state.lineWidth,
                 hasStroke: true,
                 hasFill: false,
               });
-            } else if (
-              (isClosedRectShape || isFillOp || isStrokeOp) &&
-              rawW >= 8 &&
-              rawH >= 6 &&
-              (isStrokeOp || isFillOp)
-            ) {
+            } else if (rawW >= 6 && rawH >= 6) {
               vectorPrimitives.push({
                 kind: 'rect',
                 x: rect.x,
                 y: rect.y,
                 width: rect.width,
                 height: rect.height,
-                strokeColor: isStrokeOp ? strokeColor : undefined,
-                fillColor: isFillOp && fillColor !== 'transparent' ? fillColor : undefined,
-                lineWidth,
+                strokeColor: isStrokeOp ? state.strokeColor : undefined,
+                fillColor:
+                  isFillOp && state.fillColor !== 'transparent'
+                    ? state.fillColor
+                    : undefined,
+                lineWidth: state.lineWidth,
                 hasStroke: isStrokeOp,
                 hasFill: isFillOp,
               });
@@ -600,13 +1093,15 @@ export async function analyzeOperatorListBounds(
       }
     }
   } catch {
-    // Non-fatal fallback to pixel + text scan
+    // Non-fatal fallback to text + canvas scan
   }
 
   return {
     vectorBBox: unionRects(vectorRects),
     imageBBox: unionRects(imageRects),
     vectorPrimitives,
+    rawVectorPaths,
+    rawImagePlacements,
   };
 }
 
@@ -622,8 +1117,6 @@ function scanCanvasContentBounds(
   if (width <= 0 || height <= 0) return undefined;
 
   const imgData = ctx.getImageData(0, 0, width, height).data;
-
-  // Sample outer corners to determine page background RGB cleanly
   const sampleOffsets = [
     0,
     (width - 1) * 4,
@@ -741,7 +1234,6 @@ function buildDetectedBounds(
     textItems.map((t) => ({ x: t.x, y: t.y, width: t.width, height: t.height }))
   );
 
-  // Combine pixel outer ink bbox with text bbox; also include vector/image if pixel bbox unavailable
   const candidates: RectPt[] = [];
   if (pixelBBox) candidates.push(pixelBBox);
   if (textBBox) candidates.push(textBBox);
@@ -771,6 +1263,33 @@ function buildDetectedBounds(
   };
 }
 
+/**
+ * Pass 5 Helper: Checks whether an image region lacks usable native PDF text.
+ * Prevents duplicate OCR text over pages or sub-regions that already have native text runs.
+ */
+function imageRegionNeedsOcr(
+  region: RectPt,
+  nativeTextRuns: RawTextRun[]
+): boolean {
+  if (region.width < 48 || region.height < 20) return false;
+  const regionArea = region.width * region.height;
+  let coveredArea = 0;
+  let overlappingCount = 0;
+  for (const t of nativeTextRuns) {
+    const inter = rectIntersectionArea(region, {
+      x: t.x,
+      y: t.y,
+      width: t.width,
+      height: t.height,
+    });
+    if (inter > 0) {
+      coveredArea += inter;
+      overlappingCount++;
+    }
+  }
+  return overlappingCount < 2 && coveredArea / Math.max(1, regionArea) < 0.04;
+}
+
 export async function renderPdfPagesForStudio(
   pdfBytes: Uint8Array,
   options: {
@@ -785,6 +1304,7 @@ export async function renderPdfPagesForStudio(
   pageCount: number;
   pages: RenderedPdfPageData[];
   originalPages: OriginalPageMeta[];
+  imageResources: Record<string, ExtractedImageResource>;
 }> {
   const {
     renderScale = 1.8,
@@ -802,6 +1322,7 @@ export async function renderPdfPagesForStudio(
 
   const pages: RenderedPdfPageData[] = [];
   const originalPages: OriginalPageMeta[] = [];
+  const imageResources: Record<string, ExtractedImageResource> = {};
   let ocrWorker: Awaited<ReturnType<typeof createWorker>> | null = null;
 
   try {
@@ -809,7 +1330,7 @@ export async function renderPdfPagesForStudio(
       if (isCancelled?.()) {
         throw new Error('PDF scan cancelled.');
       }
-      onProgress?.('Reading PDF page & extracting structure', pageNum, pageCount);
+      onProgress?.('Reading PDF page & rendering reference bitmap', pageNum, pageCount);
       const page = await pdf.getPage(pageNum);
       const baseViewport = page.getViewport({ scale: 1 });
       const widthPt = baseViewport.width;
@@ -817,7 +1338,6 @@ export async function renderPdfPagesForStudio(
       const orientation: 'portrait' | 'landscape' =
         widthPt > heightPt ? 'landscape' : 'portrait';
 
-      // Adapt render scale on smaller viewports or multi-page documents to conserve device memory
       const isNarrowViewport =
         typeof window !== 'undefined' && window.innerWidth < 768;
       const effectiveScale =
@@ -842,7 +1362,6 @@ export async function renderPdfPagesForStudio(
         canvas,
       }).promise;
 
-      // Use compressed JPEG previews on non-primary or mobile multi-page pages to save IndexedDB RAM
       const useCompactPreview = pageNum > 2 || (isNarrowViewport && pageCount > 1);
       const imageBase64 = useCompactPreview
         ? canvas.toDataURL('image/jpeg', 0.82)
@@ -854,22 +1373,29 @@ export async function renderPdfPagesForStudio(
         heightPt
       );
 
-      onProgress?.('Extracting PDF text, fonts & coordinates', pageNum, pageCount);
-      // Extract exact PDF.js text coordinates and sample exact rendered colors before releasing canvas
+      // PASS 2: Detailed Text Extraction (individual runs, baseline, transform matrix, rotation)
+      onProgress?.('Pass 2: Extracting text runs, baselines & typography', pageNum, pageCount);
       const textContent = await page.getTextContent();
       const extractedTextItems: ExtractedTextItem[] = [];
+      const rawTextRuns: RawTextRun[] = [];
       const stylesMap = (textContent.styles || {}) as Record<
         string,
         { fontFamily?: string; ascent?: number; descent?: number }
       >;
 
+      let runIdx = 0;
       for (const item of textContent.items) {
         if (!('str' in item) || !item.str.trim()) continue;
-        const tx = pdfjsLib.Util.transform(
-          baseViewport.transform,
-          item.transform
-        );
-        const fontHeight = Math.hypot(tx[2], tx[3]) || Math.abs(item.height) || 11;
+        const tx = pdfjsLib.Util.transform(baseViewport.transform, item.transform);
+        const fontHeight =
+          Math.hypot(tx[0], tx[1]) ||
+          Math.hypot(tx[2], tx[3]) ||
+          Math.abs(item.height) ||
+          11;
+        const angleRad = Math.atan2(tx[1], tx[0]);
+        const rotDeg = Number((((angleRad * 180) / Math.PI) % 360).toFixed(2));
+        const normalizedRot = Math.abs(rotDeg) <= 1 ? 0 : rotDeg;
+
         const x = tx[4];
         const yBaseline = tx[5];
         const y = Math.max(0, yBaseline - fontHeight * 0.85);
@@ -883,6 +1409,16 @@ export async function renderPdfPagesForStudio(
           height,
         });
 
+        runIdx++;
+        const matrixTuple: [number, number, number, number, number, number] = [
+          Number(tx[0].toFixed(4)),
+          Number(tx[1].toFixed(4)),
+          Number(tx[2].toFixed(4)),
+          Number(tx[3].toFixed(4)),
+          Number(tx[4].toFixed(2)),
+          Number(tx[5].toFixed(2)),
+        ];
+
         extractedTextItems.push({
           text: item.str,
           x: Number(x.toFixed(2)),
@@ -895,87 +1431,206 @@ export async function renderPdfPagesForStudio(
           fontWeight: fontMeta.fontWeight,
           fontStyle: fontMeta.fontStyle,
           color: sampledColor,
+          rotation: normalizedRot,
           confidence: 0.98,
           fromOcr: false,
+          baselineY: Number(yBaseline.toFixed(2)),
+          transformMatrix: matrixTuple,
+          hasEOL: Boolean(item.hasEOL),
+        });
+
+        rawTextRuns.push({
+          id: `run-p${pageNum}-${runIdx}`,
+          pageNumber: pageNum,
+          text: item.str,
+          x: Number(x.toFixed(2)),
+          y: Number(y.toFixed(2)),
+          width: Number(width.toFixed(2)),
+          height: Number(height.toFixed(2)),
+          baselineY: Number(yBaseline.toFixed(2)),
+          rotation: normalizedRot,
+          transformMatrix: matrixTuple,
+          fontName: item.fontName || 'Helvetica',
+          fontFamily: fontMeta.resolvedFontFamily,
+          fontSize: Number(fontHeight.toFixed(2)),
+          fontWeight: fontMeta.fontWeight,
+          fontStyle: fontMeta.fontStyle,
+          color: sampledColor,
+          hasEOL: Boolean(item.hasEOL),
+          confidence: 0.98,
+          sourceOrigin: 'original_pdf',
+          originalObjectRef: item.fontName,
+          zOrder: 1000 + runIdx,
         });
       }
 
-      let usedOcr = false;
-      // If scanned / image-based PDF (very few text items) and OCR enabled
-      if (
-        enableOcrFallback &&
-        extractedTextItems.length < 3 &&
-        pageNum <= pagesToProcess
-      ) {
-        onProgress?.('Running local Tesseract OCR on scanned page', pageNum, pageCount);
-        if (!ocrWorker) {
-          ocrWorker = await createWorker(ocrLanguage);
-        }
-        const ocrResult = await ocrWorker.recognize(imageBase64);
-        const words = (ocrResult.data as unknown as {
-          blocks?: Array<{
-            paragraphs?: Array<{
-              lines?: Array<{
-                text: string;
-                confidence?: number;
-                bbox: { x0: number; y0: number; x1: number; y1: number };
-              }>;
-            }>;
-          }>;
-        }).blocks;
+      // PASS 3 & PASS 4: Vector Graphics & Real Embedded Image Extraction
+      onProgress?.('Pass 3 & 4: Extracting vector paths & embedded images', pageNum, pageCount);
+      const {
+        vectorBBox,
+        imageBBox,
+        vectorPrimitives,
+        rawVectorPaths,
+        rawImagePlacements,
+      } = await analyzeOperatorListBounds(
+        page,
+        baseViewport.transform,
+        widthPt,
+        heightPt,
+        pageNum,
+        imageResources
+      );
 
-        if (words) {
-          for (const block of words) {
-            for (const para of block.paragraphs || []) {
-              for (const line of para.lines || []) {
-                const txt = (line.text || '').trim();
-                if (!txt) continue;
-                const xPt = line.bbox.x0 / effectiveScale;
-                const yPt = line.bbox.y0 / effectiveScale;
-                const wPt = (line.bbox.x1 - line.bbox.x0) / effectiveScale;
-                const hPt = (line.bbox.y1 - line.bbox.y0) / effectiveScale;
-                const ocrColor = sampleTextColorFromCanvas(canvas, effectiveScale, {
-                  x: xPt,
-                  y: yPt,
-                  width: wPt,
-                  height: hPt,
-                });
-                const lineConf =
-                  typeof line.confidence === 'number'
-                    ? Math.max(0.2, Math.min(0.98, line.confidence / 100))
-                    : 0.72;
-                extractedTextItems.push({
-                  text: txt,
-                  x: Number(xPt.toFixed(2)),
-                  y: Number(yPt.toFixed(2)),
-                  width: Number(Math.max(8, wPt).toFixed(2)),
-                  height: Number(Math.max(10, hPt).toFixed(2)),
-                  fontSize: Number(Math.max(8, hPt * 0.78).toFixed(1)),
-                  fontName: 'Helvetica',
-                  resolvedFontFamily: 'Helvetica',
-                  fontWeight: 'normal',
-                  fontStyle: 'normal',
-                  color: ocrColor,
-                  confidence: Number(lineConf.toFixed(2)),
-                  fromOcr: true,
-                });
-              }
+      // PASS 5: Region-Aware Local Tesseract OCR
+      // Runs on scanned pages (< 3 text runs) OR large non-text image regions lacking native PDF text
+      let usedOcr = false;
+      let ocrRegionsCount = 0;
+
+      if (enableOcrFallback && pageNum <= pagesToProcess) {
+        const ocrTargetRegions: Array<{ region: RectPt; imageDataUrl: string; scaleToPt: number }> = [];
+
+        if (rawTextRuns.length < 3) {
+          ocrTargetRegions.push({
+            region: { x: 0, y: 0, width: widthPt, height: heightPt },
+            imageDataUrl: imageBase64,
+            scaleToPt: effectiveScale,
+          });
+        } else {
+          // Check if any large raster image contains no native PDF text over it (e.g., scanned receipt/stamp region)
+          for (const imgP of rawImagePlacements) {
+            const imgRes = imageResources[imgP.resourceId];
+            if (!imgRes?.dataUrl) continue;
+            if (imgP.width >= 90 && imgP.height >= 40 && imageRegionNeedsOcr(imgP, rawTextRuns)) {
+              ocrTargetRegions.push({
+                region: { x: imgP.x, y: imgP.y, width: imgP.width, height: imgP.height },
+                imageDataUrl: imgRes.dataUrl,
+                scaleToPt: imgP.naturalWidth / Math.max(1, imgP.width),
+              });
             }
           }
-          usedOcr = true;
+        }
+
+        if (ocrTargetRegions.length > 0) {
+          onProgress?.('Pass 5: Running local Tesseract OCR on image regions', pageNum, pageCount);
+          if (!ocrWorker) {
+            ocrWorker = await createWorker(ocrLanguage);
+          }
+
+          for (const target of ocrTargetRegions) {
+            try {
+              const ocrResult = await ocrWorker.recognize(target.imageDataUrl);
+              const blocks = (
+                ocrResult.data as unknown as {
+                  blocks?: Array<{
+                    paragraphs?: Array<{
+                      lines?: Array<{
+                        text: string;
+                        confidence?: number;
+                        bbox: { x0: number; y0: number; x1: number; y1: number };
+                      }>;
+                    }>;
+                  }>;
+                }
+              ).blocks;
+
+              let addedFromRegion = 0;
+              if (blocks) {
+                for (const block of blocks) {
+                  for (const para of block.paragraphs || []) {
+                    for (const line of para.lines || []) {
+                      const txt = (line.text || '').trim();
+                      if (!txt || txt.length < 2) continue;
+                      const xPt = target.region.x + line.bbox.x0 / target.scaleToPt;
+                      const yPt = target.region.y + line.bbox.y0 / target.scaleToPt;
+                      const wPt = (line.bbox.x1 - line.bbox.x0) / target.scaleToPt;
+                      const hPt = (line.bbox.y1 - line.bbox.y0) / target.scaleToPt;
+
+                      // Never duplicate native PDF text already occupying the same bbox
+                      const candidateRect: RectPt = {
+                        x: xPt,
+                        y: yPt,
+                        width: Math.max(8, wPt),
+                        height: Math.max(8, hPt),
+                      };
+                      const overlapsNative = rawTextRuns.some(
+                        (n) =>
+                          n.sourceOrigin === 'original_pdf' &&
+                          rectIntersectionArea(candidateRect, n) /
+                            Math.max(1, candidateRect.width * candidateRect.height) >
+                            0.25
+                      );
+                      if (overlapsNative) continue;
+
+                      const ocrColor = sampleTextColorFromCanvas(canvas, effectiveScale, {
+                        x: xPt,
+                        y: yPt,
+                        width: wPt,
+                        height: hPt,
+                      });
+                      const lineConf =
+                        typeof line.confidence === 'number'
+                          ? Math.max(0.25, Math.min(0.98, line.confidence / 100))
+                          : 0.72;
+                      const estFs = Number(Math.max(7.5, hPt * 0.78).toFixed(1));
+
+                      runIdx++;
+                      addedFromRegion++;
+                      extractedTextItems.push({
+                        text: txt,
+                        x: Number(xPt.toFixed(2)),
+                        y: Number(yPt.toFixed(2)),
+                        width: Number(Math.max(8, wPt).toFixed(2)),
+                        height: Number(Math.max(10, hPt).toFixed(2)),
+                        fontSize: estFs,
+                        fontName: 'Helvetica',
+                        resolvedFontFamily: 'Helvetica',
+                        fontWeight: 'normal',
+                        fontStyle: 'normal',
+                        color: ocrColor,
+                        rotation: 0,
+                        confidence: Number(lineConf.toFixed(2)),
+                        fromOcr: true,
+                        baselineY: Number((yPt + hPt * 0.82).toFixed(2)),
+                      });
+
+                      rawTextRuns.push({
+                        id: `ocr-p${pageNum}-${runIdx}`,
+                        pageNumber: pageNum,
+                        text: txt,
+                        x: Number(xPt.toFixed(2)),
+                        y: Number(yPt.toFixed(2)),
+                        width: Number(Math.max(8, wPt).toFixed(2)),
+                        height: Number(Math.max(10, hPt).toFixed(2)),
+                        baselineY: Number((yPt + hPt * 0.82).toFixed(2)),
+                        rotation: 0,
+                        transformMatrix: [estFs, 0, 0, -estFs, xPt, yPt + hPt * 0.82],
+                        fontName: 'Helvetica',
+                        fontFamily: 'Helvetica',
+                        fontSize: estFs,
+                        fontWeight: 'normal',
+                        fontStyle: 'normal',
+                        color: ocrColor,
+                        confidence: Number(lineConf.toFixed(2)),
+                        sourceOrigin: 'scanned_ocr',
+                        zOrder: 1500 + runIdx,
+                      });
+                    }
+                  }
+                }
+              }
+              if (addedFromRegion > 0) {
+                usedOcr = true;
+                ocrRegionsCount++;
+              }
+            } catch {
+              // Skip failed OCR region safely without failing whole scan
+            }
+          }
         }
       }
 
       releaseCanvas(canvas);
       await yieldToMainThread();
-      onProgress?.('Inspecting vector shapes, borders & images', pageNum, pageCount);
-      const { vectorBBox, imageBBox, vectorPrimitives } =
-        await analyzeOperatorListBounds(
-          page,
-          baseViewport.transform,
-          widthPt,
-          heightPt
-        );
 
       const detectedBounds = buildDetectedBounds(
         widthPt,
@@ -995,6 +1650,7 @@ export async function renderPdfPagesForStudio(
         previewImageDataUrl: imageBase64,
         contentBBox: detectedBounds.contentBBox,
         detectedBounds,
+        ocrRegionsCount,
       });
 
       if (pageNum <= pagesToProcess) {
@@ -1005,8 +1661,12 @@ export async function renderPdfPagesForStudio(
           orientation,
           imageBase64,
           extractedTextItems,
+          rawTextRuns,
+          rawVectorPaths,
+          rawImagePlacements,
           vectorPrimitives,
           usedOcr,
+          ocrRegionsCount,
           detectedBounds,
         });
       }
@@ -1017,7 +1677,7 @@ export async function renderPdfPagesForStudio(
     }
   }
 
-  return { pageCount, pages, originalPages };
+  return { pageCount, pages, originalPages, imageResources };
 }
 
 export async function detectPageContentBoundsFromBase64(
@@ -1050,7 +1710,8 @@ export async function detectPageContentBoundsFromBase64(
       page,
       baseViewport.transform,
       baseViewport.width,
-      baseViewport.height
+      baseViewport.height,
+      clampedPage
     );
 
     const tc = await page.getTextContent();
@@ -1058,7 +1719,11 @@ export async function detectPageContentBoundsFromBase64(
     for (const item of tc.items) {
       if (!('str' in item) || !item.str.trim()) continue;
       const tx = pdfjsLib.Util.transform(baseViewport.transform, item.transform);
-      const fontHeight = Math.hypot(tx[2], tx[3]) || Math.abs(item.height) || 11;
+      const fontHeight =
+        Math.hypot(tx[0], tx[1]) ||
+        Math.hypot(tx[2], tx[3]) ||
+        Math.abs(item.height) ||
+        11;
       textItems.push({
         text: item.str,
         x: Number(tx[4].toFixed(2)),

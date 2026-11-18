@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Clock,
   GitCompare,
@@ -52,6 +52,13 @@ export const VersionHistoryModal: React.FC<VersionHistoryModalProps> = ({
   const [versionNote, setVersionNote] = useState('');
   const [compareIdx, setCompareIdx] = useState<number | null>(null);
   const [revertMessage, setRevertMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setCompareIdx(null);
+    setRevertMessage(null);
+    setVersionNote('');
+  }, [isOpen, project.id]);
 
   const versions = project.versions || [];
   const auditLogs = project.operationLog || [];

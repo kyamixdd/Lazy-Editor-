@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Loader2, RotateCcw, ScanText, Sparkles } from 'lucide-react';
 import {
   DocumentElement,
@@ -51,16 +51,27 @@ export const RestorationStudioModal: React.FC<RestorationStudioModalProps> = ({
   const [applyingAll, setApplyingAll] = useState(false);
   const [runningOcr, setRunningOcr] = useState(false);
   const [ocrStatus, setOcrStatus] = useState<string | null>(null);
+  const activeSessionRef = useRef(true);
 
   useEffect(() => {
-    if (!isOpen) return;
+    activeSessionRef.current = isOpen;
+    if (!isOpen) {
+      setAfterUrl(null);
+      setShowBefore(false);
+      setProcessing(false);
+      setApplyingAll(false);
+      setRunningOcr(false);
+      return;
+    }
     setConfig(
       pageMeta?.restoration
         ? { ...pageMeta.restoration, enabled: true }
         : { ...DEFAULT_RESTORATION_CONFIG, enabled: true }
     );
+    setAfterUrl(null);
+    setShowBefore(false);
     setOcrStatus(null);
-  }, [isOpen, currentPage]);
+  }, [isOpen, currentPage, project.id, pageMeta?.restoration]);
 
   // Load original crisp preview
   useEffect(() => {
@@ -116,10 +127,15 @@ export const RestorationStudioModal: React.FC<RestorationStudioModalProps> = ({
     try {
       const nextCfg: PageRestorationConfig = { ...config, enabled: true };
       const restored = await applyRestorationToDataUrl(beforeUrl, nextCfg);
+      if (!activeSessionRef.current) return;
       onApplyPageRestoration([currentPage], nextCfg, { [currentPage]: restored });
       onClose();
+    } catch (err) {
+      if (activeSessionRef.current) {
+        setOcrStatus(err instanceof Error ? err.message : 'Restoration failed on this page.');
+      }
     } finally {
-      setProcessing(false);
+      if (activeSessionRef.current) setProcessing(false);
     }
   };
 
@@ -133,6 +149,7 @@ export const RestorationStudioModal: React.FC<RestorationStudioModalProps> = ({
         (_, i) => i + 1
       );
       for (const p of allPageNums) {
+        if (!activeSessionRef.current) return;
         const meta = project.originalPages.find((m) => m.pageNumber === p);
         let src = meta?.previewImageDataUrl;
         if (!src && project.sourcePdfBase64) {
@@ -143,14 +160,20 @@ export const RestorationStudioModal: React.FC<RestorationStudioModalProps> = ({
               1.4
             )) || undefined;
         }
+        if (!activeSessionRef.current) return;
         if (src) {
           previewsByPage[p] = await applyRestorationToDataUrl(src, nextCfg);
         }
       }
+      if (!activeSessionRef.current) return;
       onApplyPageRestoration(allPageNums, nextCfg, previewsByPage);
       onClose();
+    } catch (err) {
+      if (activeSessionRef.current) {
+        setOcrStatus(err instanceof Error ? err.message : 'Batch restoration failed.');
+      }
     } finally {
-      setApplyingAll(false);
+      if (activeSessionRef.current) setApplyingAll(false);
     }
   };
 

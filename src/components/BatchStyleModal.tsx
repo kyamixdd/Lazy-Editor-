@@ -1,7 +1,8 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Check, Layers } from 'lucide-react';
 import { AssetFontItem, DocumentElement, PDFProject } from '../types/pdfStudio';
 import { GlassButton, GlassCard, GlassModal } from './glass';
+import { NumericDraftInput } from './NumericDraftInput';
 
 interface BatchStyleModalProps {
   isOpen: boolean;
@@ -47,6 +48,11 @@ export const BatchStyleModal: React.FC<BatchStyleModalProps> = ({
   const [selectedPages, setSelectedPages] = useState<number[]>(allPages);
   const [filterMode, setFilterMode] = useState<FilterMode>('all_text');
   const [filterValue, setFilterValue] = useState<string>('');
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setSelectedPages(allPages);
+  }, [isOpen, project.id, allPages]);
 
   // Style property enable flags + values (strictly never touches `text`!)
   const [applyFontFamily, setApplyFontFamily] = useState(false);
@@ -363,11 +369,11 @@ export const BatchStyleModal: React.FC<BatchStyleModalProps> = ({
                 className="accent-[#101010] dark:accent-white"
               />
               <span className="w-24 text-[#555555] dark:text-[#B5B5B5]">Size (pt)</span>
-              <input
-                type="number"
+              <NumericDraftInput
                 disabled={!applyFontSize}
                 value={fontSize}
-                onChange={(e) => setFontSize(Number(e.target.value))}
+                commitOptions={{ min: 4, max: 144, decimals: 1 }}
+                onCommit={(val) => setFontSize(val)}
                 className="flex-1 px-2 py-1.5 rounded-lg studio-input disabled:opacity-45 tabular-nums"
               />
             </div>
@@ -479,19 +485,19 @@ export const BatchStyleModal: React.FC<BatchStyleModalProps> = ({
                 className="accent-[#101010] dark:accent-white"
               />
               <span className="w-24 text-[#555555] dark:text-[#B5B5B5]">X / Width</span>
-              <input
-                type="number"
+              <NumericDraftInput
                 disabled={!applyGeometryAlign}
                 value={targetX}
-                onChange={(e) => setTargetX(Number(e.target.value))}
+                commitOptions={{ decimals: 1 }}
+                onCommit={(val) => setTargetX(val)}
                 placeholder="X"
                 className="w-16 px-2 py-1 rounded-lg studio-input disabled:opacity-45 tabular-nums"
               />
-              <input
-                type="number"
+              <NumericDraftInput
                 disabled={!applyGeometryAlign}
                 value={targetWidth}
-                onChange={(e) => setTargetWidth(Number(e.target.value))}
+                commitOptions={{ min: 12, decimals: 1 }}
+                onCommit={(val) => setTargetWidth(val)}
                 placeholder="W"
                 className="w-16 px-2 py-1 rounded-lg studio-input disabled:opacity-45 tabular-nums"
               />

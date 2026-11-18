@@ -29,6 +29,7 @@ import { DEFAULT_SHORTCUTS } from '../utils/projectStorage';
 import { PAGE_PRESETS_PT } from '../utils/units';
 import { BrandMark } from './BrandMark';
 import { GlassButton, GlassCard } from './glass';
+import { NumericDraftInput } from './NumericDraftInput';
 
 interface SettingsViewProps {
   settings: StudioSettings;
@@ -443,15 +444,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <span className="font-medium text-[#555555] dark:text-[#B5B5B5]">
               Grid Spacing (pt)
             </span>
-            <input
-              type="number"
-              min={4}
-              max={72}
+            <NumericDraftInput
               value={settings.gridSizePt}
-              onChange={(e) =>
+              commitOptions={{ min: 4, max: 72, integer: true }}
+              onCommit={(val) =>
                 onUpdateSettings({
                   ...settings,
-                  gridSizePt: Math.max(4, Number(e.target.value) || 10),
+                  gridSizePt: val,
                 })
               }
               className="mt-1.5 w-full px-3 py-2 rounded-lg border studio-input tabular-nums"
@@ -462,15 +461,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <span className="font-medium text-[#555555] dark:text-[#B5B5B5]">
               Snap Tolerance (pt)
             </span>
-            <input
-              type="number"
-              min={2}
-              max={24}
+            <NumericDraftInput
               value={settings.snapThresholdPt}
-              onChange={(e) =>
+              commitOptions={{ min: 2, max: 24, integer: true }}
+              onCommit={(val) =>
                 onUpdateSettings({
                   ...settings,
-                  snapThresholdPt: Math.max(2, Number(e.target.value) || 6),
+                  snapThresholdPt: val,
                 })
               }
               className="mt-1.5 w-full px-3 py-2 rounded-lg border studio-input tabular-nums"
@@ -481,15 +478,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <span className="font-medium text-[#555555] dark:text-[#B5B5B5]">
               Duplicate X Offset (pt)
             </span>
-            <input
-              type="number"
-              min={-100}
-              max={200}
+            <NumericDraftInput
               value={settings.duplicateOffsetXPt ?? 14}
-              onChange={(e) =>
+              commitOptions={{ min: -100, max: 200 }}
+              onCommit={(val) =>
                 onUpdateSettings({
                   ...settings,
-                  duplicateOffsetXPt: Number(e.target.value) || 0,
+                  duplicateOffsetXPt: val,
                 })
               }
               className="mt-1.5 w-full px-3 py-2 rounded-lg border studio-input tabular-nums"
@@ -500,15 +495,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <span className="font-medium text-[#555555] dark:text-[#B5B5B5]">
               Duplicate Y Offset (pt)
             </span>
-            <input
-              type="number"
-              min={-100}
-              max={200}
+            <NumericDraftInput
               value={settings.duplicateOffsetYPt ?? 14}
-              onChange={(e) =>
+              commitOptions={{ min: -100, max: 200 }}
+              onCommit={(val) =>
                 onUpdateSettings({
                   ...settings,
-                  duplicateOffsetYPt: Number(e.target.value) || 0,
+                  duplicateOffsetYPt: val,
                 })
               }
               className="mt-1.5 w-full px-3 py-2 rounded-lg border studio-input tabular-nums"
@@ -790,10 +783,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   onClick={() =>
                     setCapturingAction(isCapturing ? null : actionId)
                   }
+                  onBlur={() => {
+                    if (isCapturing) setCapturingAction(null);
+                  }}
                   onKeyDown={(e) => {
                     if (!isCapturing) return;
                     e.preventDefault();
                     e.stopPropagation();
+                    if (e.key === 'Escape') {
+                      setCapturingAction(null);
+                      return;
+                    }
                     const combo = formatKeyCombo(e);
                     if (combo) {
                       onUpdateSettings({

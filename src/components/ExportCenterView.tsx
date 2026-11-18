@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
   AlertTriangle,
@@ -67,8 +67,10 @@ import {
   createDefaultPageConfig,
   ptToUnit,
 } from '../utils/units';
+import { triggerBlobDownload, triggerBytesDownload } from '../utils/downloadHelper';
 import { validateProject } from '../utils/validationEngine';
 import { GlassButton, GlassCard } from './glass';
+import { NumericDraftInput } from './NumericDraftInput';
 import { PageConfigurationModal } from './PageConfigurationModal';
 
 interface ExportCenterViewProps {
@@ -138,6 +140,33 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
   const [showPageSetupModal, setShowPageSetupModal] = useState(false);
   const [mergeFiles, setMergeFiles] = useState<Array<{ name: string; bytes: Uint8Array }>>([]);
   const mergeInputRef = useRef<HTMLInputElement>(null);
+  const lastExportObjectUrlRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (lastExportObjectUrlRef.current && lastExportObjectUrlRef.current !== lastExportUrl?.url) {
+      URL.revokeObjectURL(lastExportObjectUrlRef.current);
+    }
+    lastExportObjectUrlRef.current = lastExportUrl?.url ?? null;
+  }, [lastExportUrl]);
+
+  useEffect(() => {
+    return () => {
+      if (lastExportObjectUrlRef.current) {
+        URL.revokeObjectURL(lastExportObjectUrlRef.current);
+        lastExportObjectUrlRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    setLastExportUrl(null);
+    setPreviewPageImg(null);
+    setPreviewPageNum(1);
+    setExportError(null);
+    setMergeFiles([]);
+    setManagedExportResults(null);
+    setManagedExportMessage(null);
+  }, [project.id]);
 
   // Managed Batch Export Manager state (Module 11)
   const [activeNamingProfile, setActiveNamingProfile] = useState<ExportNamingProfile>(() =>
@@ -172,6 +201,7 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
   };
 
   const handleAutoFix = (issue: ValidationIssue) => {
+    const now = new Date().toISOString();
     if (issue.category === 'out_of_bounds' && issue.elementId) {
       onUpdateProject({
         ...project,
@@ -189,6 +219,7 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
             eraseOriginal: el.isUserAdded ? false : true,
           };
         }),
+        updatedAt: now,
       });
     } else if (issue.category === 'text_overflow' && issue.elementId) {
       onUpdateProject({
@@ -198,6 +229,7 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
             ? { ...el, height: el.height + 16 }
             : el
         ),
+        updatedAt: now,
       });
     } else if (issue.category === 'page_dimensions') {
       const safeMargin = Math.min(
@@ -215,6 +247,7 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
           marginLeftPt: safeMargin,
           marginRightPt: safeMargin,
         },
+        updatedAt: now,
       });
     } else if (issue.autoFixLabel === 'Reset Crop') {
       const p1 = project.originalPages[0];
@@ -228,6 +261,7 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
           boundaryMode: 'original_page',
           customCropRect: { x: 0, y: 0, width: w, height: h },
         },
+        updatedAt: now,
       });
     } else if (issue.autoFixLabel === 'Enable Fit-to-Page') {
       const currFit = normalizeFitConfig(project);
@@ -247,6 +281,7 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
           horizontalSpacingPt: Math.min(project.copiesConfig.horizontalSpacingPt, 14),
           verticalSpacingPt: Math.min(project.copiesConfig.verticalSpacingPt, 14),
         },
+        updatedAt: now,
       });
     } else if (issue.category === 'layout_drift' && issue.elementId) {
       onUpdateProject({
@@ -263,6 +298,7 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
               }
             : el
         ),
+        updatedAt: now,
       });
     } else if (issue.category === 'font_substitution') {
       updateExport({ embedFonts: true });
@@ -300,17 +336,21 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
 
   const handleDownloadManagedZip = async () => {
     if (!managedExportResults || managedExportResults.items.length === 0) return;
-    const zipBytes = await buildBatchZipArchive(
-      managedExportResults.items,
-      activeNamingProfile.includeBatchCsvReport
-    );
-    const blob = new Blob([zipBytes.slice().buffer], { type: 'application/zip' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${project.name.replace(/\s+/g, '_')}_managed_batch.zip`;
-    a.click();
-    URL.revokeObjectURL(url);
+    try {
+      const zipBytes = await buildBatchZipArchive(
+        managedExportResults.items,
+        activeNamingProfile.includeBatchCsvReport
+      );
+      triggerBytesDownload(
+        zipBytes,
+        `${project.name.replace(/\s+/g, '_')}_managed_batch.zip`,
+        'application/zip'
+      );
+    } catch (err) {
+      setManagedExportMessage(
+        err instanceof Error ? err.message : 'Failed to build ZIP archive.'
+      );
+    }
   };
 
   const handleSaveResultsToFolder = async () => {
@@ -375,13 +415,24 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
   };
 
   const handleMergeFilesPicked = async (files: FileList | null) => {
-    if (!files) return;
-    const list: Array<{ name: string; bytes: Uint8Array }> = [];
-    for (const f of Array.from(files)) {
-      const buf = await f.arrayBuffer();
-      list.push({ name: f.name, bytes: new Uint8Array(buf) });
+    if (!files || files.length === 0) return;
+    try {
+      const list: Array<{ name: string; bytes: Uint8Array }> = [];
+      for (const f of Array.from(files)) {
+        const buf = await f.arrayBuffer();
+        list.push({ name: f.name, bytes: new Uint8Array(buf) });
+      }
+      setMergeFiles((prev) => [...prev, ...list]);
+      setExportError(null);
+    } catch (err) {
+      setExportError(
+        err instanceof Error ? err.message : 'Failed to read merge PDF file.'
+      );
+    } finally {
+      if (mergeInputRef.current) {
+        mergeInputRef.current.value = '';
+      }
     }
-    setMergeFiles((prev) => [...prev, ...list]);
   };
 
   const loadExportedPreviewPage = async (bytes: Uint8Array, pageNum: number) => {
@@ -821,13 +872,10 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
                         onClick={() => {
                           if (!lastExportUrl.passport) return;
                           const csv = buildPassportCsv(lastExportUrl.passport);
-                          const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-                          const u = URL.createObjectURL(blob);
-                          const link = document.createElement('a');
-                          link.href = u;
-                          link.download = `${lastExportUrl.passport.fileName.replace(/\.[^.]+$/, '')}_passport.csv`;
-                          link.click();
-                          URL.revokeObjectURL(u);
+                          triggerBlobDownload(
+                            new Blob([csv], { type: 'text/csv;charset=utf-8' }),
+                            `${lastExportUrl.passport.fileName.replace(/\.[^.]+$/, '')}_passport.csv`
+                          );
                         }}
                         className="px-2.5 py-1 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.04] dark:hover:bg-white/[0.08] text-[11px] font-medium text-[#101010] dark:text-white"
                       >
@@ -837,14 +885,19 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
                         type="button"
                         onClick={async () => {
                           if (!lastExportUrl.passport) return;
-                          const bytes = await generatePassportPdfBytes(lastExportUrl.passport);
-                          const blob = new Blob([new Uint8Array(bytes)], { type: 'application/pdf' });
-                          const u = URL.createObjectURL(blob);
-                          const link = document.createElement('a');
-                          link.href = u;
-                          link.download = `${lastExportUrl.passport.fileName.replace(/\.[^.]+$/, '')}_passport.pdf`;
-                          link.click();
-                          URL.revokeObjectURL(u);
+                          try {
+                            const bytes = await generatePassportPdfBytes(lastExportUrl.passport);
+                            triggerBytesDownload(
+                              bytes,
+                              `${lastExportUrl.passport.fileName.replace(/\.[^.]+$/, '')}_passport.pdf`
+                            );
+                          } catch (err) {
+                            setExportError(
+                              err instanceof Error
+                                ? err.message
+                                : 'Failed to generate Passport PDF.'
+                            );
+                          }
                         }}
                         className="px-2.5 py-1 rounded-lg bg-[#101010] text-white dark:bg-white dark:text-[#050505] text-[11px] font-medium hover:opacity-90"
                       >
@@ -1070,14 +1123,10 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
             </label>
             <label className="block">
               <span className="text-[11px] text-[#888888] dark:text-[#858585]">Bleed (pt)</span>
-              <input
-                type="number"
-                min="0"
-                max="36"
+              <NumericDraftInput
                 value={exportConfig.bleedPt}
-                onChange={(e) =>
-                  updateExport({ bleedPt: Math.max(0, Number(e.target.value) || 0) })
-                }
+                commitOptions={{ min: 0, max: 36 }}
+                onCommit={(val) => updateExport({ bleedPt: val })}
                 className="mt-1 w-full px-2 py-1.5 rounded-xl studio-input tabular-nums"
               />
             </label>
@@ -1208,14 +1257,19 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
                   <button
                     type="button"
                     onClick={async () => {
-                      const bytes = await generatePassportPdfBytes(pass);
-                      const blob = new Blob([new Uint8Array(bytes)], { type: 'application/pdf' });
-                      const u = URL.createObjectURL(blob);
-                      const link = document.createElement('a');
-                      link.href = u;
-                      link.download = `${pass.fileName.replace(/\.[^.]+$/, '')}_passport.pdf`;
-                      link.click();
-                      URL.revokeObjectURL(u);
+                      try {
+                        const bytes = await generatePassportPdfBytes(pass);
+                        triggerBytesDownload(
+                          bytes,
+                          `${pass.fileName.replace(/\.[^.]+$/, '')}_passport.pdf`
+                        );
+                      } catch (err) {
+                        setExportError(
+                          err instanceof Error
+                            ? err.message
+                            : 'Failed to generate Passport PDF.'
+                        );
+                      }
                     }}
                     className="px-2 py-1 rounded-lg border border-black/15 dark:border-white/15 text-[11px] font-medium text-[#101010] dark:text-white hover:bg-black/[0.04] dark:hover:bg-white/[0.08]"
                   >
@@ -1366,15 +1420,13 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
               <span className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5]">
                 Pages per File Group
               </span>
-              <input
-                type="number"
-                min={1}
-                max={200}
+              <NumericDraftInput
                 value={activeNamingProfile.pageGroupSize}
-                onChange={(e) =>
+                commitOptions={{ min: 1, max: 200, integer: true }}
+                onCommit={(val) =>
                   setActiveNamingProfile((p) => ({
                     ...p,
-                    pageGroupSize: Math.max(1, Number(e.target.value) || 10),
+                    pageGroupSize: val,
                   }))
                 }
                 className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
@@ -1496,15 +1548,12 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
                   variant="glass"
                   size="md"
                   onClick={() => {
-                    const blob = new Blob([managedExportResults.csvReport], {
-                      type: 'text/csv;charset=utf-8;',
-                    });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `${project.name.replace(/\s+/g, '_')}_batch_report.csv`;
-                    a.click();
-                    URL.revokeObjectURL(url);
+                    triggerBlobDownload(
+                      new Blob([managedExportResults.csvReport], {
+                        type: 'text/csv;charset=utf-8;',
+                      }),
+                      `${project.name.replace(/\s+/g, '_')}_batch_report.csv`
+                    );
                   }}
                 >
                   <FileSpreadsheet className="w-3.5 h-3.5" />
@@ -1539,17 +1588,9 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
                 </div>
                 <button
                   type="button"
-                  onClick={() => {
-                    const blob = new Blob([item.bytes.slice().buffer], {
-                      type: item.mimeType,
-                    });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = item.fileName;
-                    a.click();
-                    URL.revokeObjectURL(url);
-                  }}
+                  onClick={() =>
+                    triggerBytesDownload(item.bytes, item.fileName, item.mimeType)
+                  }
                   className="px-2.5 py-1 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.04] dark:hover:bg-white/[0.08] text-[11px] font-medium text-[#101010] dark:text-white shrink-0"
                 >
                   Download

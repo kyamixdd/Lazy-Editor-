@@ -135,6 +135,7 @@ export const PreflightView: React.FC<PreflightViewProps> = ({
                 y: el.sourceOriginalRect.y,
                 width: el.sourceOriginalRect.width,
                 height: el.sourceOriginalRect.height,
+                eraseOriginal: false,
               }
             : el
         ),

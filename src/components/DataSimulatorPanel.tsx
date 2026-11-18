@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -36,6 +36,20 @@ export const DataSimulatorPanel: React.FC<DataSimulatorPanelProps> = ({
   > | null>(null);
 
   const safeIdx = totalRows > 0 ? Math.max(0, Math.min(recordIdx, totalRows - 1)) : 0;
+
+  useEffect(() => {
+    setRecordIdx(0);
+    setJumpInput('1');
+    setScanResult(null);
+  }, [project.id]);
+
+  useEffect(() => {
+    setRecordIdx((prev) => {
+      const clamped = totalRows > 0 ? Math.max(0, Math.min(prev, totalRows - 1)) : 0;
+      setJumpInput(String(clamped + 1));
+      return clamped;
+    });
+  }, [totalRows]);
 
   const toggleEdgeCase = (id: EdgeCaseId) => {
     setActiveEdgeCases((prev) =>

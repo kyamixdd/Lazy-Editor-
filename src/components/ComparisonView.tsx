@@ -76,11 +76,26 @@ export const ComparisonView: React.FC<ComparisonViewProps> = ({
   const [extComparison, setExtComparison] =
     useState<ExternalPdfComparisonResult | null>(null);
   const [comparingExt, setComparingExt] = useState(false);
+  const [extError, setExtError] = useState<string | null>(null);
 
   const fileARef = useRef<HTMLInputElement>(null);
   const fileBRef = useRef<HTMLInputElement>(null);
 
   const versions = project.versions || [];
+
+  useEffect(() => {
+    setBaselineIdx('original');
+    setSnapLeftIdx(0);
+    setSnapRightIdx(0);
+    setExtError(null);
+  }, [project.id]);
+
+  useEffect(() => {
+    const maxIdx = Math.max(0, versions.length - 1);
+    setSnapLeftIdx((i) => Math.min(i, maxIdx));
+    setSnapRightIdx((i) => Math.min(i, maxIdx));
+    setBaselineIdx((b) => (typeof b === 'number' && b > maxIdx ? 'original' : b));
+  }, [versions.length]);
 
   const summary = useMemo(() => {
     if (scopeMode === 'snapshot_vs_snapshot' && versions.length > 0) {
@@ -162,44 +177,47 @@ export const ComparisonView: React.FC<ComparisonViewProps> = ({
     customFonts,
   ]);
 
-  // Render Right/Edited or Snapshot B preview
+  // Render Right/Edited or Snapshot B preview (debounced to avoid regenerating PDF on every keystroke)
   useEffect(() => {
     if (scopeMode === 'two_pdfs') return;
     let cancelled = false;
-    const run = async () => {
-      setRenderingEdited(true);
-      try {
-        const targetSnap =
-          scopeMode === 'snapshot_vs_snapshot' ? versions[snapRightIdx] : undefined;
-        const tempProj: PDFProject = {
-          ...project,
-          ...(targetSnap
-            ? {
-                elements: targetSnap.elementsSnapshot,
-                pageConfig: targetSnap.pageConfigSnapshot,
-              }
-            : {}),
-          copiesConfig: { ...project.copiesConfig, enabled: false },
-          bulkConfig: { ...project.bulkConfig, enabled: false, totalOutputPages: 1 },
-          exportConfig: {
-            ...project.exportConfig,
-            mode: 'selected_pages',
-            selectedPagesRange: String(currentPage),
-          },
-        };
-        const out = await generateExportBytes(tempProj, { customFonts });
-        const b64 = uint8ArrayToBase64(out.data);
-        const img = await renderSinglePagePreview(b64, 1, 1.35);
-        if (!cancelled) setEditedPreviewUrl(img);
-      } catch {
-        if (!cancelled) setEditedPreviewUrl(null);
-      } finally {
-        if (!cancelled) setRenderingEdited(false);
-      }
-    };
-    void run();
+    setRenderingEdited(true);
+    const timer = window.setTimeout(() => {
+      const run = async () => {
+        try {
+          const targetSnap =
+            scopeMode === 'snapshot_vs_snapshot' ? versions[snapRightIdx] : undefined;
+          const tempProj: PDFProject = {
+            ...project,
+            ...(targetSnap
+              ? {
+                  elements: targetSnap.elementsSnapshot,
+                  pageConfig: targetSnap.pageConfigSnapshot,
+                }
+              : {}),
+            copiesConfig: { ...project.copiesConfig, enabled: false },
+            bulkConfig: { ...project.bulkConfig, enabled: false, totalOutputPages: 1 },
+            exportConfig: {
+              ...project.exportConfig,
+              mode: 'selected_pages',
+              selectedPagesRange: String(currentPage),
+            },
+          };
+          const out = await generateExportBytes(tempProj, { customFonts });
+          const b64 = uint8ArrayToBase64(out.data);
+          const img = await renderSinglePagePreview(b64, 1, 1.35);
+          if (!cancelled) setEditedPreviewUrl(img);
+        } catch {
+          if (!cancelled) setEditedPreviewUrl(null);
+        } finally {
+          if (!cancelled) setRenderingEdited(false);
+        }
+      };
+      void run();
+    }, 280);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
   }, [
     scopeMode,
@@ -255,10 +273,18 @@ export const ComparisonView: React.FC<ComparisonViewProps> = ({
     file: File | undefined
   ) => {
     if (!file) return;
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    const b64 = uint8ArrayToBase64(bytes);
-    if (slot === 'A') setExtPdfA({ name: file.name, b64, bytes });
-    else setExtPdfB({ name: file.name, b64, bytes });
+    setExtError(null);
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const b64 = uint8ArrayToBase64(bytes);
+      if (slot === 'A') setExtPdfA({ name: file.name, b64, bytes });
+      else setExtPdfB({ name: file.name, b64, bytes });
+    } catch (err) {
+      setExtError(err instanceof Error ? err.message : `Failed to load PDF ${slot}`);
+    } finally {
+      if (slot === 'A' && fileARef.current) fileARef.current.value = '';
+      if (slot === 'B' && fileBRef.current) fileBRef.current.value = '';
+    }
   };
 
   const pageMeta =
@@ -451,38 +477,45 @@ export const ComparisonView: React.FC<ComparisonViewProps> = ({
       )}
 
       {scopeMode === 'two_pdfs' && (
-        <GlassCard level={2} padding="sm" className="flex flex-wrap items-center justify-between gap-3 text-xs">
-          <div className="flex flex-wrap items-center gap-2">
-            <GlassButton
-              variant="glass"
-              size="sm"
-              onClick={() => fileARef.current?.click()}
-            >
-              <FileUp className="w-3.5 h-3.5" />
-              {extPdfA ? `PDF A: ${extPdfA.name}` : 'Upload PDF A'}
-            </GlassButton>
-            <GlassButton
-              variant="glass"
-              size="sm"
-              onClick={() => fileBRef.current?.click()}
-            >
-              <FileUp className="w-3.5 h-3.5" />
-              {extPdfB ? `PDF B: ${extPdfB.name}` : 'Upload PDF B'}
-            </GlassButton>
-            {comparingExt && (
-              <span className="flex items-center gap-1 text-[#888888]">
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                Comparing PDFs...
-              </span>
+        <GlassCard level={2} padding="sm" className="space-y-2 text-xs">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <GlassButton
+                variant="glass"
+                size="sm"
+                onClick={() => fileARef.current?.click()}
+              >
+                <FileUp className="w-3.5 h-3.5" />
+                {extPdfA ? `PDF A: ${extPdfA.name}` : 'Upload PDF A'}
+              </GlassButton>
+              <GlassButton
+                variant="glass"
+                size="sm"
+                onClick={() => fileBRef.current?.click()}
+              >
+                <FileUp className="w-3.5 h-3.5" />
+                {extPdfB ? `PDF B: ${extPdfB.name}` : 'Upload PDF B'}
+              </GlassButton>
+              {comparingExt && (
+                <span className="flex items-center gap-1 text-[#888888]">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Comparing PDFs...
+                </span>
+              )}
+            </div>
+            {extComparison && (
+              <div className="flex items-center gap-3 tabular-nums text-[11px] text-[#555555] dark:text-[#B5B5B5]">
+                <span>A: {extComparison.leftPageCount} pg</span>
+                <span>B: {extComparison.rightPageCount} pg</span>
+                <span className="font-semibold text-[#101010] dark:text-white">
+                  +{extComparison.totalAddedLines} added / -{extComparison.totalRemovedLines} removed lines
+                </span>
+              </div>
             )}
           </div>
-          {extComparison && (
-            <div className="flex items-center gap-3 tabular-nums text-[11px] text-[#555555] dark:text-[#B5B5B5]">
-              <span>A: {extComparison.leftPageCount} pg</span>
-              <span>B: {extComparison.rightPageCount} pg</span>
-              <span className="font-semibold text-[#101010] dark:text-white">
-                +{extComparison.totalAddedLines} added / -{extComparison.totalRemovedLines} removed lines
-              </span>
+          {extError && (
+            <div className="p-2 rounded-lg border border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400">
+              {extError}
             </div>
           )}
         </GlassCard>

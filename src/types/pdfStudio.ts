@@ -2,6 +2,7 @@ export type NavSection =
   | 'dashboard'
   | 'new-project'
   | 'templates'
+  | 'scan-inspector'
   | 'editor'
   | 'blueprint-studio'
   | 'bulk-generator'
@@ -58,12 +59,144 @@ export type ElementType =
 
 export type BarcodeFormat = 'qr' | 'code128' | 'code39' | 'ean13' | 'upca';
 
+export type ObjectCategory = 'text' | 'vector' | 'image' | 'structural' | 'form';
+
+export type ObjectClassification =
+  // Text
+  | 'text'
+  | 'text_run'
+  | 'text_group'
+  | 'paragraph'
+  | 'heading'
+  | 'label'
+  | 'numeric_field'
+  | 'date_field'
+  | 'identifier_field'
+  // Vector
+  | 'horizontal_line'
+  | 'vertical_line'
+  | 'diagonal_line'
+  | 'dashed_line'
+  | 'rect'
+  | 'rounded_rect'
+  | 'circle'
+  | 'ellipse'
+  | 'polygon'
+  | 'freeform_path'
+  | 'filled_shape'
+  | 'border'
+  | 'divider'
+  // Image
+  | 'logo'
+  | 'photograph'
+  | 'signature_image'
+  | 'stamp_image'
+  | 'decorative_image'
+  | 'background_image'
+  | 'image_mask'
+  // Structural
+  | 'table'
+  | 'table_row'
+  | 'table_column'
+  | 'table_cell'
+  | 'merged_cell'
+  | 'document_block'
+  | 'receipt_block'
+  | 'invoice_block'
+  | 'header'
+  | 'footer'
+  | 'section'
+  // Form
+  | 'text_input'
+  | 'checkbox'
+  | 'radio_button'
+  | 'dropdown'
+  | 'signature_field'
+  | 'form_boundary';
+
+export type DetectionMethod =
+  | 'pdf_text'
+  | 'pdf_operator'
+  | 'pdf_xobject'
+  | 'pdf_annotation'
+  | 'pdf_form'
+  | 'ocr_tesseract'
+  | 'geometric_inference'
+  | 'table_grid'
+  | 'user_manual';
+
+export type ConfidenceLevel = 'high' | 'medium' | 'low' | 'needs_review';
+
+export type LineSemanticRole =
+  | 'independent'
+  | 'rect_border'
+  | 'table_border'
+  | 'separator'
+  | 'grid'
+  | 'underline'
+  | 'clipping';
+
+export interface VectorPathCommand {
+  op: 'M' | 'L' | 'C' | 'Q' | 'Z';
+  args: number[];
+}
+
+export interface VectorPathGeometry {
+  commands: VectorPathCommand[];
+  points: number[]; // flat [x0, y0, x1, y1, ...] in page-top-left pt
+  isClosed: boolean;
+  isFilled: boolean;
+  isStroked: boolean;
+  isClippingPath?: boolean;
+  cornerRadiusPt?: number;
+  dashArray?: number[];
+  lineCap?: 'butt' | 'round' | 'square';
+  lineJoin?: 'miter' | 'round' | 'bevel';
+  transformMatrix?: [number, number, number, number, number, number];
+  lineRole?: LineSemanticRole;
+}
+
+export interface ExtractedImageResource {
+  id: string;
+  sourceXObjectName: string;
+  dataUrl: string;
+  mimeType: 'image/png' | 'image/jpeg';
+  naturalWidth: number;
+  naturalHeight: number;
+  hasAlpha: boolean;
+  hasMask: boolean;
+  isInlineImage: boolean;
+  usageCount: number;
+}
+
+export interface TableMergedCell {
+  row: number;
+  col: number;
+  rowSpan: number;
+  colSpan: number;
+}
+
+export interface TableCellStyle {
+  backgroundColor?: string;
+  textColor?: string;
+  align?: 'left' | 'center' | 'right';
+  fontWeight?: 'normal' | 'bold';
+}
+
 export interface TableElementData {
   rows: string[][];
   headerRow: boolean;
   borderColor: string;
   headerBgColor: string;
   cellPadding: number;
+  colWidthsPt?: number[];
+  rowHeightsPt?: number[];
+  mergedCells?: TableMergedCell[];
+  cellStyles?: Record<string, TableCellStyle>; // key = `${row}:${col}`
+  hasBorders?: boolean;
+  detectionBasis?: 'bordered' | 'partial' | 'borderless' | 'manual';
+  borderElementIds?: string[];
+  borderWidthPt?: number;
 }
 
 export interface DocumentElement {
@@ -147,6 +280,40 @@ export interface DocumentElement {
   barcodeIncludeText?: boolean;
   qrErrorCorrection?: 'L' | 'M' | 'Q' | 'H';
   barcodeQuietZonePt?: number;
+  // Precision Scan Engine 2.0 (Unified Editable Document Model)
+  objectCategory?: ObjectCategory;
+  objectSubtype?: ObjectClassification;
+  detectionMethod?: DetectionMethod;
+  confidenceLevel?: ConfidenceLevel;
+  originalObjectRef?: string;
+  originalBBox?: RectPt;
+  transformMatrix?: [number, number, number, number, number, number];
+  zOrder?: number;
+  parentId?: string;
+  childIds?: string[];
+  vectorPath?: VectorPathGeometry;
+  strokeColor?: string;
+  fillColor?: string;
+  dashArray?: number[];
+  cornerRadiusPt?: number;
+  charSpacingPt?: number;
+  wordSpacingPt?: number;
+  baselineY?: number;
+  imageResourceId?: string;
+  effectiveDpi?: number;
+  isBackgroundImage?: boolean;
+  formFieldKind?: 'text_input' | 'checkbox' | 'radio_button' | 'dropdown' | 'signature_field';
+  formFieldName?: string;
+  formFieldValue?: string;
+  formOptions?: string[];
+  formChecked?: boolean;
+  tableCellRef?: {
+    tableId: string;
+    row: number;
+    col: number;
+    rowSpan?: number;
+    colSpan?: number;
+  };
 }
 
 export interface RectPt {
@@ -446,6 +613,89 @@ export interface PageRestorationConfig {
   whiteNormalize: boolean;
 }
 
+export interface PageBoxesMeta {
+  mediaBox: RectPt;
+  cropBox?: RectPt;
+  bleedBox?: RectPt;
+  trimBox?: RectPt;
+  artBox?: RectPt;
+}
+
+export interface DocumentHierarchyNode {
+  id: string;
+  kind:
+    | 'document'
+    | 'page'
+    | 'header'
+    | 'footer'
+    | 'receipt_block'
+    | 'invoice_block'
+    | 'document_block'
+    | 'section'
+    | 'container_rect'
+    | 'table'
+    | 'table_row'
+    | 'table_cell'
+    | 'form_group'
+    | 'element';
+  label: string;
+  pageNumber: number;
+  bbox?: RectPt;
+  elementId?: string;
+  confidence?: number;
+  needsReview?: boolean;
+  children: DocumentHierarchyNode[];
+}
+
+export interface ScanUncertainTarget {
+  elementId: string;
+  pageNumber: number;
+  label: string;
+  objectSubtype?: ObjectClassification;
+  reason: string;
+  confidence: number;
+  confidenceLevel: ConfidenceLevel;
+}
+
+export interface ScanQualityReport {
+  scannedAt: string;
+  engineVersion: string;
+  totalPages: number;
+  totalElements: number;
+  textObjects: number;
+  imageObjects: number;
+  vectorPaths: number;
+  lines: number;
+  rectangles: number;
+  tables: number;
+  tableCells: number;
+  formFields: number;
+  ocrRegions: number;
+  unclassifiedObjects: number;
+  lowConfidenceObjects: number;
+  needsReviewObjects: number;
+  pagesNeedingReview: number[];
+  uncertainTargets: ScanUncertainTarget[];
+}
+
+export interface ScanCorrectionRule {
+  id: string;
+  createdAt: string;
+  pageNumber: number;
+  matchBBox: RectPt;
+  matchTextPrefix?: string;
+  originalType: ElementType;
+  originalSubtype?: ObjectClassification;
+  targetType: ElementType;
+  targetSubtype: ObjectClassification;
+  action:
+    | 'reclassify'
+    | 'merge_to_rect'
+    | 'convert_to_table'
+    | 'mark_background'
+    | 'detach_group';
+}
+
 export interface OriginalPageMeta {
   pageNumber: number;
   sourcePdfPageNumber?: number;
@@ -462,6 +712,14 @@ export interface OriginalPageMeta {
   isBlankInserted?: boolean;
   headerText?: string;
   footerText?: string;
+  boxes?: PageBoxesMeta;
+  embeddedFonts?: string[];
+  hasTransparency?: boolean;
+  streamCount?: number;
+  annotationsCount?: number;
+  formFieldsCount?: number;
+  ocrRegionsCount?: number;
+  hierarchy?: DocumentHierarchyNode;
 }
 
 export interface ProjectVersionSnapshot {
@@ -578,6 +836,16 @@ export interface PDFProject {
   folderName?: string;
   versions: ProjectVersionSnapshot[];
   operationLog?: DocumentOperationLog[];
+  imageResources?: Record<string, ExtractedImageResource>;
+  scanReport?: ScanQualityReport;
+  scanCorrectionRules?: ScanCorrectionRule[];
+  documentMetadata?: {
+    title?: string;
+    author?: string;
+    subject?: string;
+    creator?: string;
+    producer?: string;
+  };
 }
 
 export type DuplexFlipEdge = 'long_edge' | 'short_edge';
@@ -728,6 +996,7 @@ export interface TemplateAutomationProfile {
   };
   exportConfig: ExportConfig;
   dna?: TemplateDnaFingerprint;
+  scanCorrectionRules?: ScanCorrectionRule[];
 }
 
 export interface BatchJob {

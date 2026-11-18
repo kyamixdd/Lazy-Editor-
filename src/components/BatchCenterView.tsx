@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import {
   AlertTriangle,
@@ -31,7 +31,9 @@ import {
   verifyPdfBytesIntegrity,
 } from '../utils/recoveryEngine';
 import { validateProject } from '../utils/validationEngine';
+import { triggerBytesDownload } from '../utils/downloadHelper';
 import { GlassButton, GlassCard } from './glass';
+import { NumericDraftInput } from './NumericDraftInput';
 
 interface BatchCenterViewProps {
   projects: PDFProject[];
@@ -74,6 +76,43 @@ export const BatchCenterView: React.FC<BatchCenterViewProps> = ({
   const cancelSetRef = useRef<Set<string>>(new Set());
   const globalCancelRef = useRef(false);
   const pausedRef = useRef(false);
+  const sessionUrlsRef = useRef<Record<string, string>>({});
+
+  const registerSessionDownload = (key: string, dl: SessionDownload) => {
+    const prevUrl = sessionUrlsRef.current[key];
+    if (prevUrl && prevUrl !== dl.url) {
+      URL.revokeObjectURL(prevUrl);
+    }
+    sessionUrlsRef.current[key] = dl.url;
+    setDownloads((prev) => ({ ...prev, [key]: dl }));
+  };
+
+  const revokeSessionDownload = (key: string) => {
+    const url = sessionUrlsRef.current[key];
+    if (url) {
+      URL.revokeObjectURL(url);
+      delete sessionUrlsRef.current[key];
+    }
+    setDownloads((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    setSelectedProjectIds((prev) =>
+      prev.filter((id) => projects.some((p) => p.id === id))
+    );
+  }, [projects]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(sessionUrlsRef.current).forEach((u) => URL.revokeObjectURL(u));
+      sessionUrlsRef.current = {};
+    };
+  }, []);
 
   const enqueueSelected = () => {
     if (selectedProjectIds.length === 0) return;
@@ -180,14 +219,11 @@ export const BatchCenterView: React.FC<BatchCenterViewProps> = ({
         type: result.mimeType,
       });
       const url = URL.createObjectURL(blob);
-      setDownloads((prev) => ({
-        ...prev,
-        [job.id]: {
-          url,
-          fileName: result.fileName,
-          sizeBytes: result.data.byteLength,
-        },
-      }));
+      registerSessionDownload(job.id, {
+        url,
+        fileName: result.fileName,
+        sizeBytes: result.data.byteLength,
+      });
 
       onSaveBatchJob({
         ...job,
@@ -249,7 +285,9 @@ export const BatchCenterView: React.FC<BatchCenterViewProps> = ({
     pausedRef.current = false;
     setIsPaused(false);
     batchJobs.forEach((j) => {
-      if (j.status === 'queued' || j.status === 'paused') {
+      if (j.status === 'running') {
+        cancelSetRef.current.add(j.id);
+      } else if (j.status === 'queued' || j.status === 'paused') {
         onSaveBatchJob({
           ...j,
           status: 'cancelled',
@@ -299,14 +337,11 @@ export const BatchCenterView: React.FC<BatchCenterViewProps> = ({
         const blob = new Blob([result.bytes.slice().buffer], {
           type: result.mimeType,
         });
-        setDownloads((prev) => ({
-          ...prev,
-          [result.checkpoint.id]: {
-            url: URL.createObjectURL(blob),
-            fileName: result.fileName,
-            sizeBytes: result.bytes.byteLength,
-          },
-        }));
+        registerSessionDownload(result.checkpoint.id, {
+          url: URL.createObjectURL(blob),
+          fileName: result.fileName,
+          sizeBytes: result.bytes.byteLength,
+        });
       }
       setIntegrityNotices((prev) => ({
         ...prev,
@@ -348,13 +383,11 @@ export const BatchCenterView: React.FC<BatchCenterViewProps> = ({
   const handleDownloadCheckpoint = (cp: BatchCheckpoint) => {
     if (!cp.partialPdfBase64) return;
     const bytes = base64ToUint8ArrayRecovery(cp.partialPdfBase64);
-    const blob = new Blob([bytes.slice().buffer], { type: 'application/pdf' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = cp.outputFileName || `${cp.projectName.replace(/\s+/g, '_')}_checkpoint.pdf`;
-    a.click();
-    URL.revokeObjectURL(url);
+    triggerBytesDownload(
+      bytes,
+      cp.outputFileName || `${cp.projectName.replace(/\s+/g, '_')}_checkpoint.pdf`,
+      'application/pdf'
+    );
   };
 
   const queuedCount = batchJobs.filter((j) => j.status === 'queued').length;
@@ -533,13 +566,13 @@ export const BatchCenterView: React.FC<BatchCenterViewProps> = ({
             </div>
             <label className="flex items-center gap-2 text-[11px] text-[#555555] dark:text-[#B5B5B5]">
               <span>Checkpoint Every</span>
-              <input
-                type="number"
-                min="1"
-                max="50"
+              <NumericDraftInput
+                min={1}
+                max={50}
+                fallback={8}
                 value={chunkSizePages}
-                onChange={(e) =>
-                  setChunkSizePages(Math.max(1, Math.min(50, Number(e.target.value) || 8)))
+                onCommit={(val) =>
+                  setChunkSizePages(Math.max(1, Math.min(50, Math.round(val))))
                 }
                 className="w-14 px-2 py-0.5 rounded-lg border studio-input tabular-nums text-center"
               />
@@ -623,7 +656,10 @@ export const BatchCenterView: React.FC<BatchCenterViewProps> = ({
                         {onDeleteCheckpoint && (
                           <button
                             type="button"
-                            onClick={() => onDeleteCheckpoint(cp.id)}
+                            onClick={() => {
+                              revokeSessionDownload(cp.id);
+                              onDeleteCheckpoint(cp.id);
+                            }}
                             className="p-1 rounded-lg text-[#888888] hover:text-red-600"
                             title="Discard checkpoint"
                           >
@@ -653,7 +689,14 @@ export const BatchCenterView: React.FC<BatchCenterViewProps> = ({
           {batchJobs.length > 0 && !isRunningQueue && (
             <button
               type="button"
-              onClick={onClearBatchHistory}
+              onClick={() => {
+                Object.keys(sessionUrlsRef.current).forEach((k) => {
+                  URL.revokeObjectURL(sessionUrlsRef.current[k]);
+                });
+                sessionUrlsRef.current = {};
+                setDownloads({});
+                onClearBatchHistory();
+              }}
               className="text-[#555555] hover:text-[#101010] dark:text-[#B5B5B5] dark:hover:text-white hover:underline font-medium"
             >
               Clear History
@@ -764,7 +807,10 @@ export const BatchCenterView: React.FC<BatchCenterViewProps> = ({
                       {job.status !== 'running' && (
                         <button
                           type="button"
-                          onClick={() => onDeleteBatchJob(job.id)}
+                          onClick={() => {
+                            revokeSessionDownload(job.id);
+                            onDeleteBatchJob(job.id);
+                          }}
                           className="p-1.5 rounded-lg text-[#888888] hover:text-[#101010] dark:text-[#858585] dark:hover:text-white"
                           title="Delete record"
                         >

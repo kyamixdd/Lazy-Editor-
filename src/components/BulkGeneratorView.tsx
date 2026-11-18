@@ -1,4 +1,4 @@
-import React, { useId, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'motion/react';
 import {
   AlertTriangle,
@@ -41,6 +41,7 @@ import {
 } from '../utils/serialEngine';
 import { presetToGrid, ptToUnit, unitToPt } from '../utils/units';
 import { GlassButton } from './glass';
+import { NumericDraftInput } from './NumericDraftInput';
 import { PageConfigurationModal } from './PageConfigurationModal';
 import { PrintOptimizerPanel } from './PrintOptimizerPanel';
 import { SerialIntelligencePanel } from './SerialIntelligencePanel';
@@ -94,6 +95,10 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
       setCsvImportStatus(
         err instanceof Error ? err.message : 'Failed to import CSV/Excel'
       );
+    } finally {
+      if (csvInputRef.current) {
+        csvInputRef.current.value = '';
+      }
     }
   };
 
@@ -183,6 +188,14 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
 
   // Authoritative imposition & boundary geometry (identical to Export Center)
   const layout = useMemo(() => computeSheetLayout(project, 1), [project]);
+
+  useEffect(() => {
+    setSelectedSlotIdx((prev) =>
+      layout.slots.length > 0
+        ? Math.max(0, Math.min(prev, layout.slots.length - 1))
+        : 0
+    );
+  }, [layout.slots.length]);
 
   const serialSimulation = useMemo(
     () =>
@@ -401,15 +414,13 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
               <div className="grid grid-cols-2 gap-3">
                 <label className="block">
                   <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">Columns</span>
-                  <input
-                    type="number"
-                    min="1"
-                    max="12"
+                  <NumericDraftInput
                     value={copiesConfig.columns}
-                    onChange={(e) =>
+                    commitOptions={{ min: 1, max: 12, integer: true }}
+                    onCommit={(val) =>
                       updateCopies({
                         copiesPreset: 'custom',
-                        columns: Math.max(1, Number(e.target.value) || 1),
+                        columns: val,
                       })
                     }
                     className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
@@ -417,15 +428,13 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                 </label>
                 <label className="block">
                   <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">Rows</span>
-                  <input
-                    type="number"
-                    min="1"
-                    max="12"
+                  <NumericDraftInput
                     value={copiesConfig.rows}
-                    onChange={(e) =>
+                    commitOptions={{ min: 1, max: 12, integer: true }}
+                    onCommit={(val) =>
                       updateCopies({
                         copiesPreset: 'custom',
-                        rows: Math.max(1, Number(e.target.value) || 1),
+                        rows: val,
                       })
                     }
                     className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
@@ -439,17 +448,12 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                   <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                     Horizontal Spacing ({unit})
                   </span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.5"
+                  <NumericDraftInput
                     value={ptToUnit(copiesConfig.horizontalSpacingPt, unit)}
-                    onChange={(e) =>
+                    commitOptions={{ min: 0 }}
+                    onCommit={(val) =>
                       updateCopies({
-                        horizontalSpacingPt: Math.max(
-                          0,
-                          unitToPt(Number(e.target.value), unit)
-                        ),
+                        horizontalSpacingPt: Math.max(0, unitToPt(val, unit)),
                       })
                     }
                     className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
@@ -459,17 +463,12 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                   <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                     Vertical Spacing ({unit})
                   </span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.5"
+                  <NumericDraftInput
                     value={ptToUnit(copiesConfig.verticalSpacingPt, unit)}
-                    onChange={(e) =>
+                    commitOptions={{ min: 0 }}
+                    onCommit={(val) =>
                       updateCopies({
-                        verticalSpacingPt: Math.max(
-                          0,
-                          unitToPt(Number(e.target.value), unit)
-                        ),
+                        verticalSpacingPt: Math.max(0, unitToPt(val, unit)),
                       })
                     }
                     className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
@@ -492,17 +491,12 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                   ).map(([lbl, key]) => (
                     <label key={key} className="block">
                       <span className="text-[10px] text-[#888888] dark:text-[#858585]">{lbl}</span>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.5"
+                      <NumericDraftInput
                         value={ptToUnit(copiesConfig[key], unit)}
-                        onChange={(e) =>
+                        commitOptions={{ min: 0 }}
+                        onCommit={(val) =>
                           updateCopies({
-                            [key]: Math.max(
-                              0,
-                              unitToPt(Number(e.target.value), unit)
-                            ),
+                            [key]: Math.max(0, unitToPt(val, unit)),
                           })
                         }
                         className="mt-0.5 w-full min-h-[40px] desktop:min-h-0 px-2 py-1.5 rounded-lg border studio-input tabular-nums"
@@ -518,18 +512,13 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                   <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                     Individual Copy Scale (%)
                   </span>
-                  <input
-                    type="number"
-                    min="10"
-                    max="200"
+                  <NumericDraftInput
                     disabled={copiesConfig.fitToPage}
                     value={Math.round(copiesConfig.copyScale * 100)}
-                    onChange={(e) =>
+                    commitOptions={{ min: 10, max: 400, integer: true }}
+                    onCommit={(val) =>
                       updateCopies({
-                        copyScale: Math.max(
-                          0.1,
-                          (Number(e.target.value) || 100) / 100
-                        ),
+                        copyScale: Math.max(0.1, val / 100),
                       })
                     }
                     className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input disabled:opacity-45 tabular-nums"
@@ -726,14 +715,12 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                     <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                       Custom Scale (%)
                     </span>
-                    <input
-                      type="number"
-                      min="10"
-                      max="400"
+                    <NumericDraftInput
                       value={fitConfig.customPercent}
-                      onChange={(e) =>
+                      commitOptions={{ min: 10, max: 400, integer: true }}
+                      onCommit={(val) =>
                         updateFitConfig({
-                          customPercent: Math.max(10, Number(e.target.value) || 100),
+                          customPercent: val,
                         })
                       }
                       className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
@@ -832,19 +819,14 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                           <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                             Scale (%)
                           </span>
-                          <input
-                            type="number"
-                            min="10"
-                            max="400"
+                          <NumericDraftInput
                             value={Math.round(
                               (ov?.scale ?? activeSlot?.scale ?? 1) * 100
                             )}
-                            onChange={(e) =>
+                            commitOptions={{ min: 10, max: 400, integer: true }}
+                            onCommit={(val) =>
                               updateSlotOverride(safeIdx, {
-                                scale: Math.max(
-                                  0.1,
-                                  (Number(e.target.value) || 100) / 100
-                                ),
+                                scale: Math.max(0.1, val / 100),
                               })
                             }
                             className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
@@ -854,13 +836,11 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                           <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                             X Offset ({unit})
                           </span>
-                          <input
-                            type="number"
-                            step="0.5"
+                          <NumericDraftInput
                             value={ptToUnit(ov?.xOffsetPt || 0, unit)}
-                            onChange={(e) =>
+                            onCommit={(val) =>
                               updateSlotOverride(safeIdx, {
-                                xOffsetPt: unitToPt(Number(e.target.value) || 0, unit),
+                                xOffsetPt: unitToPt(val, unit),
                               })
                             }
                             className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
@@ -870,13 +850,11 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                           <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                             Y Offset ({unit})
                           </span>
-                          <input
-                            type="number"
-                            step="0.5"
+                          <NumericDraftInput
                             value={ptToUnit(ov?.yOffsetPt || 0, unit)}
-                            onChange={(e) =>
+                            onCommit={(val) =>
                               updateSlotOverride(safeIdx, {
-                                yOffsetPt: unitToPt(Number(e.target.value) || 0, unit),
+                                yOffsetPt: unitToPt(val, unit),
                               })
                             }
                             className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
@@ -914,17 +892,12 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                   <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                     Total Output Pages
                   </span>
-                  <input
-                    type="number"
-                    min="1"
-                    max="2000"
+                  <NumericDraftInput
                     value={bulkConfig.totalOutputPages}
-                    onChange={(e) =>
+                    commitOptions={{ min: 1, max: 2000, integer: true }}
+                    onCommit={(val) =>
                       updateBulk({
-                        totalOutputPages: Math.max(
-                          1,
-                          Number(e.target.value) || 1
-                        ),
+                        totalOutputPages: val,
                       })
                     }
                     className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
@@ -948,16 +921,12 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                   <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                     Starting Page Number
                   </span>
-                  <input
-                    type="number"
-                    min="1"
+                  <NumericDraftInput
                     value={bulkConfig.startPageNumber}
-                    onChange={(e) =>
+                    commitOptions={{ min: 1, integer: true }}
+                    onCommit={(val) =>
                       updateBulk({
-                        startPageNumber: Math.max(
-                          1,
-                          Number(e.target.value) || 1
-                        ),
+                        startPageNumber: val,
                       })
                     }
                     className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
@@ -967,15 +936,10 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                   <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                     Ending Page Number
                   </span>
-                  <input
-                    type="number"
-                    min={bulkConfig.startPageNumber}
+                  <NumericDraftInput
                     value={bulkConfig.endPageNumber}
-                    onChange={(e) => {
-                      const end = Math.max(
-                        bulkConfig.startPageNumber,
-                        Number(e.target.value) || bulkConfig.startPageNumber
-                      );
+                    commitOptions={{ min: bulkConfig.startPageNumber, integer: true }}
+                    onCommit={(end) => {
                       updateBulk({
                         endPageNumber: end,
                         totalOutputPages: end - bulkConfig.startPageNumber + 1,
@@ -991,17 +955,12 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                   <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                     Document Blocks Per Sheet
                   </span>
-                  <input
-                    type="number"
-                    min="1"
-                    max="24"
+                  <NumericDraftInput
                     value={bulkConfig.documentBlocksCount}
-                    onChange={(e) =>
+                    commitOptions={{ min: 1, max: 24, integer: true }}
+                    onCommit={(val) =>
                       updateBulk({
-                        documentBlocksCount: Math.max(
-                          1,
-                          Number(e.target.value) || 1
-                        ),
+                        documentBlocksCount: val,
                       })
                     }
                     className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
@@ -1011,17 +970,12 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                   <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                     Copies Per Document
                   </span>
-                  <input
-                    type="number"
-                    min="1"
-                    max="20"
+                  <NumericDraftInput
                     value={bulkConfig.copiesPerDocument}
-                    onChange={(e) =>
+                    commitOptions={{ min: 1, max: 20, integer: true }}
+                    onCommit={(val) =>
                       updateBulk({
-                        copiesPerDocument: Math.max(
-                          1,
-                          Number(e.target.value) || 1
-                        ),
+                        copiesPerDocument: val,
                       })
                     }
                     className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
@@ -1288,15 +1242,12 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                               <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                                 Start
                               </span>
-                              <input
-                                type="number"
+                              <NumericDraftInput
                                 value={rule.startNumber}
-                                onChange={(e) => {
+                                commitOptions={{ integer: true }}
+                                onCommit={(val) => {
                                   const copy = [...serialRules];
-                                  copy[idx] = {
-                                    ...rule,
-                                    startNumber: Number(e.target.value) || 0,
-                                  };
+                                  copy[idx] = { ...rule, startNumber: val };
                                   updateRules(copy);
                                 }}
                                 className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
@@ -1306,15 +1257,12 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                               <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                                 End
                               </span>
-                              <input
-                                type="number"
+                              <NumericDraftInput
                                 value={rule.endNumber}
-                                onChange={(e) => {
+                                commitOptions={{ integer: true }}
+                                onCommit={(val) => {
                                   const copy = [...serialRules];
-                                  copy[idx] = {
-                                    ...rule,
-                                    endNumber: Number(e.target.value) || 0,
-                                  };
+                                  copy[idx] = { ...rule, endNumber: val };
                                   updateRules(copy);
                                 }}
                                 className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
@@ -1324,15 +1272,12 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                               <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                                 Step
                               </span>
-                              <input
-                                type="number"
+                              <NumericDraftInput
                                 value={rule.increment}
-                                onChange={(e) => {
+                                commitOptions={{ min: 1, integer: true }}
+                                onCommit={(val) => {
                                   const copy = [...serialRules];
-                                  copy[idx] = {
-                                    ...rule,
-                                    increment: Number(e.target.value) || 1,
-                                  };
+                                  copy[idx] = { ...rule, increment: val };
                                   updateRules(copy);
                                 }}
                                 className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
@@ -1342,20 +1287,12 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                               <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                                 Digits
                               </span>
-                              <input
-                                type="number"
-                                min="1"
-                                max="12"
+                              <NumericDraftInput
                                 value={rule.digits}
-                                onChange={(e) => {
+                                commitOptions={{ min: 1, max: 12, integer: true }}
+                                onCommit={(val) => {
                                   const copy = [...serialRules];
-                                  copy[idx] = {
-                                    ...rule,
-                                    digits: Math.max(
-                                      1,
-                                      Number(e.target.value) || 1
-                                    ),
-                                  };
+                                  copy[idx] = { ...rule, digits: val };
                                   updateRules(copy);
                                 }}
                                 className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"

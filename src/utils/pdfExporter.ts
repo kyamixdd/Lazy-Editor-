@@ -717,7 +717,19 @@ async function drawElementOntoPage(
   // Shapes & Borders
   if (el.type === 'shape' || el.type === 'border') {
     if (isModifiedOrAdded) {
-      if (el.shapeKind === 'circle') {
+      const fillRgb =
+        el.backgroundColor && el.backgroundColor !== 'transparent'
+          ? hexToRgb(el.backgroundColor)
+          : undefined;
+      const strokeRgb = hexToRgb(el.borderColor || el.color || '#1E293B');
+      const dashArr = el.dashArray?.length ? el.dashArray : undefined;
+      const strokeW = el.borderWidth ?? 1.2;
+
+      if (
+        el.shapeKind === 'circle' ||
+        el.objectSubtype === 'circle' ||
+        el.objectSubtype === 'ellipse'
+      ) {
         const cAnchor = rotateAroundKonvaTopLeft(el.x, el.y, el.width / 2, el.height / 2, elRot, localHeight);
         const pos = toPagePt(cAnchor.u, cAnchor.v, elRot ? -elRot : 0);
         page.drawEllipse({
@@ -725,12 +737,10 @@ async function drawElementOntoPage(
           y: pos.y,
           xScale: el.width / 2,
           yScale: el.height / 2,
-          borderColor: hexToRgb(el.borderColor || el.color || '#1E293B'),
-          borderWidth: el.borderWidth ?? 1.2,
-          color:
-            el.backgroundColor && el.backgroundColor !== 'transparent'
-              ? hexToRgb(el.backgroundColor)
-              : undefined,
+          borderColor: strokeRgb,
+          borderWidth: strokeW,
+          borderDashArray: dashArr,
+          color: fillRgb,
           opacity: el.opacity ?? 1,
           rotate: pos.rotate,
         });
@@ -740,13 +750,13 @@ async function drawElementOntoPage(
         const p2L = rotateAroundKonvaTopLeft(el.x, el.y, el.width, midY, elRot, localHeight);
         const p1 = toPagePt(p1L.u, p1L.v);
         const p2 = toPagePt(p2L.u, p2L.v);
-        const col = hexToRgb(el.borderColor || el.color || '#1E293B');
         const thick = Math.max(1, el.borderWidth ?? 1.8);
         page.drawLine({
           start: { x: p1.x, y: p1.y },
           end: { x: p2.x, y: p2.y },
           thickness: thick,
-          color: col,
+          color: strokeRgb,
+          dashArray: dashArr,
           opacity: el.opacity ?? 1,
         });
         // Arrowhead wings
@@ -755,8 +765,74 @@ async function drawElementOntoPage(
         const wBotL = rotateAroundKonvaTopLeft(el.x, el.y, el.width - wingLen, midY + wingLen * 0.55, elRot, localHeight);
         const wt = toPagePt(wTopL.u, wTopL.v);
         const wb = toPagePt(wBotL.u, wBotL.v);
-        page.drawLine({ start: { x: p2.x, y: p2.y }, end: { x: wt.x, y: wt.y }, thickness: thick, color: col });
-        page.drawLine({ start: { x: p2.x, y: p2.y }, end: { x: wb.x, y: wb.y }, thickness: thick, color: col });
+        page.drawLine({ start: { x: p2.x, y: p2.y }, end: { x: wt.x, y: wt.y }, thickness: thick, color: strokeRgb });
+        page.drawLine({ start: { x: p2.x, y: p2.y }, end: { x: wb.x, y: wb.y }, thickness: thick, color: strokeRgb });
+      } else if (
+        el.shapeKind === 'polygon' ||
+        el.objectSubtype === 'polygon' ||
+        el.objectSubtype === 'freeform_path'
+      ) {
+        let relPts: number[] | null =
+          el.points && el.points.length >= 4 ? el.points : null;
+        if (!relPts && el.vectorPath?.points && el.vectorPath.points.length >= 4) {
+          relPts = [];
+          for (let pi = 0; pi < el.vectorPath.points.length; pi += 2) {
+            relPts.push(
+              el.vectorPath.points[pi] - el.x,
+              el.vectorPath.points[pi + 1] - el.y
+            );
+          }
+        }
+        if (relPts && relPts.length >= 4) {
+          const cmds: string[] = [`M ${relPts[0]},${relPts[1]}`];
+          for (let pi = 2; pi < relPts.length; pi += 2) {
+            cmds.push(`L ${relPts[pi]},${relPts[pi + 1]}`);
+          }
+          if (el.vectorPath?.isClosed !== false) cmds.push('Z');
+          const topLeftPos = toPagePt(el.x, el.y, elRot ? -elRot : 0);
+          page.drawSvgPath(cmds.join(' '), {
+            x: topLeftPos.x,
+            y: topLeftPos.y,
+            color: el.vectorPath?.isClosed !== false ? fillRgb : undefined,
+            borderColor: strokeRgb,
+            borderWidth: strokeW,
+            borderDashArray: dashArr,
+            opacity: el.opacity ?? 1,
+            borderOpacity: el.opacity ?? 1,
+            rotate: topLeftPos.rotate,
+          });
+        } else {
+          const pos = toElementBottomLeftPt(0, 0, el.height);
+          page.drawRectangle({
+            x: pos.x,
+            y: pos.y,
+            width: el.width,
+            height: el.height,
+            color: fillRgb,
+            borderColor: strokeRgb,
+            borderWidth: strokeW,
+            borderDashArray: dashArr,
+            opacity: el.opacity ?? 1,
+            rotate: pos.rotate,
+          });
+        }
+      } else if (el.cornerRadiusPt && el.cornerRadiusPt > 0) {
+        const w = el.width;
+        const h = el.height;
+        const r = Math.max(0.5, Math.min(el.cornerRadiusPt, w / 2, h / 2));
+        const svgRounded = `M ${r},0 L ${w - r},0 Q ${w},0 ${w},${r} L ${w},${h - r} Q ${w},${h} ${w - r},${h} L ${r},${h} Q 0,${h} 0,${h - r} L 0,${r} Q 0,0 ${r},0 Z`;
+        const topLeftPos = toPagePt(el.x, el.y, elRot ? -elRot : 0);
+        page.drawSvgPath(svgRounded, {
+          x: topLeftPos.x,
+          y: topLeftPos.y,
+          color: fillRgb,
+          borderColor: strokeRgb,
+          borderWidth: strokeW,
+          borderDashArray: dashArr,
+          opacity: el.opacity ?? 1,
+          borderOpacity: el.opacity ?? 1,
+          rotate: topLeftPos.rotate,
+        });
       } else {
         const pos = toElementBottomLeftPt(0, 0, el.height);
         page.drawRectangle({
@@ -764,8 +840,10 @@ async function drawElementOntoPage(
           y: pos.y,
           width: el.width,
           height: el.height,
-          borderColor: hexToRgb(el.borderColor || el.color || '#1E293B'),
-          borderWidth: el.borderWidth ?? 1,
+          color: fillRgb,
+          borderColor: strokeRgb,
+          borderWidth: strokeW,
+          borderDashArray: dashArr,
           opacity: el.opacity ?? 1,
           rotate: pos.rotate,
         });
@@ -776,9 +854,19 @@ async function drawElementOntoPage(
 
   if (el.type === 'line') {
     if (isModifiedOrAdded) {
-      const midY = el.height / 2;
-      const p1L = rotateAroundKonvaTopLeft(el.x, el.y, 0, midY, elRot, localHeight);
-      const p2L = rotateAroundKonvaTopLeft(el.x, el.y, el.width, midY, elRot, localHeight);
+      let relPts = [0, el.height / 2, el.width, el.height / 2];
+      if (el.points && el.points.length >= 4) {
+        relPts = [el.points[0], el.points[1], el.points[2], el.points[3]];
+      } else if (el.vectorPath?.points && el.vectorPath.points.length >= 4) {
+        relPts = [
+          el.vectorPath.points[0] - el.x,
+          el.vectorPath.points[1] - el.y,
+          el.vectorPath.points[2] - el.x,
+          el.vectorPath.points[3] - el.y,
+        ];
+      }
+      const p1L = rotateAroundKonvaTopLeft(el.x, el.y, relPts[0], relPts[1], elRot, localHeight);
+      const p2L = rotateAroundKonvaTopLeft(el.x, el.y, relPts[2], relPts[3], elRot, localHeight);
       const p1 = toPagePt(p1L.u, p1L.v);
       const p2 = toPagePt(p2L.u, p2L.v);
       page.drawLine({
@@ -786,6 +874,7 @@ async function drawElementOntoPage(
         end: { x: p2.x, y: p2.y },
         thickness: Math.max(0.5, el.borderWidth ?? 1.5),
         color: hexToRgb(el.color || '#1E293B'),
+        dashArray: el.dashArray?.length ? el.dashArray : undefined,
         opacity: el.opacity ?? 1,
       });
     }
@@ -831,54 +920,117 @@ async function drawElementOntoPage(
 
   // Tables
   if (el.type === 'table' && el.tableData && isModifiedOrAdded) {
-    const { rows, borderColor, headerBgColor, headerRow, cellPadding } =
-      el.tableData;
+    const {
+      rows,
+      borderColor,
+      headerBgColor,
+      headerRow,
+      cellPadding,
+      colWidthsPt,
+      rowHeightsPt,
+      mergedCells,
+      hasBorders,
+      borderWidthPt,
+    } = el.tableData;
     const rowCount = Math.max(1, rows.length);
     const colCount = Math.max(1, rows[0]?.length || 1);
-    const rowH = el.height / rowCount;
-    const colW = el.width / colCount;
+
+    const rawColW =
+      colWidthsPt && colWidthsPt.length === colCount
+        ? colWidthsPt
+        : Array(colCount).fill(el.width / colCount);
+    const rawColSum = rawColW.reduce((s, v) => s + Math.max(4, v), 0) || el.width;
+    const colWidths = rawColW.map((v) => (Math.max(4, v) / rawColSum) * el.width);
+
+    const rawRowH =
+      rowHeightsPt && rowHeightsPt.length === rowCount
+        ? rowHeightsPt
+        : Array(rowCount).fill(el.height / rowCount);
+    const rawRowSum = rawRowH.reduce((s, v) => s + Math.max(4, v), 0) || el.height;
+    const rowHeights = rawRowH.map((v) => (Math.max(4, v) / rawRowSum) * el.height);
+
+    const colX: number[] = [0];
+    for (let c = 0; c < colCount; c++) colX.push(colX[c] + colWidths[c]);
+    const rowY: number[] = [0];
+    for (let r = 0; r < rowCount; r++) rowY.push(rowY[r] + rowHeights[r]);
+
+    const covered = new Set<string>();
+    const anchorMap = new Map<string, { rowSpan: number; colSpan: number }>();
+    for (const m of mergedCells || []) {
+      anchorMap.set(`${m.row}:${m.col}`, {
+        rowSpan: Math.max(1, m.rowSpan),
+        colSpan: Math.max(1, m.colSpan),
+      });
+      for (let rr = m.row; rr < Math.min(rowCount, m.row + m.rowSpan); rr++) {
+        for (let cc = m.col; cc < Math.min(colCount, m.col + m.colSpan); cc++) {
+          if (rr !== m.row || cc !== m.col) covered.add(`${rr}:${cc}`);
+        }
+      }
+    }
+
     const font = pickFont(el, fonts);
     const boldFont = pickFont({ ...el, fontWeight: 'bold' }, fonts);
+    const pad = cellPadding ?? 4;
+    const showStroke = hasBorders !== false;
 
     for (let rIdx = 0; rIdx < rowCount; rIdx++) {
       for (let cIdx = 0; cIdx < colCount; cIdx++) {
-        const localDx = cIdx * colW;
-        const localDyTop = rIdx * rowH;
-        const rectPos = toElementBottomLeftPt(localDx, localDyTop, rowH);
-        page.drawRectangle({
-          x: rectPos.x,
-          y: rectPos.y,
-          width: colW,
-          height: rowH,
-          color:
-            headerRow && rIdx === 0
-              ? hexToRgb(headerBgColor || '#F1F5F9')
-              : undefined,
-          borderColor: hexToRgb(borderColor || '#CBD5E1'),
-          borderWidth: 0.7,
-          rotate: rectPos.rotate,
-        });
+        const key = `${rIdx}:${cIdx}`;
+        if (covered.has(key)) continue;
+        const span = anchorMap.get(key) || { rowSpan: 1, colSpan: 1 };
+        const rEnd = Math.min(rowCount, rIdx + span.rowSpan);
+        const cEnd = Math.min(colCount, cIdx + span.colSpan);
+
+        const localDx = colX[cIdx];
+        const localDyTop = rowY[rIdx];
+        const cellW = colX[cEnd] - localDx;
+        const cellH = rowY[rEnd] - localDyTop;
+        const cellFill =
+          headerRow && rIdx === 0 ? hexToRgb(headerBgColor || '#F1F5F9') : undefined;
+
+        if (showStroke || cellFill) {
+          const rectPos = toElementBottomLeftPt(localDx, localDyTop, cellH);
+          page.drawRectangle({
+            x: rectPos.x,
+            y: rectPos.y,
+            width: cellW,
+            height: cellH,
+            color: cellFill,
+            borderColor: showStroke ? hexToRgb(borderColor || '#CBD5E1') : undefined,
+            borderWidth: showStroke ? borderWidthPt ?? 0.7 : 0,
+            rotate: rectPos.rotate,
+          });
+        }
+
         const cellText = String(rows[rIdx]?.[cIdx] ?? '');
         if (cellText) {
-          const textSize = Math.min(el.fontSize || 9, rowH * 0.65);
-          const tAnchor = rotateAroundKonvaTopLeft(
-            el.x,
-            el.y,
-            localDx + (cellPadding || 4),
-            localDyTop + rowH / 2 + textSize * 0.35,
-            elRot,
-            localHeight
-          );
-          const textPos = toPagePt(tAnchor.u, tAnchor.v, elRot ? -elRot : 0);
-          page.drawText(cellText, {
-            x: textPos.x,
-            y: textPos.y,
-            size: textSize,
-            font: headerRow && rIdx === 0 ? boldFont : font,
-            color: hexToRgb(el.color || '#111827'),
-            maxWidth: Math.max(10, colW - (cellPadding || 4) * 2),
-            rotate: textPos.rotate,
-          });
+          const textSize = Math.min(el.fontSize || 9, Math.max(6, cellH * 0.55));
+          const lines = cellText.split('\n');
+          const lineH = textSize * 1.25;
+          const totalTextH = lines.length * lineH;
+          const startY = localDyTop + Math.max(pad + textSize * 0.8, (cellH - totalTextH) / 2 + textSize * 0.8);
+          for (let li = 0; li < lines.length; li++) {
+            const lineStr = lines[li];
+            if (!lineStr) continue;
+            const tAnchor = rotateAroundKonvaTopLeft(
+              el.x,
+              el.y,
+              localDx + pad,
+              startY + li * lineH,
+              elRot,
+              localHeight
+            );
+            const textPos = toPagePt(tAnchor.u, tAnchor.v, elRot ? -elRot : 0);
+            page.drawText(lineStr, {
+              x: textPos.x,
+              y: textPos.y,
+              size: textSize,
+              font: headerRow && rIdx === 0 ? boldFont : font,
+              color: hexToRgb(el.color || '#111827'),
+              maxWidth: Math.max(10, cellW - pad * 2),
+              rotate: textPos.rotate,
+            });
+          }
         }
       }
     }

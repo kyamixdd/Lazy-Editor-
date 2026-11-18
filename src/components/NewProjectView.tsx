@@ -7,6 +7,7 @@ import {
   Cpu,
   FileText,
   Loader2,
+  ScanSearch,
   ScanText,
   Sparkles,
   Upload,
@@ -37,6 +38,7 @@ interface NewProjectViewProps {
   settings: StudioSettings;
   onProjectCreated: (project: PDFProject, openImmediately: boolean) => void;
   onUpdateProject?: (updated: PDFProject) => void;
+  onInspectScan?: (project: PDFProject) => void;
 }
 
 async function createStarterPdfLocally(
@@ -257,6 +259,7 @@ export const NewProjectView: React.FC<NewProjectViewProps> = ({
   settings,
   onProjectCreated,
   onUpdateProject,
+  onInspectScan,
 }) => {
   const shouldReduceMotion = useReducedMotion();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -352,6 +355,10 @@ export const NewProjectView: React.FC<NewProjectViewProps> = ({
       ],
       exportConfig: createDefaultExportConfig(),
       aiSummary: scanResult.summary,
+      imageResources: scanResult.imageResources,
+      scanReport: scanResult.scanReport,
+      documentMetadata: scanResult.documentMetadata,
+      scanCorrectionRules: [],
       isTemplate: false,
       versions: [],
     };
@@ -397,6 +404,9 @@ export const NewProjectView: React.FC<NewProjectViewProps> = ({
       );
     } finally {
       setIsProcessing(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
 
@@ -691,45 +701,93 @@ export const NewProjectView: React.FC<NewProjectViewProps> = ({
                 Locally Scanned {completedProjects.length} PDF project(s) — Ready for Editing
               </div>
               {completedProjects.map((proj) => {
-                const reviewCount = proj.elements.filter((e) => e.needsReview).length;
+                const report = proj.scanReport;
+                const reviewCount = report?.needsReviewObjects ?? proj.elements.filter((e) => e.needsReview).length;
                 const enhancingThis = aiEnhancingId === proj.id;
                 return (
                   <div
                     key={proj.id}
-                    className="flex flex-col tablet:flex-row tablet:items-center justify-between gap-3 p-3 rounded-xl bg-[#F7F7F7] dark:bg-[#0B0B0B] border border-black/10 dark:border-white/12 text-xs"
+                    className="flex flex-col gap-3 p-3 rounded-xl bg-[#F7F7F7] dark:bg-[#0B0B0B] border border-black/10 dark:border-white/12 text-xs"
                   >
-                    <div>
-                      <div className="font-semibold text-[#101010] dark:text-white">
-                        {proj.name}
+                    <div className="flex flex-col tablet:flex-row tablet:items-center justify-between gap-3">
+                      <div>
+                        <div className="font-semibold text-[#101010] dark:text-white">
+                          {proj.name}
+                        </div>
+                        <div className="mt-0.5 text-[#555555] dark:text-[#B5B5B5] tabular-nums">
+                          {proj.pageCount} pages · {report?.totalElements ?? proj.elements.length} detected elements
+                          {reviewCount > 0 ? ` · ${reviewCount} flagged for manual review` : ''}
+                        </div>
                       </div>
-                      <div className="mt-0.5 text-[#555555] dark:text-[#B5B5B5] tabular-nums">
-                        {proj.pageCount} pages · {proj.elements.length} detected elements
-                        {reviewCount > 0 ? ` · ${reviewCount} flagged for manual review` : ''}
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        disabled={Boolean(aiEnhancingId)}
-                        onClick={() => void handleRunExplicitAiEnhance(proj)}
-                        title="Optional Gemini semantic analysis (requires Gemini API access & quota)"
-                        className="min-h-[40px] tablet:min-h-0 px-3 py-1.5 rounded-lg glass-level-2 border border-black/15 dark:border-white/15 text-[#101010] dark:text-white hover:bg-black/[0.04] dark:hover:bg-white/[0.08] font-medium flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50 touch-manipulation"
-                      >
-                        {enhancingThis ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <Sparkles className="w-3.5 h-3.5" />
+                      <div className="flex flex-wrap items-center gap-2">
+                        {onInspectScan && (
+                          <button
+                            type="button"
+                            onClick={() => onInspectScan(proj)}
+                            className="min-h-[40px] tablet:min-h-0 px-3 py-1.5 rounded-lg glass-level-2 border border-black/15 dark:border-white/15 text-[#101010] dark:text-white hover:bg-black/[0.04] dark:hover:bg-white/[0.08] font-medium flex items-center gap-1.5 whitespace-nowrap touch-manipulation"
+                          >
+                            <ScanSearch className="w-3.5 h-3.5" />
+                            Inspect Scan
+                          </button>
                         )}
-                        {enhancingThis ? 'Enhancing...' : 'AI-Enhanced Analysis'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onProjectCreated(proj, true)}
-                        className="min-h-[40px] tablet:min-h-0 px-3.5 py-1.5 rounded-lg bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] font-medium whitespace-nowrap touch-manipulation"
-                      >
-                        Open in Editor
-                      </button>
+                        <button
+                          type="button"
+                          disabled={Boolean(aiEnhancingId)}
+                          onClick={() => void handleRunExplicitAiEnhance(proj)}
+                          title="Optional Gemini semantic analysis (requires Gemini API access & quota)"
+                          className="min-h-[40px] tablet:min-h-0 px-3 py-1.5 rounded-lg glass-level-2 border border-black/15 dark:border-white/15 text-[#101010] dark:text-white hover:bg-black/[0.04] dark:hover:bg-white/[0.08] font-medium flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50 touch-manipulation"
+                        >
+                          {enhancingThis ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Sparkles className="w-3.5 h-3.5" />
+                          )}
+                          {enhancingThis ? 'Enhancing...' : 'AI-Enhanced Analysis'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onProjectCreated(proj, true)}
+                          className="min-h-[40px] tablet:min-h-0 px-3.5 py-1.5 rounded-lg bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] font-medium whitespace-nowrap touch-manipulation"
+                        >
+                          Open in Editor
+                        </button>
+                      </div>
                     </div>
+
+                    {report && (
+                      <div className="grid grid-cols-3 tablet:grid-cols-7 gap-2 pt-2 border-t border-black/10 dark:border-white/10 text-[11px] tabular-nums">
+                        <div className="px-2 py-1 rounded-lg bg-black/[0.03] dark:bg-white/[0.04]">
+                          <div className="text-[#888888] dark:text-[#858585]">Text</div>
+                          <div className="font-semibold text-[#101010] dark:text-white">{report.textObjects}</div>
+                        </div>
+                        <div className="px-2 py-1 rounded-lg bg-black/[0.03] dark:bg-white/[0.04]">
+                          <div className="text-[#888888] dark:text-[#858585]">Images</div>
+                          <div className="font-semibold text-[#101010] dark:text-white">{report.imageObjects}</div>
+                        </div>
+                        <div className="px-2 py-1 rounded-lg bg-black/[0.03] dark:bg-white/[0.04]">
+                          <div className="text-[#888888] dark:text-[#858585]">Rectangles</div>
+                          <div className="font-semibold text-[#101010] dark:text-white">{report.rectangles}</div>
+                        </div>
+                        <div className="px-2 py-1 rounded-lg bg-black/[0.03] dark:bg-white/[0.04]">
+                          <div className="text-[#888888] dark:text-[#858585]">Lines</div>
+                          <div className="font-semibold text-[#101010] dark:text-white">{report.lines}</div>
+                        </div>
+                        <div className="px-2 py-1 rounded-lg bg-black/[0.03] dark:bg-white/[0.04]">
+                          <div className="text-[#888888] dark:text-[#858585]">Tables</div>
+                          <div className="font-semibold text-[#101010] dark:text-white">{report.tables} ({report.tableCells} cells)</div>
+                        </div>
+                        <div className="px-2 py-1 rounded-lg bg-black/[0.03] dark:bg-white/[0.04]">
+                          <div className="text-[#888888] dark:text-[#858585]">Forms</div>
+                          <div className="font-semibold text-[#101010] dark:text-white">{report.formFields}</div>
+                        </div>
+                        <div className="px-2 py-1 rounded-lg bg-black/[0.03] dark:bg-white/[0.04]">
+                          <div className="text-[#888888] dark:text-[#858585]">Review</div>
+                          <div className={`font-semibold ${reviewCount > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-[#101010] dark:text-white'}`}>
+                            {reviewCount}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}

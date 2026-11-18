@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   BookMarked,
   CheckCircle2,
@@ -40,7 +40,9 @@ import {
 } from '../utils/pdfUtilitiesEngine';
 import { parseRangeFilterNumbers } from '../utils/batchExportEngine';
 import { formatBytesCompact } from '../utils/projectStorage';
+import { triggerBytesDownload } from '../utils/downloadHelper';
 import { GlassButton, GlassCard } from './glass';
+import { NumericDraftInput } from './NumericDraftInput';
 
 interface PdfUtilitiesViewProps {
   activeProject: PDFProject | null;
@@ -74,6 +76,8 @@ export const PdfUtilitiesView: React.FC<PdfUtilitiesViewProps> = ({
   });
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [sha256, setSha256] = useState<string | null>(null);
+  const hasExternalUploadRef = useRef(false);
+  const lastInspectedProjectIdRef = useRef<string | null>(null);
 
   // Metadata state
   const [meta, setMeta] = useState<PdfMetadataValues>({
@@ -124,45 +128,85 @@ export const PdfUtilitiesView: React.FC<PdfUtilitiesViewProps> = ({
   const [markdownTitle, setMarkdownTitle] = useState('Converted Document');
 
   const downloadBytes = (bytes: Uint8Array, fileName: string, mime = 'application/pdf') => {
-    const blob = new Blob([bytes.slice().buffer], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName;
-    a.click();
-    URL.revokeObjectURL(url);
+    triggerBytesDownload(bytes, fileName, mime);
   };
 
   const inspectBuffer = async (bytes: Uint8Array, name: string) => {
-    setWorkingBytes(bytes);
-    setLoadedName(name);
-    const [m, bms, flds, hash] = await Promise.all([
-      readPdfMetadata(bytes),
-      readPdfBookmarks(bytes),
-      readAcroFormValues(bytes),
-      computeSha256Hex(bytes),
-    ]);
-    setMeta(m);
-    setBookmarks(bms);
-    setReadFields(flds);
-    setSha256(hash);
-    setStatusMsg(
-      `Loaded "${name}" (${m.pageCount} page(s), ${formatBytesCompact(bytes.byteLength)}).`
-    );
+    try {
+      setWorkingBytes(bytes);
+      setLoadedName(name);
+      const [m, bms, flds, hash] = await Promise.all([
+        readPdfMetadata(bytes),
+        readPdfBookmarks(bytes),
+        readAcroFormValues(bytes),
+        computeSha256Hex(bytes),
+      ]);
+      setMeta(m);
+      setBookmarks(bms);
+      setReadFields(flds);
+      setSha256(hash);
+      setConvertPageNum((p) => Math.max(1, Math.min(p, Math.max(1, m.pageCount))));
+      setNewBmPage((p) => Math.max(1, Math.min(p, Math.max(1, m.pageCount))));
+      setStatusMsg(
+        `Loaded "${name}" (${m.pageCount} page(s), ${formatBytesCompact(bytes.byteLength)}).`
+      );
+    } catch (err) {
+      setStatusMsg(err instanceof Error ? err.message : 'Failed to inspect PDF buffer.');
+    }
   };
+
+  useEffect(() => {
+    if (!activeProject) {
+      if (!hasExternalUploadRef.current) {
+        setWorkingBytes(null);
+        setLoadedName('');
+        setSha256(null);
+      }
+      return;
+    }
+    if (lastInspectedProjectIdRef.current === activeProject.id) return;
+    lastInspectedProjectIdRef.current = activeProject.id;
+    hasExternalUploadRef.current = false;
+    setArchivalNote(null);
+    if (!activeProject.sourcePdfBase64) {
+      setWorkingBytes(null);
+      setLoadedName(`${activeProject.name}.pdf`);
+      setSha256(null);
+      setStatusMsg(null);
+      return;
+    }
+    try {
+      const bin = atob(activeProject.sourcePdfBase64);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      void inspectBuffer(out, `${activeProject.name}.pdf`);
+    } catch {
+      setStatusMsg('Could not decode active project PDF source bytes.');
+    }
+  }, [activeProject?.id, activeProject?.sourcePdfBase64]);
 
   const handleUploadPdf = async (file: File | undefined) => {
     if (!file) return;
-    const buf = new Uint8Array(await file.arrayBuffer());
-    await inspectBuffer(buf, file.name);
+    try {
+      hasExternalUploadRef.current = true;
+      const buf = new Uint8Array(await file.arrayBuffer());
+      await inspectBuffer(buf, file.name);
+    } catch (err) {
+      setStatusMsg(err instanceof Error ? err.message : 'Failed to read PDF file.');
+    }
   };
 
   const handleLoadActiveSource = async () => {
     if (!activeProject?.sourcePdfBase64) return;
-    const bin = atob(activeProject.sourcePdfBase64);
-    const out = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-    await inspectBuffer(out, `${activeProject.name}.pdf`);
+    try {
+      hasExternalUploadRef.current = false;
+      const bin = atob(activeProject.sourcePdfBase64);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      await inspectBuffer(out, `${activeProject.name}.pdf`);
+    } catch (err) {
+      setStatusMsg(err instanceof Error ? err.message : 'Failed to load active project PDF.');
+    }
   };
 
   return (
@@ -265,9 +309,13 @@ export const PdfUtilitiesView: React.FC<PdfUtilitiesViewProps> = ({
               <button
                 type="button"
                 onClick={async () => {
-                  const scrubbed = await writeOrScrubPdfMetadata(workingBytes, {}, true);
-                  await inspectBuffer(scrubbed, `scrubbed_${loadedName || 'doc.pdf'}`);
-                  downloadBytes(scrubbed, `scrubbed_${loadedName || 'document.pdf'}`);
+                  try {
+                    const scrubbed = await writeOrScrubPdfMetadata(workingBytes, {}, true);
+                    await inspectBuffer(scrubbed, `scrubbed_${loadedName || 'doc.pdf'}`);
+                    downloadBytes(scrubbed, `scrubbed_${loadedName || 'document.pdf'}`);
+                  } catch (err) {
+                    setStatusMsg(err instanceof Error ? err.message : 'Failed to scrub PDF metadata.');
+                  }
                 }}
                 className="px-3 py-1.5 rounded-lg border border-red-500/30 text-red-600 dark:text-red-400 hover:bg-red-500/10 font-medium"
               >
@@ -306,9 +354,13 @@ export const PdfUtilitiesView: React.FC<PdfUtilitiesViewProps> = ({
               disabled={!workingBytes}
               onClick={async () => {
                 if (!workingBytes) return;
-                const updated = await writeOrScrubPdfMetadata(workingBytes, meta, false);
-                await inspectBuffer(updated, loadedName || 'updated.pdf');
-                downloadBytes(updated, `meta_${loadedName || 'document.pdf'}`);
+                try {
+                  const updated = await writeOrScrubPdfMetadata(workingBytes, meta, false);
+                  await inspectBuffer(updated, loadedName || 'updated.pdf');
+                  downloadBytes(updated, `meta_${loadedName || 'document.pdf'}`);
+                } catch (err) {
+                  setStatusMsg(err instanceof Error ? err.message : 'Failed to save PDF metadata.');
+                }
               }}
             >
               <Download className="w-3.5 h-3.5" />
@@ -337,12 +389,14 @@ export const PdfUtilitiesView: React.FC<PdfUtilitiesViewProps> = ({
             </label>
             <label className="w-24 block">
               <span className="text-[10px] text-[#888888]">Page #</span>
-              <input
-                type="number"
+              <NumericDraftInput
                 min={1}
                 max={Math.max(1, meta.pageCount)}
+                fallback={1}
                 value={newBmPage}
-                onChange={(e) => setNewBmPage(Math.max(1, Number(e.target.value) || 1))}
+                onCommit={(val) =>
+                  setNewBmPage(Math.max(1, Math.min(Math.max(1, meta.pageCount), Math.round(val))))
+                }
                 className="mt-0.5 w-full px-2 py-1.5 rounded-lg border studio-input tabular-nums"
               />
             </label>
@@ -392,9 +446,13 @@ export const PdfUtilitiesView: React.FC<PdfUtilitiesViewProps> = ({
               disabled={!workingBytes}
               onClick={async () => {
                 if (!workingBytes) return;
-                const updated = await writePdfBookmarks(workingBytes, bookmarks);
-                await inspectBuffer(updated, loadedName || 'bookmarked.pdf');
-                downloadBytes(updated, `bookmarked_${loadedName || 'document.pdf'}`);
+                try {
+                  const updated = await writePdfBookmarks(workingBytes, bookmarks);
+                  await inspectBuffer(updated, loadedName || 'bookmarked.pdf');
+                  downloadBytes(updated, `bookmarked_${loadedName || 'document.pdf'}`);
+                } catch (err) {
+                  setStatusMsg(err instanceof Error ? err.message : 'Failed to embed bookmarks.');
+                }
               }}
             >
               <Download className="w-3.5 h-3.5" />
@@ -430,10 +488,14 @@ export const PdfUtilitiesView: React.FC<PdfUtilitiesViewProps> = ({
                 disabled={!workingBytes}
                 onClick={async () => {
                   if (!workingBytes) return;
-                  const nums = parseRangeFilterNumbers(extractRange, Math.max(1, meta.pageCount));
-                  const extracted = await splitOrExtractPdfPages(workingBytes, nums);
-                  downloadBytes(extracted, `extracted_${loadedName || 'pages.pdf'}`);
-                  setStatusMsg(`Extracted ${nums.length} page(s) (${nums.join(', ')}).`);
+                  try {
+                    const nums = parseRangeFilterNumbers(extractRange, Math.max(1, meta.pageCount));
+                    const extracted = await splitOrExtractPdfPages(workingBytes, nums);
+                    downloadBytes(extracted, `extracted_${loadedName || 'pages.pdf'}`);
+                    setStatusMsg(`Extracted ${nums.length} page(s) (${nums.join(', ')}).`);
+                  } catch (err) {
+                    setStatusMsg(err instanceof Error ? err.message : 'Failed to extract pages.');
+                  }
                 }}
               >
                 Extract Selected Pages
@@ -444,12 +506,16 @@ export const PdfUtilitiesView: React.FC<PdfUtilitiesViewProps> = ({
                 disabled={!workingBytes}
                 onClick={async () => {
                   if (!workingBytes) return;
-                  const rep = await repairAndOptimizePdf(workingBytes, true);
-                  await inspectBuffer(rep.bytes, `repaired_${loadedName || 'doc.pdf'}`);
-                  downloadBytes(rep.bytes, `optimized_${loadedName || 'document.pdf'}`);
-                  setStatusMsg(
-                    `Repaired & compressed PDF: ${formatBytesCompact(rep.originalSize)} → ${formatBytesCompact(rep.optimizedSize)}.`
-                  );
+                  try {
+                    const rep = await repairAndOptimizePdf(workingBytes, true);
+                    await inspectBuffer(rep.bytes, `repaired_${loadedName || 'doc.pdf'}`);
+                    downloadBytes(rep.bytes, `optimized_${loadedName || 'document.pdf'}`);
+                    setStatusMsg(
+                      `Repaired & compressed PDF: ${formatBytesCompact(rep.originalSize)} → ${formatBytesCompact(rep.optimizedSize)}.`
+                    );
+                  } catch (err) {
+                    setStatusMsg(err instanceof Error ? err.message : 'Failed to repair/optimize PDF.');
+                  }
                 }}
               >
                 <Sparkles className="w-3.5 h-3.5" />
@@ -472,15 +538,20 @@ export const PdfUtilitiesView: React.FC<PdfUtilitiesViewProps> = ({
                 accept="application/pdf"
                 className="hidden"
                 onChange={async (e) => {
-                  const files = Array.from(e.target.files || []);
-                  const added = await Promise.all(
-                    files.map(async (f) => ({
-                      name: f.name,
-                      bytes: new Uint8Array(await f.arrayBuffer()),
-                    }))
-                  );
-                  setMergeList((prev) => [...prev, ...added]);
-                  e.target.value = '';
+                  try {
+                    const files = Array.from(e.target.files || []);
+                    const added = await Promise.all(
+                      files.map(async (f) => ({
+                        name: f.name,
+                        bytes: new Uint8Array(await f.arrayBuffer()),
+                      }))
+                    );
+                    setMergeList((prev) => [...prev, ...added]);
+                  } catch (err) {
+                    setStatusMsg(err instanceof Error ? err.message : 'Failed to read merge PDF file(s).');
+                  } finally {
+                    e.target.value = '';
+                  }
                 }}
               />
             </label>
@@ -503,14 +574,18 @@ export const PdfUtilitiesView: React.FC<PdfUtilitiesViewProps> = ({
               size="md"
               disabled={mergeList.length === 0 && !workingBytes}
               onClick={async () => {
-                const bufs = [
-                  ...(workingBytes ? [workingBytes] : []),
-                  ...mergeList.map((m) => m.bytes),
-                ];
-                if (bufs.length === 0) return;
-                const merged = await mergePdfByteArrays(bufs);
-                downloadBytes(merged, 'merged_bundle.pdf');
-                setStatusMsg(`Merged ${bufs.length} PDF document(s) cleanly.`);
+                try {
+                  const bufs = [
+                    ...(workingBytes ? [workingBytes] : []),
+                    ...mergeList.map((m) => m.bytes),
+                  ];
+                  if (bufs.length === 0) return;
+                  const merged = await mergePdfByteArrays(bufs);
+                  downloadBytes(merged, 'merged_bundle.pdf');
+                  setStatusMsg(`Merged ${bufs.length} PDF document(s) cleanly.`);
+                } catch (err) {
+                  setStatusMsg(err instanceof Error ? err.message : 'Failed to merge PDFs.');
+                }
               }}
             >
               <Download className="w-3.5 h-3.5" />
@@ -555,36 +630,42 @@ export const PdfUtilitiesView: React.FC<PdfUtilitiesViewProps> = ({
                   <option value="checkbox">Checkbox</option>
                   <option value="dropdown">Dropdown</option>
                 </select>
-                <input
-                  type="number"
+                <NumericDraftInput
                   value={ff.xPt}
-                  onChange={(e) =>
+                  fallback={0}
+                  onCommit={(val) =>
                     setFormFields((prev) =>
-                      prev.map((x, i) => (i === idx ? { ...x, xPt: Number(e.target.value) || 0 } : x))
+                      prev.map((x, i) => (i === idx ? { ...x, xPt: val } : x))
                     )
                   }
                   placeholder="X pt"
                   className="px-2 py-1 rounded border studio-input tabular-nums"
                 />
-                <input
-                  type="number"
+                <NumericDraftInput
                   value={ff.yPt}
-                  onChange={(e) =>
+                  fallback={0}
+                  onCommit={(val) =>
                     setFormFields((prev) =>
-                      prev.map((x, i) => (i === idx ? { ...x, yPt: Number(e.target.value) || 0 } : x))
+                      prev.map((x, i) => (i === idx ? { ...x, yPt: val } : x))
                     )
                   }
                   placeholder="Y pt"
                   className="px-2 py-1 rounded border studio-input tabular-nums"
                 />
-                <input
-                  type="number"
+                <NumericDraftInput
                   value={ff.pageNumber}
                   min={1}
-                  onChange={(e) =>
+                  max={Math.max(1, meta.pageCount || 1)}
+                  fallback={1}
+                  onCommit={(val) =>
                     setFormFields((prev) =>
                       prev.map((x, i) =>
-                        i === idx ? { ...x, pageNumber: Math.max(1, Number(e.target.value) || 1) } : x
+                        i === idx
+                          ? {
+                              ...x,
+                              pageNumber: Math.max(1, Math.min(Math.max(1, meta.pageCount || 1), Math.round(val))),
+                            }
+                          : x
                       )
                     )
                   }
@@ -620,9 +701,13 @@ export const PdfUtilitiesView: React.FC<PdfUtilitiesViewProps> = ({
                 disabled={!workingBytes}
                 onClick={async () => {
                   if (!workingBytes) return;
-                  const out = await addAcroFormFieldsToPdf(workingBytes, formFields);
-                  await inspectBuffer(out, `form_${loadedName || 'doc.pdf'}`);
-                  downloadBytes(out, `acroform_${loadedName || 'document.pdf'}`);
+                  try {
+                    const out = await addAcroFormFieldsToPdf(workingBytes, formFields);
+                    await inspectBuffer(out, `form_${loadedName || 'doc.pdf'}`);
+                    downloadBytes(out, `acroform_${loadedName || 'document.pdf'}`);
+                  } catch (err) {
+                    setStatusMsg(err instanceof Error ? err.message : 'Failed to embed AcroForm fields.');
+                  }
                 }}
               >
                 Embed AcroForm &amp; Download
@@ -684,12 +769,16 @@ export const PdfUtilitiesView: React.FC<PdfUtilitiesViewProps> = ({
               disabled={!workingBytes}
               onClick={async () => {
                 if (!workingBytes) return;
-                const res = await applyPdfA1bXmpMetadata(workingBytes, {
-                  title: meta.title || loadedName,
-                  author: meta.author,
-                });
-                setArchivalNote(res.complianceNote);
-                downloadBytes(res.bytes, `pdfa_${loadedName || 'document.pdf'}`);
+                try {
+                  const res = await applyPdfA1bXmpMetadata(workingBytes, {
+                    title: meta.title || loadedName,
+                    author: meta.author,
+                  });
+                  setArchivalNote(res.complianceNote);
+                  downloadBytes(res.bytes, `pdfa_${loadedName || 'document.pdf'}`);
+                } catch (err) {
+                  setStatusMsg(err instanceof Error ? err.message : 'Failed to write PDF/A XMP metadata.');
+                }
               }}
             >
               Tag PDF/A XMP &amp; Audit Fonts
@@ -719,12 +808,16 @@ export const PdfUtilitiesView: React.FC<PdfUtilitiesViewProps> = ({
             <div className="grid grid-cols-2 gap-2">
               <label className="block">
                 <span className="text-[10px] text-[#888888]">Page #</span>
-                <input
-                  type="number"
+                <NumericDraftInput
                   min={1}
                   max={Math.max(1, meta.pageCount)}
+                  fallback={1}
                   value={convertPageNum}
-                  onChange={(e) => setConvertPageNum(Math.max(1, Number(e.target.value) || 1))}
+                  onCommit={(val) =>
+                    setConvertPageNum(
+                      Math.max(1, Math.min(Math.max(1, meta.pageCount), Math.round(val)))
+                    )
+                  }
                   className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
                 />
               </label>
@@ -747,33 +840,49 @@ export const PdfUtilitiesView: React.FC<PdfUtilitiesViewProps> = ({
               disabled={!workingBytes}
               onClick={async () => {
                 if (!workingBytes) return;
-                const dataUrl = await renderSinglePagePreview(
-                  uint8ArrayToBase64(workingBytes),
-                  convertPageNum,
-                  2
-                );
-                if (!dataUrl) {
-                  setStatusMsg(`Page ${convertPageNum} could not be rendered.`);
-                  return;
+                try {
+                  const dataUrl = await renderSinglePagePreview(
+                    uint8ArrayToBase64(workingBytes),
+                    convertPageNum,
+                    2
+                  );
+                  if (!dataUrl) {
+                    setStatusMsg(`Page ${convertPageNum} could not be rendered.`);
+                    return;
+                  }
+                  const img = new Image();
+                  img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = img.naturalWidth;
+                    canvas.height = img.naturalHeight;
+                    const ctx = canvas.getContext('2d');
+                    if (!ctx) {
+                      canvas.width = 0;
+                      canvas.height = 0;
+                      setStatusMsg('Canvas 2D context unavailable for image export.');
+                      return;
+                    }
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(img, 0, 0);
+                    const mime = `image/${imageFormat}`;
+                    const outUrl = canvas.toDataURL(mime, 0.92);
+                    canvas.width = 0;
+                    canvas.height = 0;
+                    const a = document.createElement('a');
+                    a.href = outUrl;
+                    a.download = `page_${convertPageNum}.${imageFormat}`;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                  };
+                  img.onerror = () => {
+                    setStatusMsg(`Failed to decode rendered image for page ${convertPageNum}.`);
+                  };
+                  img.src = dataUrl;
+                } catch (err) {
+                  setStatusMsg(err instanceof Error ? err.message : 'Failed to render page image.');
                 }
-                const img = new Image();
-                img.onload = () => {
-                  const canvas = document.createElement('canvas');
-                  canvas.width = img.naturalWidth;
-                  canvas.height = img.naturalHeight;
-                  const ctx = canvas.getContext('2d');
-                  if (!ctx) return;
-                  ctx.fillStyle = '#FFFFFF';
-                  ctx.fillRect(0, 0, canvas.width, canvas.height);
-                  ctx.drawImage(img, 0, 0);
-                  const mime = `image/${imageFormat}`;
-                  const outUrl = canvas.toDataURL(mime, 0.92);
-                  const a = document.createElement('a');
-                  a.href = outUrl;
-                  a.download = `page_${convertPageNum}.${imageFormat}`;
-                  a.click();
-                };
-                img.src = dataUrl;
               }}
             >
               Render &amp; Download Image
@@ -803,8 +912,12 @@ export const PdfUtilitiesView: React.FC<PdfUtilitiesViewProps> = ({
                 variant="primary"
                 size="sm"
                 onClick={async () => {
-                  const pdf = await convertMarkdownToPdf(markdownTitle, markdownInput);
-                  downloadBytes(pdf, `${markdownTitle.replace(/\s+/g, '_')}.pdf`);
+                  try {
+                    const pdf = await convertMarkdownToPdf(markdownTitle, markdownInput);
+                    downloadBytes(pdf, `${markdownTitle.replace(/\s+/g, '_')}.pdf`);
+                  } catch (err) {
+                    setStatusMsg(err instanceof Error ? err.message : 'Failed to convert Markdown to PDF.');
+                  }
                 }}
               >
                 Convert Markdown → PDF
@@ -814,12 +927,16 @@ export const PdfUtilitiesView: React.FC<PdfUtilitiesViewProps> = ({
                   variant="glass"
                   size="sm"
                   onClick={async () => {
-                    const pdf = await convertStructuredRowsToPdf(
-                      `${activeProject.name} Dataset`,
-                      activeProject.dataColumns,
-                      activeProject.dataRows
-                    );
-                    downloadBytes(pdf, `${activeProject.name.replace(/\s+/g, '_')}_dataset.pdf`);
+                    try {
+                      const pdf = await convertStructuredRowsToPdf(
+                        `${activeProject.name} Dataset`,
+                        activeProject.dataColumns,
+                        activeProject.dataRows
+                      );
+                      downloadBytes(pdf, `${activeProject.name.replace(/\s+/g, '_')}_dataset.pdf`);
+                    } catch (err) {
+                      setStatusMsg(err instanceof Error ? err.message : 'Failed to convert dataset to PDF.');
+                    }
                   }}
                 >
                   Active Dataset → PDF Table

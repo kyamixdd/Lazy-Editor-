@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -34,7 +34,9 @@ import {
 import { generateExportBytes } from '../utils/pdfExporter';
 import { computeSerialValueForSlot } from '../utils/serialEngine';
 import { PAGE_PRESETS_PT, ptToUnit, unitToPt } from '../utils/units';
+import { triggerBytesDownload } from '../utils/downloadHelper';
 import { GlassButton, GlassCard } from './glass';
+import { NumericDraftInput } from './NumericDraftInput';
 
 interface BlueprintStudioViewProps {
   project: PDFProject | null;
@@ -84,6 +86,29 @@ export const BlueprintStudioView: React.FC<BlueprintStudioViewProps> = ({
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const dragRef = useRef<DragState | null>(null);
+
+  useEffect(() => {
+    const nextBp = project?.activeBlueprint
+      ? structuredClone(project.activeBlueprint)
+      : blueprints[0]
+      ? structuredClone(blueprints[0])
+      : createDefaultBlueprint(project);
+    setDraftBlueprint(nextBp);
+    setSelectedBlockId(nextBp.blocks[0]?.id || null);
+    setStatusMessage(null);
+  }, [project?.id]);
+
+  useEffect(() => {
+    const clearDrag = () => {
+      dragRef.current = null;
+    };
+    window.addEventListener('pointerup', clearDrag);
+    window.addEventListener('blur', clearDrag);
+    return () => {
+      window.removeEventListener('pointerup', clearDrag);
+      window.removeEventListener('blur', clearDrag);
+    };
+  }, []);
 
   const unit = draftBlueprint.unit;
   const selectedBlock =
@@ -243,15 +268,11 @@ export const BlueprintStudioView: React.FC<BlueprintStudioViewProps> = ({
       onSaveBlueprint(draftBlueprint);
       onUpdateProject(bpProject);
       const res = await generateExportBytes(bpProject);
-      const blob = new Blob([new Uint8Array(res.data)], { type: res.mimeType });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${draftBlueprint.name.replace(/\s+/g, '_')}_production.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      triggerBytesDownload(
+        res.data,
+        `${draftBlueprint.name.replace(/\s+/g, '_')}_production.pdf`,
+        res.mimeType
+      );
       setStatusMessage(`Exported ${res.fileName} (${bpProject.bulkConfig.totalOutputPages} page(s))`);
     } catch (err) {
       setStatusMessage(
@@ -644,9 +665,13 @@ export const BlueprintStudioView: React.FC<BlueprintStudioViewProps> = ({
                     {!blk.locked && (
                       <div
                         onPointerDown={(e) => handlePointerDownBlock(e, blk, 'resize')}
+                        onClick={(e) => e.stopPropagation()}
                         title="Drag to resize block"
-                        className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-[#101010] border border-white cursor-nwse-resize z-20"
-                      />
+                        style={{ touchAction: 'none' }}
+                        className="absolute -bottom-1 -right-1 w-9 h-9 flex items-end justify-end p-1 cursor-nwse-resize z-20"
+                      >
+                        <span className="w-3.5 h-3.5 bg-[#101010] border border-white rounded-[2px] shadow" />
+                      </div>
                     )}
                   </div>
                 );
@@ -769,13 +794,13 @@ export const BlueprintStudioView: React.FC<BlueprintStudioViewProps> = ({
                           <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                             {lbl} ({unit})
                           </span>
-                          <input
-                            type="number"
-                            step="0.5"
+                          <NumericDraftInput
+                            step={0.5}
                             disabled={selectedBlock.locked}
                             value={ptToUnit(selectedBlock[key], unit)}
-                            onChange={(e) => {
-                              const pt = unitToPt(Number(e.target.value) || 0, unit);
+                            fallback={key === 'widthPt' || key === 'heightPt' ? ptToUnit(16, unit) : 0}
+                            onCommit={(val) => {
+                              const pt = unitToPt(val, unit);
                               updateBlock(selectedBlock.id, {
                                 [key]:
                                   key === 'widthPt' || key === 'heightPt'
@@ -800,14 +825,14 @@ export const BlueprintStudioView: React.FC<BlueprintStudioViewProps> = ({
                         </span>
                       </div>
                       <div className="flex items-center gap-1.5">
-                        <input
-                          type="number"
-                          step="1"
+                        <NumericDraftInput
+                          step={1}
                           disabled={selectedBlock.locked}
                           value={selectedBlock.rotation}
-                          onChange={(e) =>
+                          fallback={0}
+                          onCommit={(val) =>
                             updateBlock(selectedBlock.id, {
-                              rotation: Number(e.target.value) || 0,
+                              rotation: val,
                             })
                           }
                           className="w-20 px-2 py-1 rounded-lg studio-input tabular-nums"
@@ -838,14 +863,17 @@ export const BlueprintStudioView: React.FC<BlueprintStudioViewProps> = ({
                         <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                           Source Page
                         </span>
-                        <input
-                          type="number"
-                          min="1"
+                        <NumericDraftInput
+                          min={1}
                           max={Math.max(1, project?.pageCount || 1)}
+                          fallback={1}
                           value={selectedBlock.sourcePageNumber}
-                          onChange={(e) =>
+                          onCommit={(val) =>
                             updateBlock(selectedBlock.id, {
-                              sourcePageNumber: Math.max(1, Number(e.target.value) || 1),
+                              sourcePageNumber: Math.max(
+                                1,
+                                Math.min(Math.max(1, project?.pageCount || 1), Math.round(val))
+                              ),
                             })
                           }
                           className="mt-0.5 w-full px-2 py-1 rounded-lg studio-input tabular-nums"
@@ -929,14 +957,14 @@ export const BlueprintStudioView: React.FC<BlueprintStudioViewProps> = ({
                               <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                                 Row Offset
                               </span>
-                              <input
-                                type="number"
+                              <NumericDraftInput
                                 value={selectedBlock.dataSource.rowOffset}
-                                onChange={(e) =>
+                                fallback={0}
+                                onCommit={(val) =>
                                   updateBlock(selectedBlock.id, {
                                     dataSource: {
                                       ...selectedBlock.dataSource,
-                                      rowOffset: Number(e.target.value) || 0,
+                                      rowOffset: Math.round(val),
                                     },
                                   })
                                 }
@@ -948,18 +976,15 @@ export const BlueprintStudioView: React.FC<BlueprintStudioViewProps> = ({
                               <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                                 Fixed Row (1-based)
                               </span>
-                              <input
-                                type="number"
-                                min="1"
+                              <NumericDraftInput
+                                min={1}
                                 value={(selectedBlock.dataSource.fixedRowIndex ?? 0) + 1}
-                                onChange={(e) =>
+                                fallback={1}
+                                onCommit={(val) =>
                                   updateBlock(selectedBlock.id, {
                                     dataSource: {
                                       ...selectedBlock.dataSource,
-                                      fixedRowIndex: Math.max(
-                                        0,
-                                        (Number(e.target.value) || 1) - 1
-                                      ),
+                                      fixedRowIndex: Math.max(0, Math.round(val) - 1),
                                     },
                                   })
                                 }
@@ -1079,18 +1104,16 @@ export const BlueprintStudioView: React.FC<BlueprintStudioViewProps> = ({
                     <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                       Sheet Width ({unit})
                     </span>
-                    <input
-                      type="number"
-                      step="0.5"
+                    <NumericDraftInput
+                      step={0.5}
+                      min={ptToUnit(72, unit)}
                       value={ptToUnit(draftBlueprint.sheetWidthPt, unit)}
-                      onChange={(e) =>
+                      fallback={ptToUnit(72, unit)}
+                      onCommit={(val) =>
                         mutateBlueprint((bp) => ({
                           ...bp,
                           sizePreset: 'Custom',
-                          sheetWidthPt: Math.max(
-                            72,
-                            unitToPt(Number(e.target.value) || 72, unit)
-                          ),
+                          sheetWidthPt: Math.max(72, unitToPt(val, unit)),
                         }))
                       }
                       className="mt-0.5 w-full px-2 py-1.5 rounded-lg studio-input tabular-nums"
@@ -1100,18 +1123,16 @@ export const BlueprintStudioView: React.FC<BlueprintStudioViewProps> = ({
                     <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                       Sheet Height ({unit})
                     </span>
-                    <input
-                      type="number"
-                      step="0.5"
+                    <NumericDraftInput
+                      step={0.5}
+                      min={ptToUnit(72, unit)}
                       value={ptToUnit(draftBlueprint.sheetHeightPt, unit)}
-                      onChange={(e) =>
+                      fallback={ptToUnit(72, unit)}
+                      onCommit={(val) =>
                         mutateBlueprint((bp) => ({
                           ...bp,
                           sizePreset: 'Custom',
-                          sheetHeightPt: Math.max(
-                            72,
-                            unitToPt(Number(e.target.value) || 72, unit)
-                          ),
+                          sheetHeightPt: Math.max(72, unitToPt(val, unit)),
                         }))
                       }
                       className="mt-0.5 w-full px-2 py-1.5 rounded-lg studio-input tabular-nums"
@@ -1154,18 +1175,15 @@ export const BlueprintStudioView: React.FC<BlueprintStudioViewProps> = ({
                         <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                           {lbl}
                         </span>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.5"
+                        <NumericDraftInput
+                          min={0}
+                          step={0.5}
                           value={ptToUnit(draftBlueprint[key], unit)}
-                          onChange={(e) =>
+                          fallback={0}
+                          onCommit={(val) =>
                             mutateBlueprint((bp) => ({
                               ...bp,
-                              [key]: Math.max(
-                                0,
-                                unitToPt(Number(e.target.value) || 0, unit)
-                              ),
+                              [key]: Math.max(0, unitToPt(val, unit)),
                             }))
                           }
                           className="mt-0.5 w-full px-1.5 py-1 rounded-lg studio-input tabular-nums"
@@ -1181,18 +1199,15 @@ export const BlueprintStudioView: React.FC<BlueprintStudioViewProps> = ({
                     <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                       Gutter X ({unit})
                     </span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.5"
+                    <NumericDraftInput
+                      min={0}
+                      step={0.5}
                       value={ptToUnit(draftBlueprint.gutterXPt, unit)}
-                      onChange={(e) =>
+                      fallback={0}
+                      onCommit={(val) =>
                         mutateBlueprint((bp) => ({
                           ...bp,
-                          gutterXPt: Math.max(
-                            0,
-                            unitToPt(Number(e.target.value) || 0, unit)
-                          ),
+                          gutterXPt: Math.max(0, unitToPt(val, unit)),
                         }))
                       }
                       className="mt-0.5 w-full px-2 py-1 rounded-lg studio-input tabular-nums"
@@ -1202,18 +1217,15 @@ export const BlueprintStudioView: React.FC<BlueprintStudioViewProps> = ({
                     <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                       Gutter Y ({unit})
                     </span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.5"
+                    <NumericDraftInput
+                      min={0}
+                      step={0.5}
                       value={ptToUnit(draftBlueprint.gutterYPt, unit)}
-                      onChange={(e) =>
+                      fallback={0}
+                      onCommit={(val) =>
                         mutateBlueprint((bp) => ({
                           ...bp,
-                          gutterYPt: Math.max(
-                            0,
-                            unitToPt(Number(e.target.value) || 0, unit)
-                          ),
+                          gutterYPt: Math.max(0, unitToPt(val, unit)),
                         }))
                       }
                       className="mt-0.5 w-full px-2 py-1 rounded-lg studio-input tabular-nums"
@@ -1223,18 +1235,15 @@ export const BlueprintStudioView: React.FC<BlueprintStudioViewProps> = ({
                     <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                       Bleed ({unit})
                     </span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.5"
+                    <NumericDraftInput
+                      min={0}
+                      step={0.5}
                       value={ptToUnit(draftBlueprint.bleedPt, unit)}
-                      onChange={(e) =>
+                      fallback={0}
+                      onCommit={(val) =>
                         mutateBlueprint((bp) => ({
                           ...bp,
-                          bleedPt: Math.max(
-                            0,
-                            unitToPt(Number(e.target.value) || 0, unit)
-                          ),
+                          bleedPt: Math.max(0, unitToPt(val, unit)),
                         }))
                       }
                       className="mt-0.5 w-full px-2 py-1 rounded-lg studio-input tabular-nums"

@@ -54,6 +54,7 @@ import {
   unitToPt,
   validatePageConfigDimensions,
 } from '../utils/units';
+import { NumericDraftInput } from './NumericDraftInput';
 
 interface PageConfigurationModalProps {
   isOpen: boolean;
@@ -145,6 +146,22 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
     setEditingPresetId(null);
     setMobileTab('paper');
   }, [isOpen, project.id]);
+
+  // Support Escape key to cancel inline preset edit or close modal
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (editingPresetId) {
+          setEditingPresetId(null);
+        } else {
+          onClose();
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isOpen, editingPresetId, onClose]);
 
   // Parse live draft input dimensions before clamping so invalid input shows validation errors cleanly
   const rawWidthNum = Number(widthText);
@@ -791,18 +808,13 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                 ).map(([label, key]) => (
                   <label key={key} className="block">
                     <span className="text-[10px] text-[#888888] dark:text-[#858585]">{label}</span>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.5"
+                    <NumericDraftInput
                       value={ptToUnit(draftPage[key], unit)}
-                      onChange={(e) =>
+                      commitOptions={{ min: 0, decimals: 2 }}
+                      onCommit={(val) =>
                         setDraftPage((prev) => ({
                           ...prev,
-                          [key]: Math.max(
-                            0,
-                            unitToPt(Number(e.target.value) || 0, unit)
-                          ),
+                          [key]: Math.max(0, unitToPt(val, unit)),
                         }))
                       }
                       className="mt-0.5 w-full px-2 py-1 rounded-lg studio-input tabular-nums"
@@ -819,16 +831,10 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                   <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                     Horiz. Spacing ({unit})
                   </span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.5"
+                  <NumericDraftInput
                     value={ptToUnit(hSpacingPt, unit)}
-                    onChange={(e) =>
-                      setHSpacingPt(
-                        Math.max(0, unitToPt(Number(e.target.value) || 0, unit))
-                      )
-                    }
+                    commitOptions={{ min: 0, decimals: 2 }}
+                    onCommit={(val) => setHSpacingPt(Math.max(0, unitToPt(val, unit)))}
                     className="mt-0.5 w-full px-2 py-1 rounded-lg studio-input tabular-nums"
                   />
                 </label>
@@ -836,16 +842,10 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                   <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                     Vert. Spacing ({unit})
                   </span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.5"
+                  <NumericDraftInput
                     value={ptToUnit(vSpacingPt, unit)}
-                    onChange={(e) =>
-                      setVSpacingPt(
-                        Math.max(0, unitToPt(Number(e.target.value) || 0, unit))
-                      )
-                    }
+                    commitOptions={{ min: 0, decimals: 2 }}
+                    onCommit={(val) => setVSpacingPt(Math.max(0, unitToPt(val, unit)))}
                     className="mt-0.5 w-full px-2 py-1 rounded-lg studio-input tabular-nums"
                   />
                 </label>
@@ -853,18 +853,13 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                   <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                     Bleed ({unit})
                   </span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.5"
+                  <NumericDraftInput
                     value={ptToUnit(bleedPt, unit)}
-                    onChange={(e) =>
+                    commitOptions={{ min: 0, decimals: 2 }}
+                    onCommit={(val) =>
                       setDraftPage((prev) => ({
                         ...prev,
-                        bleedPt: Math.max(
-                          0,
-                          unitToPt(Number(e.target.value) || 0, unit)
-                        ),
+                        bleedPt: Math.max(0, unitToPt(val, unit)),
                       }))
                     }
                     className="mt-0.5 w-full px-2 py-1 rounded-lg studio-input tabular-nums"
@@ -1111,13 +1106,11 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                 <div className="grid grid-cols-2 tablet:grid-cols-3 gap-2">
                   <label className="block">
                     <span className="text-[10px] text-[#888888] dark:text-[#858585]">Columns</span>
-                    <input
-                      type="number"
-                      min="1"
-                      max="12"
+                    <NumericDraftInput
                       value={draftCopies.columns}
-                      onChange={(e) => {
-                        const cols = Math.max(1, Number(e.target.value) || 1);
+                      commitOptions={{ min: 1, max: 12, decimals: 0 }}
+                      onCommit={(val) => {
+                        const cols = Math.max(1, Math.min(12, Math.round(val)));
                         setDraftCopies((prev) => ({
                           ...prev,
                           enabled: cols * prev.rows > 1,
@@ -1130,13 +1123,11 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                   </label>
                   <label className="block">
                     <span className="text-[10px] text-[#888888] dark:text-[#858585]">Rows</span>
-                    <input
-                      type="number"
-                      min="1"
-                      max="12"
+                    <NumericDraftInput
                       value={draftCopies.rows}
-                      onChange={(e) => {
-                        const rows = Math.max(1, Number(e.target.value) || 1);
+                      commitOptions={{ min: 1, max: 12, decimals: 0 }}
+                      onCommit={(val) => {
+                        const rows = Math.max(1, Math.min(12, Math.round(val)));
                         setDraftCopies((prev) => ({
                           ...prev,
                           enabled: prev.columns * rows > 1,
@@ -1172,15 +1163,13 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                 {draftFit.scalingMode === 'custom_percent' && (
                   <label className="block">
                     <span className="text-[10px] text-[#888888] dark:text-[#858585]">Custom Scale (%)</span>
-                    <input
-                      type="number"
-                      min="10"
-                      max="400"
+                    <NumericDraftInput
                       value={draftFit.customPercent}
-                      onChange={(e) =>
+                      commitOptions={{ min: 10, max: 400, decimals: 0 }}
+                      onCommit={(val) =>
                         setDraftFit((prev) => ({
                           ...prev,
-                          customPercent: Math.max(10, Number(e.target.value) || 100),
+                          customPercent: Math.max(10, Math.min(400, val)),
                         }))
                       }
                       className="mt-0.5 w-full min-h-[40px] px-2 rounded-lg studio-input tabular-nums"
@@ -1192,27 +1181,19 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                   <div className="grid grid-cols-2 gap-2 pt-2 border-t border-black/10 dark:border-white/10">
                     <label className="block">
                       <span className="text-[10px] text-[#888888] dark:text-[#858585]">Horiz. Spacing ({unit})</span>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.5"
+                      <NumericDraftInput
                         value={ptToUnit(hSpacingPt, unit)}
-                        onChange={(e) =>
-                          setHSpacingPt(Math.max(0, unitToPt(Number(e.target.value) || 0, unit)))
-                        }
+                        commitOptions={{ min: 0, decimals: 2 }}
+                        onCommit={(val) => setHSpacingPt(Math.max(0, unitToPt(val, unit)))}
                         className="mt-0.5 w-full min-h-[40px] px-2 rounded-lg studio-input tabular-nums"
                       />
                     </label>
                     <label className="block">
                       <span className="text-[10px] text-[#888888] dark:text-[#858585]">Vert. Spacing ({unit})</span>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.5"
+                      <NumericDraftInput
                         value={ptToUnit(vSpacingPt, unit)}
-                        onChange={(e) =>
-                          setVSpacingPt(Math.max(0, unitToPt(Number(e.target.value) || 0, unit)))
-                        }
+                        commitOptions={{ min: 0, decimals: 2 }}
+                        onCommit={(val) => setVSpacingPt(Math.max(0, unitToPt(val, unit)))}
                         className="mt-0.5 w-full min-h-[40px] px-2 rounded-lg studio-input tabular-nums"
                       />
                     </label>

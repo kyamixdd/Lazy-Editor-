@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import JSZip from 'jszip';
 import { PDFDocument } from 'pdf-lib';
 import {
@@ -18,6 +18,7 @@ import {
   OriginalPageMeta,
   PDFProject,
 } from '../types/pdfStudio';
+import { triggerBytesDownload } from '../utils/downloadHelper';
 import {
   base64ToUint8Array,
   renderSinglePagePreview,
@@ -35,18 +36,6 @@ interface PageEngineeringModalProps {
     nextCurrentPage: number,
     historyLabel: string
   ) => void;
-}
-
-function downloadBlob(bytes: Uint8Array, filename: string, mime: string) {
-  const copy = new Uint8Array(bytes.byteLength);
-  copy.set(bytes);
-  const blob = new Blob([copy.buffer], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 /**
@@ -87,6 +76,14 @@ export const PageEngineeringModal: React.FC<PageEngineeringModalProps> = ({
   const [batchFooter, setBatchFooter] = useState(project.pageConfig.footerText || '');
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const mergeInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setSelectedPages([currentPage]);
+    setBatchHeader(project.pageConfig.headerText || '');
+    setBatchFooter(project.pageConfig.footerText || '');
+    setStatusMsg(null);
+  }, [isOpen, project.id]);
 
   const pageList = useMemo(() => {
     const arr: OriginalPageMeta[] = [];
@@ -172,6 +169,8 @@ export const PageEngineeringModal: React.FC<PageEngineeringModalProps> = ({
       );
       setSelectedPages([newPageNumber]);
       setStatusMsg(`Inserted blank page at Page ${newPageNumber}.`);
+    } catch (err) {
+      setStatusMsg(err instanceof Error ? err.message : 'Failed to insert blank page.');
     } finally {
       setBusy(false);
     }
@@ -234,6 +233,8 @@ export const PageEngineeringModal: React.FC<PageEngineeringModalProps> = ({
         `Duplicate Page(s) ${targets.join(', ')}`
       );
       setStatusMsg(`Duplicated ${targets.length} page(s).`);
+    } catch (err) {
+      setStatusMsg(err instanceof Error ? err.message : 'Failed to duplicate page(s).');
     } finally {
       setBusy(false);
     }
@@ -285,6 +286,8 @@ export const PageEngineeringModal: React.FC<PageEngineeringModalProps> = ({
         `Delete Page(s) ${Array.from(targets).join(', ')}`
       );
       setStatusMsg(`Deleted ${targets.size} page(s).`);
+    } catch (err) {
+      setStatusMsg(err instanceof Error ? err.message : 'Failed to delete selected page(s).');
     } finally {
       setBusy(false);
     }
@@ -341,6 +344,8 @@ export const PageEngineeringModal: React.FC<PageEngineeringModalProps> = ({
         `Reorder Page ${pageNum} -> ${movedTarget}`
       );
       setStatusMsg(`Moved Page ${pageNum} to Page ${movedTarget}.`);
+    } catch (err) {
+      setStatusMsg(err instanceof Error ? err.message : 'Failed to reorder page.');
     } finally {
       setBusy(false);
     }
@@ -403,12 +408,14 @@ export const PageEngineeringModal: React.FC<PageEngineeringModalProps> = ({
       );
       copied.forEach((p) => outDoc.addPage(p));
       const bytes = await outDoc.save();
-      downloadBlob(
+      triggerBytesDownload(
         bytes,
         `${project.name.replace(/\s+/g, '_')}_pages_${targets.join('-')}.pdf`,
         'application/pdf'
       );
       setStatusMsg(`Extracted ${targets.length} page(s) as PDF.`);
+    } catch (err) {
+      setStatusMsg(err instanceof Error ? err.message : 'Failed to extract selected pages.');
     } finally {
       setBusy(false);
     }
@@ -445,12 +452,14 @@ export const PageEngineeringModal: React.FC<PageEngineeringModalProps> = ({
         return;
       }
       const zipBytes = await zip.generateAsync({ type: 'uint8array' });
-      downloadBlob(
+      triggerBytesDownload(
         zipBytes,
         `${project.name.replace(/\s+/g, '_')}_split.zip`,
         'application/zip'
       );
       setStatusMsg(`Split into ${partIndex - 1} PDF file(s) inside ZIP.`);
+    } catch (err) {
+      setStatusMsg(err instanceof Error ? err.message : 'Failed to split PDF ranges.');
     } finally {
       setBusy(false);
     }

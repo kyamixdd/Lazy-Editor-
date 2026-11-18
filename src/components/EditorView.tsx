@@ -52,6 +52,7 @@ import {
   Save,
   ScanBarcode,
   ScanLine,
+  ScanSearch,
   Search,
   ShieldAlert,
   ShieldCheck,
@@ -118,6 +119,7 @@ import {
   equalSpacingSelectedElements,
   matchesShortcutCombo,
 } from '../utils/alignmentEngine';
+import { convertSelectionToTableElement } from '../utils/tableReconstructionEngine';
 import {
   computeElementsUnionRect,
   computeSheetLayout,
@@ -128,6 +130,12 @@ import {
   renderPageThumbnail,
   renderSinglePagePreview,
 } from '../utils/pdfRenderer';
+import {
+  defaultCategoryForTool,
+  resolveEditorEscapeStep,
+  toggleEditorTool,
+  toggleSyncedSnapAndGuides,
+} from '../utils/editorInteractions';
 import { appendOperationLog, DEFAULT_SHORTCUTS } from '../utils/projectStorage';
 import { extractStylePainterPatch } from '../utils/typographyEngine';
 import { BatchStyleModal } from './BatchStyleModal';
@@ -250,6 +258,8 @@ export const EditorView: React.FC<EditorViewProps> = ({
     project.originalPages[0]?.previewImageDataUrl
   );
   const imageUploadRef = useRef<HTMLInputElement>(null);
+  const assetMenuRef = useRef<HTMLDivElement>(null);
+  const toastTimerRef = useRef<number | null>(null);
   const projectRef = useRef(project);
   projectRef.current = project;
   const lastAutoSnapHashRef = useRef<string>(JSON.stringify(project.elements));
@@ -416,9 +426,10 @@ export const EditorView: React.FC<EditorViewProps> = ({
   const pushHistoryEntry = (
     label: string,
     actionType: string,
-    coalesceKey?: string
+    coalesceKey?: string,
+    baseProject: PDFProject = projectRef.current
   ) => {
-    const snap = makeHistorySnapshot(label, actionType, project, coalesceKey);
+    const snap = makeHistorySnapshot(label, actionType, baseProject, coalesceKey);
     setUndoStack((prev) => {
       if (coalesceKey && prev.length > 0) {
         const last = prev[prev.length - 1];
@@ -440,16 +451,16 @@ export const EditorView: React.FC<EditorViewProps> = ({
     opLogDetail?: string,
     coalesceKey?: string
   ) => {
-    pushHistoryEntry(label, actionType, coalesceKey);
+    pushHistoryEntry(label, actionType, coalesceKey, projectRef.current);
     const stamped = {
       ...nextProject,
       updatedAt: new Date().toISOString(),
     };
-    onUpdateProject(
-      opLogAction
-        ? appendOperationLog(stamped, opLogAction, opLogDetail || label, currentPage)
-        : stamped
-    );
+    const finalProj = opLogAction
+      ? appendOperationLog(stamped, opLogAction, opLogDetail || label, currentPage)
+      : stamped;
+    projectRef.current = finalProj;
+    onUpdateProject(finalProj);
   };
 
   const commitElements = (
@@ -459,57 +470,64 @@ export const EditorView: React.FC<EditorViewProps> = ({
     opDetail?: string,
     coalesceKey?: string
   ) => {
+    const baseProj = projectRef.current;
     if (recordHistory) {
-      pushHistoryEntry(opAction || 'Edit Element', 'elements', coalesceKey);
+      pushHistoryEntry(opAction || 'Edit Element', 'elements', coalesceKey, baseProj);
     }
     const baseUpdated: PDFProject = {
-      ...project,
+      ...baseProj,
       elements: nextElements,
       updatedAt: new Date().toISOString(),
     };
-    onUpdateProject(
-      opAction
-        ? appendOperationLog(
-            baseUpdated,
-            opAction,
-            opDetail || opAction,
-            currentPage
-          )
-        : baseUpdated
-    );
+    const finalProj = opAction
+      ? appendOperationLog(
+          baseUpdated,
+          opAction,
+          opDetail || opAction,
+          currentPage
+        )
+      : baseUpdated;
+    projectRef.current = finalProj;
+    onUpdateProject(finalProj);
   };
 
   const handleUndo = () => {
     if (undoStack.length === 0) return;
+    const currProj = projectRef.current;
     const prev = undoStack[undoStack.length - 1];
-    const currSnap = makeHistorySnapshot(prev.label, 'redo_anchor', project);
+    const currSnap = makeHistorySnapshot(prev.label, 'redo_anchor', currProj);
     setRedoStack((r) => [...r, currSnap]);
     setUndoStack((u) => u.slice(0, -1));
-    onUpdateProject({
-      ...project,
+    const restored: PDFProject = {
+      ...currProj,
       elements: structuredClone(prev.elements),
       originalPages: structuredClone(prev.originalPages),
       pageConfig: structuredClone(prev.pageConfig),
       pageCount: prev.pageCount,
       updatedAt: new Date().toISOString(),
-    });
+    };
+    projectRef.current = restored;
+    onUpdateProject(restored);
     setCurrentPage((cp) => Math.max(1, Math.min(cp, Math.max(1, prev.pageCount))));
   };
 
   const handleRedo = () => {
     if (redoStack.length === 0) return;
+    const currProj = projectRef.current;
     const next = redoStack[redoStack.length - 1];
-    const currSnap = makeHistorySnapshot(next.label, 'undo_anchor', project);
+    const currSnap = makeHistorySnapshot(next.label, 'undo_anchor', currProj);
     setUndoStack((u) => [...u, currSnap]);
     setRedoStack((r) => r.slice(0, -1));
-    onUpdateProject({
-      ...project,
+    const restored: PDFProject = {
+      ...currProj,
       elements: structuredClone(next.elements),
       originalPages: structuredClone(next.originalPages),
       pageConfig: structuredClone(next.pageConfig),
       pageCount: next.pageCount,
       updatedAt: new Date().toISOString(),
-    });
+    };
+    projectRef.current = restored;
+    onUpdateProject(restored);
     setCurrentPage((cp) => Math.max(1, Math.min(cp, Math.max(1, next.pageCount))));
   };
 
@@ -620,7 +638,9 @@ export const EditorView: React.FC<EditorViewProps> = ({
     const isTextOnly =
       Object.keys(patch).length === 1 && patch.text !== undefined;
     commitElements(
-      project.elements.map((el) => (el.id === id ? { ...el, ...patch } : el)),
+      projectRef.current.elements.map((el) =>
+        el.id === id ? { ...el, ...patch } : el
+      ),
       true,
       undefined,
       undefined,
@@ -633,7 +653,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
   ) => {
     const map = new Map(updates.map((u) => [u.id, u.patch]));
     commitElements(
-      project.elements.map((el) =>
+      projectRef.current.elements.map((el) =>
         map.has(el.id) ? { ...el, ...map.get(el.id)! } : el
       )
     );
@@ -808,8 +828,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
       createdAt: new Date().toISOString(),
     };
     onSaveAsset(item);
-    setStyleToast(`Saved text style "${item.name}" to Asset Library`);
-    window.setTimeout(() => setStyleToast(null), 2600);
+    showNoticeToast(`Saved text style "${item.name}" to Asset Library`);
   };
 
   const handleInsertAssetImage = (imgAsset: AssetImageItem) => {
@@ -968,6 +987,25 @@ export const EditorView: React.FC<EditorViewProps> = ({
       `Grouped ${selectedIds.length} elements`
     );
     onTrackRecentTool?.('group');
+  };
+
+  const handleConvertSelectionToTable = () => {
+    const selectedOnPage = pageElements.filter((e) => selectedIds.includes(e.id));
+    if (selectedOnPage.length < 2) return;
+    const tableEl = convertSelectionToTableElement(selectedOnPage, currentPage);
+    if (!tableEl) return;
+    const selSet = new Set(selectedOnPage.map((e) => e.id));
+    const nextElements = project.elements
+      .filter((e) => !selSet.has(e.id))
+      .concat(tableEl);
+    commitElements(
+      nextElements,
+      true,
+      'Convert Selection to Table',
+      `Converted ${selectedOnPage.length} elements into a ${tableEl.tableData?.rows.length || 1}×${tableEl.tableData?.rows[0]?.length || 1} table`
+    );
+    setSelectedIds([tableEl.id]);
+    onTrackRecentTool?.('table');
   };
 
   const addNewElement = (
@@ -1286,7 +1324,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
           imageNaturalHeight: canvas.height,
         };
         commitElements(
-          [...project.elements, el],
+          [...projectRef.current.elements, el],
           true,
           'Insert Image',
           `Uploaded image "${file.name}" (${canvas.width}×${canvas.height}px)`
@@ -1297,6 +1335,9 @@ export const EditorView: React.FC<EditorViewProps> = ({
       img.src = rawUrl;
     };
     reader.readAsDataURL(file);
+    if (imageUploadRef.current) {
+      imageUploadRef.current.value = '';
+    }
   };
 
   const handleSearchAndReplace = () => {
@@ -1577,11 +1618,52 @@ export const EditorView: React.FC<EditorViewProps> = ({
         e.preventDefault();
         onSaveSnapshot(projectRef.current, `Snapshot via shortcut (Page ${currentPage})`);
       } else if (e.key === 'Escape') {
-        if (stylePainter.active) {
-          setStylePainter({ active: false, mode: 'appearance' });
-        } else if (activeTool !== 'select') {
+        const hasOpenModal =
+          showPageSetupModal ||
+          showVersionModal ||
+          smartReplaceOpen ||
+          batchStyleOpen ||
+          restorationOpen ||
+          pageEngineeringOpen ||
+          signatureStampOpen ||
+          redactionConfirmOpen;
+        const step = resolveEditorEscapeStep({
+          hasOpenModal,
+          showAssetInsertMenu,
+          showSearchBar,
+          cropMode,
+          stylePainterActive: stylePainter.active,
+          activeTool,
+          hasOpenMobileOrTabletOverlay:
+            (!viewport.isDesktop &&
+              (showLayersPanel ||
+                showInspectorDrawer ||
+                showPagesDrawer ||
+                mobileAddSheetOpen ||
+                showMobileThumbStrip)),
+          selectedCount: selectedIds.length,
+        });
+        if (step === 'asset_menu') {
+          setShowAssetInsertMenu(false);
+        } else if (step === 'search_bar') {
+          setShowSearchBar(false);
+        } else if (step === 'crop_mode') {
+          setCropMode(false);
+        } else if (step === 'style_painter') {
+          setStylePainter({ active: false, mode: stylePainter.mode });
+          setActiveTool('select');
+        } else if (step === 'active_tool') {
           setActiveTool('select');
           setActiveCategory('select');
+        } else if (step === 'mobile_or_tablet_drawer') {
+          setShowLayersPanel(false);
+          setShowInspectorDrawer(false);
+          setShowPagesDrawer(false);
+          setMobileAddSheetOpen(false);
+          setShowMobileThumbStrip(false);
+          if (viewport.isMobile) setEditorMode('edit');
+        } else if (step === 'selection') {
+          setSelectedIds([]);
         }
       } else if (!e.metaKey && !e.ctrlKey && !e.altKey) {
         const lk = e.key.toLowerCase();
@@ -1683,9 +1765,100 @@ export const EditorView: React.FC<EditorViewProps> = ({
     Boolean(settings.hiddenEditorTools?.includes(id));
 
   const showNoticeToast = (msg: string) => {
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+    }
     setStyleToast(msg);
-    window.setTimeout(() => setStyleToast(null), 2600);
+    toastTimerRef.current = window.setTimeout(() => {
+      setStyleToast(null);
+      toastTimerRef.current = null;
+    }, 2600);
   };
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current !== null) {
+        window.clearTimeout(toastTimerRef.current);
+      }
+    };
+  }, []);
+
+  // Dismiss Asset Insert popover when clicking/tapping outside
+  useEffect(() => {
+    if (!showAssetInsertMenu) return;
+    const onPointerDown = (ev: MouseEvent | TouchEvent) => {
+      if (assetMenuRef.current && !assetMenuRef.current.contains(ev.target as Node)) {
+        setShowAssetInsertMenu(false);
+      }
+    };
+    window.addEventListener('mousedown', onPointerDown);
+    window.addEventListener('touchstart', onPointerDown);
+    return () => {
+      window.removeEventListener('mousedown', onPointerDown);
+      window.removeEventListener('touchstart', onPointerDown);
+    };
+  }, [showAssetInsertMenu]);
+
+  // Browser Back button dismisses open modals/drawers/sheets on mobile/tablet before navigating away
+  const hasAnyDismissibleOverlay =
+    showPageSetupModal ||
+    showVersionModal ||
+    smartReplaceOpen ||
+    batchStyleOpen ||
+    restorationOpen ||
+    pageEngineeringOpen ||
+    signatureStampOpen ||
+    redactionConfirmOpen ||
+    (!viewport.isDesktop &&
+      (showLayersPanel ||
+        showInspectorDrawer ||
+        showPagesDrawer ||
+        mobileAddSheetOpen ||
+        showMobileThumbStrip));
+
+  const overlayHistoryPushedRef = useRef(false);
+  useEffect(() => {
+    if (!hasAnyDismissibleOverlay) {
+      overlayHistoryPushedRef.current = false;
+      return;
+    }
+    if (!overlayHistoryPushedRef.current) {
+      overlayHistoryPushedRef.current = true;
+      window.history.pushState({ pdfStudioOverlay: true }, '');
+    }
+    const onPopState = () => {
+      overlayHistoryPushedRef.current = false;
+      if (redactionConfirmOpen) setRedactionConfirmOpen(false);
+      else if (signatureStampOpen) setSignatureStampOpen(false);
+      else if (pageEngineeringOpen) setPageEngineeringOpen(false);
+      else if (restorationOpen) setRestorationOpen(false);
+      else if (batchStyleOpen) setBatchStyleOpen(false);
+      else if (smartReplaceOpen) setSmartReplaceOpen(false);
+      else if (showVersionModal) setShowVersionModal(false);
+      else if (showPageSetupModal) setShowPageSetupModal(false);
+      else {
+        setMobileAddSheetOpen(false);
+        setShowLayersPanel(false);
+        setShowInspectorDrawer(false);
+        setShowPagesDrawer(false);
+        setShowMobileThumbStrip(false);
+        if (viewport.isMobile) setEditorMode('edit');
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, [
+    hasAnyDismissibleOverlay,
+    redactionConfirmOpen,
+    signatureStampOpen,
+    pageEngineeringOpen,
+    restorationOpen,
+    batchStyleOpen,
+    smartReplaceOpen,
+    showVersionModal,
+    showPageSetupModal,
+    viewport.isMobile,
+  ]);
 
   const handleToggleFavoriteFont = (fontFamily: string) => {
     if (!onUpdateSettings) return;
@@ -1732,6 +1905,12 @@ export const EditorView: React.FC<EditorViewProps> = ({
     el: DocumentElement,
     mode: 'appearance' | 'appearance_and_geometry'
   ) => {
+    if (stylePainter.active && stylePainter.mode === mode) {
+      setStylePainter({ active: false, mode });
+      setActiveTool('select');
+      showNoticeToast('Style Painter deactivated');
+      return;
+    }
     setStylePainter({
       active: true,
       mode,
@@ -1744,12 +1923,30 @@ export const EditorView: React.FC<EditorViewProps> = ({
     );
   };
 
+  const handleToggleTool = (tool: ActiveEditorTool) => {
+    const next = toggleEditorTool(activeTool, tool, stylePainter.active);
+    setActiveTool(next.activeTool);
+    if (!next.stylePainterActive && stylePainter.active) {
+      setStylePainter({ active: false, mode: stylePainter.mode });
+    }
+    if (next.activeTool === 'select' && tool !== 'select') {
+      setActiveCategory(defaultCategoryForTool(tool));
+    }
+  };
+
+  const handleToggleSnapAndGuides = () => {
+    const next = toggleSyncedSnapAndGuides(snapToGrid, showGuides);
+    setSnapToGrid(next.snapToGrid);
+    setShowGuides(next.showGuides);
+  };
+
   const handleStylePaintTarget = (targetId: string) => {
     if (!stylePainter.active || !stylePainter.sourceStyle) return;
-    const target = project.elements.find((e) => e.id === targetId);
+    const currProj = projectRef.current;
+    const target = currProj.elements.find((e) => e.id === targetId);
     if (!target || target.locked) return;
     commitElements(
-      project.elements.map((el) =>
+      currProj.elements.map((el) =>
         el.id === targetId
           ? {
               ...el,
@@ -1770,7 +1967,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
 
   const handleCanvasCreateElement = (newEl: DocumentElement) => {
     commitElements(
-      [...project.elements, newEl],
+      [...projectRef.current.elements, newEl],
       true,
       `Add ${newEl.type}`,
       `Created ${newEl.type} on Page ${currentPage}`
@@ -1799,6 +1996,10 @@ export const EditorView: React.FC<EditorViewProps> = ({
   );
 
   const selectCategory = (cat: EditorToolCategory) => {
+    if (activeCategory === cat) {
+      setToolbarExpanded((v) => !v);
+      return;
+    }
     setActiveCategory(cat);
     setToolbarExpanded(true);
     if (cat === 'select') setActiveTool('select');
@@ -1817,27 +2018,52 @@ export const EditorView: React.FC<EditorViewProps> = ({
     editorMode === 'preview' ? 'preview' : 'edit';
 
   const handleSelectMode = (mode: EditorMode) => {
-    setEditorMode(mode);
     if (viewport.isMobile) {
+      if (mode === 'layers' && showLayersPanel) {
+        setShowLayersPanel(false);
+        setEditorMode('edit');
+        return;
+      }
+      if (mode === 'properties' && showInspectorDrawer) {
+        setShowInspectorDrawer(false);
+        setEditorMode('edit');
+        return;
+      }
+      if (mode === 'pages') {
+        setShowLayersPanel(false);
+        setShowInspectorDrawer(false);
+        setMobileAddSheetOpen(false);
+        setShowMobileThumbStrip((v) => {
+          const next = !v;
+          setEditorMode(next ? 'pages' : 'edit');
+          return next;
+        });
+        return;
+      }
+      setEditorMode(mode);
       setShowLayersPanel(mode === 'layers');
       setShowInspectorDrawer(mode === 'properties');
-      setShowPagesDrawer(mode === 'pages');
+      setShowPagesDrawer(false);
       if (mode === 'layers' || mode === 'properties') {
         setMobileSheetSnap('medium');
         setMobileAddSheetOpen(false);
-      }
-      if (mode === 'pages') {
-        setShowMobileThumbStrip((v) => !v);
+        setShowMobileThumbStrip(false);
+      } else {
+        setShowMobileThumbStrip(false);
       }
     } else if (viewport.isTablet) {
+      setEditorMode(mode);
       if (mode === 'layers') {
-        setShowLayersPanel(true);
+        setShowLayersPanel((v) => !v);
         setShowPagesDrawer(false);
       } else if (mode === 'properties') {
-        setShowInspectorDrawer(true);
+        setShowInspectorDrawer((v) => !v);
       } else if (mode === 'pages') {
-        setShowPagesDrawer(true);
+        setShowPagesDrawer((v) => !v);
+        setShowLayersPanel(false);
       }
+    } else {
+      setEditorMode(mode);
     }
   };
 
@@ -2350,7 +2576,11 @@ export const EditorView: React.FC<EditorViewProps> = ({
                 title="Open AI-Enhanced Analysis & AI Editing Assistant"
                 onClick={() => {
                   setInspectorTab('ai');
-                  setShowDesktopInspector(true);
+                  if (viewport.isDesktop) {
+                    setShowDesktopInspector(true);
+                  } else {
+                    setShowInspectorDrawer(true);
+                  }
                 }}
                 className={`px-2 py-1 rounded-lg text-xs font-medium flex items-center gap-1 whitespace-nowrap ${
                   inspectorTab === 'ai'
@@ -2397,9 +2627,9 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   <>
                     <button
                       type="button"
-                      onClick={() => setActiveTool('select')}
+                      onClick={() => handleToggleTool('select')}
                       className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap ${
-                        activeTool === 'select'
+                        activeTool === 'select' && !stylePainter.active
                           ? 'studio-active-surface'
                           : 'hover:bg-black/5 dark:hover:bg-white/10'
                       }`}
@@ -2409,7 +2639,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => setActiveTool('marquee')}
+                      onClick={() => handleToggleTool('marquee')}
                       className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap ${
                         activeTool === 'marquee'
                           ? 'studio-active-surface'
@@ -2491,7 +2721,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   <>
                     <button
                       type="button"
-                      onClick={() => setActiveTool('text')}
+                      onClick={() => handleToggleTool('text')}
                       className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap ${
                         activeTool === 'text'
                           ? 'studio-active-surface'
@@ -2573,7 +2803,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                       <ImageIcon className="w-3.5 h-3.5" />
                       Upload Image / Logo
                     </button>
-                    <div className="relative">
+                    <div ref={assetMenuRef} className="relative">
                       <button
                         type="button"
                         onClick={() => setShowAssetInsertMenu((v) => !v)}
@@ -2681,7 +2911,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                       <button
                         key={toolId}
                         type="button"
-                        onClick={() => setActiveTool(toolId)}
+                        onClick={() => handleToggleTool(toolId)}
                         className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap ${
                           activeTool === toolId
                             ? 'studio-active-surface'
@@ -2733,7 +2963,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   <>
                     <button
                       type="button"
-                      onClick={() => setActiveTool('draw')}
+                      onClick={() => handleToggleTool('draw')}
                       className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap ${
                         activeTool === 'draw'
                           ? 'studio-active-surface'
@@ -2745,7 +2975,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => setActiveTool('arrow')}
+                      onClick={() => handleToggleTool('arrow')}
                       className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap ${
                         activeTool === 'arrow'
                           ? 'studio-active-surface'
@@ -2795,7 +3025,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                       <button
                         key={toolId}
                         type="button"
-                        onClick={() => setActiveTool(toolId)}
+                        onClick={() => handleToggleTool(toolId)}
                         className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap ${
                           activeTool === toolId
                             ? 'studio-active-surface'
@@ -2820,7 +3050,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => setActiveTool('redact')}
+                      onClick={() => handleToggleTool('redact')}
                       className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap ${
                         activeTool === 'redact'
                           ? 'studio-active-surface'
@@ -2890,12 +3120,11 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        setSnapToGrid((v) => !v);
-                        setShowGuides((v) => !v);
-                      }}
+                      onClick={handleToggleSnapAndGuides}
                       className={`px-2 py-1 rounded-lg flex items-center gap-1 whitespace-nowrap ${
-                        snapToGrid ? 'studio-active-surface' : 'hover:bg-black/5 dark:hover:bg-white/10'
+                        snapToGrid && showGuides
+                          ? 'studio-active-surface'
+                          : 'hover:bg-black/5 dark:hover:bg-white/10'
                       }`}
                     >
                       <Magnet className="w-3.5 h-3.5" />
@@ -2961,7 +3190,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   <>
                     <button
                       type="button"
-                      onClick={() => setActiveTool('measure')}
+                      onClick={() => handleToggleTool('measure')}
                       className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap ${
                         activeTool === 'measure'
                           ? 'studio-active-surface'
@@ -2993,6 +3222,14 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   <>
                     {onNavigateSection && (
                       <>
+                        <button
+                          type="button"
+                          onClick={() => onNavigateSection('scan-inspector')}
+                          className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
+                        >
+                          <ScanSearch className="w-3.5 h-3.5" />
+                          Scan Inspector
+                        </button>
                         <button
                           type="button"
                           onClick={() => onNavigateSection('preflight')}
@@ -3361,16 +3598,33 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   </button>
                 </div>
 
-                {cropMode && (
-                  <button
-                    type="button"
-                    onClick={() => setCropMode(false)}
-                    className="pointer-events-auto px-2.5 min-h-[32px] rounded-xl bg-[#101010] text-white dark:bg-white dark:text-[#050505] text-[11px] font-medium shadow-sm flex items-center gap-1"
-                  >
-                    <Crop className="w-3 h-3" />
-                    Done Crop
-                  </button>
-                )}
+                <div className="flex items-center gap-1.5">
+                  {(activeTool !== 'select' || stylePainter.active) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setStylePainter({ active: false, mode: stylePainter.mode });
+                        setActiveTool('select');
+                        setActiveCategory('select');
+                      }}
+                      className="pointer-events-auto px-2.5 min-h-[32px] rounded-xl bg-[#101010] text-white dark:bg-white dark:text-[#050505] text-[11px] font-medium shadow-sm flex items-center gap-1"
+                    >
+                      <X className="w-3 h-3" />
+                      Exit {stylePainter.active ? 'Painter' : activeTool.replace(/_/g, ' ')}
+                    </button>
+                  )}
+
+                  {cropMode && (
+                    <button
+                      type="button"
+                      onClick={() => setCropMode(false)}
+                      className="pointer-events-auto px-2.5 min-h-[32px] rounded-xl bg-[#101010] text-white dark:bg-white dark:text-[#050505] text-[11px] font-medium shadow-sm flex items-center gap-1"
+                    >
+                      <Crop className="w-3 h-3" />
+                      Done Crop
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Collapsible Mobile Page Thumbnail Navigator */}
@@ -3595,6 +3849,13 @@ export const EditorView: React.FC<EditorViewProps> = ({
                       >
                         {primarySelected?.groupId ? 'Ungroup' : 'Group'}
                       </button>
+                      <button
+                        type="button"
+                        onClick={handleConvertSelectionToTable}
+                        className="px-2 min-h-[34px] rounded-xl text-[11px] font-medium hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
+                      >
+                        To Table
+                      </button>
                     </>
                   )}
 
@@ -3731,6 +3992,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                 hasCopiedFormatting={Boolean(copiedFormatting)}
                 onStartStylePainter={handleStartStylePainter}
                 onOpenRedactionConfirm={() => setRedactionConfirmOpen(true)}
+                onConvertSelectionToTable={handleConvertSelectionToTable}
               />
             </motion.div>
           )}
@@ -3826,6 +4088,10 @@ export const EditorView: React.FC<EditorViewProps> = ({
               onOpenRedactionConfirm={() => {
                 setShowInspectorDrawer(false);
                 setRedactionConfirmOpen(true);
+              }}
+              onConvertSelectionToTable={() => {
+                handleConvertSelectionToTable();
+                setShowInspectorDrawer(false);
               }}
             />
           </GlassBottomSheet>
@@ -4064,12 +4330,9 @@ export const EditorView: React.FC<EditorViewProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    setSnapToGrid((v) => !v);
-                    setShowGuides((v) => !v);
-                  }}
+                  onClick={handleToggleSnapAndGuides}
                   className={`min-h-[38px] px-2 rounded-xl border text-xs font-medium flex items-center justify-center gap-1 ${
-                    snapToGrid
+                    snapToGrid && showGuides
                       ? 'studio-active-surface'
                       : 'glass-level-3 text-[#555555] dark:text-[#B5B5B5]'
                   }`}
@@ -4208,6 +4471,10 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     setShowInspectorDrawer(false);
                     setRedactionConfirmOpen(true);
                   }}
+                  onConvertSelectionToTable={() => {
+                    handleConvertSelectionToTable();
+                    setShowInspectorDrawer(false);
+                  }}
                 />
               </motion.div>
             </motion.div>
@@ -4275,7 +4542,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
 
             <button
               type="button"
-              onClick={() => setShowMobileThumbStrip((v) => !v)}
+              onClick={() => handleSelectMode('pages')}
               className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[10px] ${
                 showMobileThumbStrip
                   ? 'text-[#101010] dark:text-white font-semibold'

@@ -180,6 +180,7 @@ export async function saveProjectLocal(project: PDFProject): Promise<void> {
         orientation: p.orientation,
       })),
       sourcePdfBase64: undefined,
+      imageResources: undefined,
     };
     await fetch('/api/projects', {
       method: 'POST',

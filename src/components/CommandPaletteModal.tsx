@@ -53,6 +53,7 @@ const NAV_COMMANDS: Array<{ id: NavSection; label: string; desc: string; require
   { id: 'dashboard', label: 'Dashboard', desc: 'Workspace overview & recent projects' },
   { id: 'new-project', label: 'New PDF Project', desc: 'Upload & scan PDF locally' },
   { id: 'templates', label: 'My Templates & Projects', desc: 'Saved projects, folders, tags & DNA' },
+  { id: 'scan-inspector', label: 'Scan Inspector (Engine 2.0)', desc: 'Inspect object detection, structure tree, confidence & reclassify rules', requiresProject: true },
   { id: 'editor', label: 'PDF Editor', desc: 'Visual Konva layout, text & barcode studio', requiresProject: true },
   { id: 'blueprint-studio', label: 'Production Blueprint Studio', desc: 'Visual multi-block production sheets' },
   { id: 'bulk-generator', label: 'Bulk Generator', desc: 'Multi-copy imposition & serial intelligence', requiresProject: true },
@@ -85,12 +86,22 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (isOpen) {
-      setQuery('');
-      setCursor(0);
-      setTimeout(() => inputRef.current?.focus(), 20);
-    }
-  }, [isOpen]);
+    if (!isOpen) return;
+    setQuery('');
+    setCursor(0);
+    const timer = window.setTimeout(() => inputRef.current?.focus(), 20);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [isOpen, onClose]);
 
   const entries = useMemo<PaletteEntry[]>(() => {
     const list: PaletteEntry[] = [];

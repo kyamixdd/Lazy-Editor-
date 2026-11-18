@@ -56,7 +56,10 @@ import {
   BarcodeFormat,
   BoundaryMode,
   DocumentElement,
+  ElementType,
   MeasurementUnit,
+  ObjectCategory,
+  ObjectClassification,
   OriginalPageMeta,
   PageConfig,
   PageOrientation,
@@ -81,6 +84,7 @@ import {
   unitToPt,
   validatePageConfigDimensions,
 } from '../utils/units';
+import { NumericDraftInput } from './NumericDraftInput';
 
 interface PropertiesInspectorProps {
   activeTab: 'element' | 'page' | 'ai';
@@ -137,6 +141,7 @@ interface PropertiesInspectorProps {
     mode: 'appearance' | 'appearance_and_geometry'
   ) => void;
   onOpenRedactionConfirm?: () => void;
+  onConvertSelectionToTable?: () => void;
 }
 
 const FONT_OPTIONS = [
@@ -162,6 +167,49 @@ const QUICK_COLOR_SWATCHES = [
   '#059669',
   '#DC2626',
   '#D97706',
+];
+
+const SUBTYPE_RECLASSIFY_OPTIONS: Array<{
+  value: ObjectClassification;
+  label: string;
+  category: ObjectCategory;
+  type: ElementType;
+}> = [
+  { value: 'text', label: 'Text Block', category: 'text', type: 'text' },
+  { value: 'text_run', label: 'Text Run', category: 'text', type: 'text' },
+  { value: 'text_group', label: 'Text Group', category: 'text', type: 'text' },
+  { value: 'paragraph', label: 'Paragraph', category: 'text', type: 'text' },
+  { value: 'heading', label: 'Heading', category: 'text', type: 'text' },
+  { value: 'label', label: 'Field Label', category: 'text', type: 'text' },
+  { value: 'identifier_field', label: 'Invoice / Receipt / ID #', category: 'text', type: 'text' },
+  { value: 'date_field', label: 'Date Field', category: 'text', type: 'text' },
+  { value: 'numeric_field', label: 'Numeric / Amount', category: 'text', type: 'text' },
+  { value: 'horizontal_line', label: 'Horizontal Line', category: 'vector', type: 'line' },
+  { value: 'vertical_line', label: 'Vertical Line', category: 'vector', type: 'line' },
+  { value: 'diagonal_line', label: 'Diagonal Line', category: 'vector', type: 'line' },
+  { value: 'dashed_line', label: 'Dashed Line', category: 'vector', type: 'line' },
+  { value: 'divider', label: 'Section Divider', category: 'vector', type: 'line' },
+  { value: 'rect', label: 'Rectangle', category: 'vector', type: 'shape' },
+  { value: 'rounded_rect', label: 'Rounded Rectangle', category: 'vector', type: 'shape' },
+  { value: 'circle', label: 'Circle', category: 'vector', type: 'shape' },
+  { value: 'ellipse', label: 'Ellipse', category: 'vector', type: 'shape' },
+  { value: 'polygon', label: 'Polygon', category: 'vector', type: 'shape' },
+  { value: 'border', label: 'Border Box', category: 'vector', type: 'border' },
+  { value: 'logo', label: 'Logo Image', category: 'image', type: 'image' },
+  { value: 'photograph', label: 'Photograph', category: 'image', type: 'image' },
+  { value: 'signature_image', label: 'Signature Image', category: 'image', type: 'signature' },
+  { value: 'stamp_image', label: 'Stamp Image', category: 'image', type: 'image' },
+  { value: 'table', label: 'Table', category: 'structural', type: 'table' },
+  { value: 'document_block', label: 'Document Block', category: 'structural', type: 'repeated_block' },
+  { value: 'receipt_block', label: 'Receipt Block', category: 'structural', type: 'repeated_block' },
+  { value: 'invoice_block', label: 'Invoice Block', category: 'structural', type: 'repeated_block' },
+  { value: 'header', label: 'Page Header', category: 'structural', type: 'text' },
+  { value: 'footer', label: 'Page Footer', category: 'structural', type: 'text' },
+  { value: 'text_input', label: 'Form Text Input', category: 'form', type: 'form_field' },
+  { value: 'checkbox', label: 'Form Checkbox', category: 'form', type: 'form_field' },
+  { value: 'radio_button', label: 'Form Radio', category: 'form', type: 'form_field' },
+  { value: 'dropdown', label: 'Form Dropdown', category: 'form', type: 'form_field' },
+  { value: 'signature_field', label: 'Form Signature', category: 'form', type: 'form_field' },
 ];
 
 export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
@@ -213,6 +261,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
   hasCopiedFormatting = false,
   onStartStylePainter,
   onOpenRedactionConfirm,
+  onConvertSelectionToTable,
 }) => {
   const viewport = useViewport();
   const prefersReduced = useReducedMotion();
@@ -222,6 +271,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
   const [aiError, setAiError] = useState<string | null>(null);
   const [pendingPlan, setPendingPlan] = useState<AiEditPlan | null>(null);
   const [equalGapPt, setEqualGapPt] = useState<number>(12);
+  const [batchFontSizeDraft, setBatchFontSizeDraft] = useState<string>('');
   const [copiedDebug, setCopiedDebug] = useState(false);
 
   const el = selectedElements.length === 1 ? selectedElements[0] : null;
@@ -449,12 +499,10 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                       <span className="text-[10px] font-medium text-[#555555] dark:text-[#B5B5B5]">
                         Equal Spacing (pt)
                       </span>
-                      <input
-                        type="number"
-                        min="0"
-                        step="1"
+                      <NumericDraftInput
                         value={equalGapPt}
-                        onChange={(e) => setEqualGapPt(Math.max(0, Number(e.target.value) || 0))}
+                        commitOptions={{ min: 0, decimals: 1 }}
+                        onCommit={(val) => setEqualGapPt(val)}
                         className="w-14 px-1.5 py-0.5 rounded-lg border studio-input text-[11px] text-center tabular-nums"
                       />
                     </div>
@@ -497,13 +545,32 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                         ))}
                       </select>
                       <input
-                        type="number"
-                        min={5}
-                        max={120}
+                        type="text"
+                        inputMode="decimal"
+                        value={batchFontSizeDraft}
                         placeholder="Size (pt)"
-                        onChange={(e) => {
-                          const v = Number(e.target.value);
-                          if (v >= 5 && v <= 120) onBatchUpdateSelected({ fontSize: v });
+                        onChange={(e) => setBatchFontSizeDraft(e.target.value)}
+                        onBlur={() => {
+                          const v = Number(batchFontSizeDraft.trim());
+                          if (Number.isFinite(v) && v >= 5 && v <= 120) {
+                            onBatchUpdateSelected({ fontSize: v });
+                            setBatchFontSizeDraft('');
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            const v = Number(batchFontSizeDraft.trim());
+                            if (Number.isFinite(v) && v >= 5 && v <= 120) {
+                              onBatchUpdateSelected({ fontSize: v });
+                              setBatchFontSizeDraft('');
+                              e.currentTarget.blur();
+                            }
+                          } else if (e.key === 'Escape') {
+                            e.stopPropagation();
+                            setBatchFontSizeDraft('');
+                            e.currentTarget.blur();
+                          }
                         }}
                         className="px-2 py-1 rounded-lg border studio-input text-[11px] tabular-nums"
                       />
@@ -564,6 +631,16 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                       </button>
                     </div>
                   </div>
+                )}
+
+                {onConvertSelectionToTable && (
+                  <button
+                    type="button"
+                    onClick={onConvertSelectionToTable}
+                    className="w-full py-1.5 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white text-[11px] font-medium transition-colors"
+                  >
+                    Convert {selectedElements.length} Items to Table
+                  </button>
                 )}
 
                 <div className="flex gap-2 pt-1 border-t border-black/10 dark:border-white/10">
@@ -704,6 +781,53 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                           {copiedDebug ? 'Copied JSON' : 'Copy Debug'}
                         </button>
                       </div>
+                      <div className="pt-1 border-t border-black/10 dark:border-white/10 space-y-1">
+                        <div className="flex items-center justify-between gap-2 text-[#555555] dark:text-[#B5B5B5]">
+                          <span>
+                            Scan: {el.objectCategory || 'unclassified'} ·{' '}
+                            {(el.detectionMethod || 'native').replace('_', ' ')}
+                          </span>
+                          {el.effectiveDpi ? (
+                            <span className="font-mono tabular-nums">
+                              {Math.round(el.effectiveDpi)} DPI
+                            </span>
+                          ) : el.cornerRadiusPt ? (
+                            <span className="font-mono tabular-nums">
+                              r={el.cornerRadiusPt}pt
+                            </span>
+                          ) : el.dashArray?.length ? (
+                            <span className="font-mono tabular-nums">
+                              dash [{el.dashArray.join(',')}]
+                            </span>
+                          ) : null}
+                        </div>
+                        <label className="flex items-center justify-between gap-2">
+                          <span className="text-[#555555] dark:text-[#B5B5B5]">Subtype</span>
+                          <select
+                            value={el.objectSubtype || ''}
+                            onChange={(e) => {
+                              const picked = SUBTYPE_RECLASSIFY_OPTIONS.find(
+                                (o) => o.value === e.target.value
+                              );
+                              if (!picked) return;
+                              onUpdateElement(el.id, {
+                                objectSubtype: picked.value,
+                                objectCategory: picked.category,
+                                type: picked.type,
+                                needsReview: false,
+                              });
+                            }}
+                            className="flex-1 max-w-[165px] px-1.5 py-0.5 rounded-md border studio-select text-[10px]"
+                          >
+                            <option value="">Auto ({el.type})</option>
+                            {SUBTYPE_RECLASSIFY_OPTIONS.map((opt) => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
                     </div>
                   );
                 })()}
@@ -762,14 +886,13 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                   <div className="grid grid-cols-2 gap-2">
                     <label className="block">
                       <span className="text-[10px] text-[#888888] dark:text-[#858585]">X</span>
-                      <input
-                        type="number"
-                        step="0.5"
+                      <NumericDraftInput
                         onFocus={scrollOnFocus}
                         value={ptToUnit(el.x, unit)}
-                        onChange={(e) =>
+                        commitOptions={{ decimals: 2 }}
+                        onCommit={(val) =>
                           onUpdateElement(el.id, {
-                            x: unitToPt(Number(e.target.value), unit),
+                            x: unitToPt(val, unit),
                             eraseOriginal: el.isUserAdded ? false : true,
                           })
                         }
@@ -778,14 +901,13 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                     </label>
                     <label className="block">
                       <span className="text-[10px] text-[#888888] dark:text-[#858585]">Y</span>
-                      <input
-                        type="number"
-                        step="0.5"
+                      <NumericDraftInput
                         onFocus={scrollOnFocus}
                         value={ptToUnit(el.y, unit)}
-                        onChange={(e) =>
+                        commitOptions={{ decimals: 2 }}
+                        onCommit={(val) =>
                           onUpdateElement(el.id, {
-                            y: unitToPt(Number(e.target.value), unit),
+                            y: unitToPt(val, unit),
                             eraseOriginal: el.isUserAdded ? false : true,
                           })
                         }
@@ -794,13 +916,12 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                     </label>
                     <label className="block">
                       <span className="text-[10px] text-[#888888] dark:text-[#858585]">Width</span>
-                      <input
-                        type="number"
-                        step="0.5"
+                      <NumericDraftInput
                         onFocus={scrollOnFocus}
                         value={ptToUnit(el.width, unit)}
-                        onChange={(e) => {
-                          const newW = Math.max(4, unitToPt(Number(e.target.value), unit));
+                        commitOptions={{ decimals: 2 }}
+                        onCommit={(val) => {
+                          const newW = Math.max(4, unitToPt(val, unit));
                           const ratio = el.width > 0 ? el.height / el.width : 1;
                           onUpdateElement(el.id, {
                             width: newW,
@@ -815,13 +936,12 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                     </label>
                     <label className="block">
                       <span className="text-[10px] text-[#888888] dark:text-[#858585]">Height</span>
-                      <input
-                        type="number"
-                        step="0.5"
+                      <NumericDraftInput
                         onFocus={scrollOnFocus}
                         value={ptToUnit(el.height, unit)}
-                        onChange={(e) => {
-                          const newH = Math.max(4, unitToPt(Number(e.target.value), unit));
+                        commitOptions={{ decimals: 2 }}
+                        onCommit={(val) => {
+                          const newH = Math.max(4, unitToPt(val, unit));
                           const ratio = el.height > 0 ? el.width / el.height : 1;
                           onUpdateElement(el.id, {
                             height: newH,
@@ -888,13 +1008,13 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                         >
                           -15°
                         </button>
-                        <input
-                          type="number"
+                        <NumericDraftInput
                           onFocus={scrollOnFocus}
                           value={el.rotation}
-                          onChange={(e) =>
+                          commitOptions={{ decimals: 1 }}
+                          onCommit={(val) =>
                             onUpdateElement(el.id, {
-                              rotation: Number(e.target.value) || 0,
+                              rotation: val % 360,
                             })
                           }
                           className={`w-full px-1.5 rounded-lg border studio-input tabular-nums text-center ${inputHeightClass}`}
@@ -914,19 +1034,13 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                     </div>
                     <label className="block">
                       <span className="text-[10px] text-[#888888] dark:text-[#858585]">Opacity</span>
-                      <input
-                        type="number"
-                        min="0.1"
-                        max="1"
-                        step="0.05"
+                      <NumericDraftInput
                         onFocus={scrollOnFocus}
                         value={el.opacity}
-                        onChange={(e) =>
+                        commitOptions={{ min: 0.05, max: 1, decimals: 2 }}
+                        onCommit={(val) =>
                           onUpdateElement(el.id, {
-                            opacity: Math.max(
-                              0.05,
-                              Math.min(1, Number(e.target.value) || 1)
-                            ),
+                            opacity: Math.max(0.05, Math.min(1, val)),
                           })
                         }
                         className={`mt-0.5 w-full px-2 rounded-lg border studio-input tabular-nums ${inputHeightClass}`}
@@ -1073,12 +1187,11 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                             return (
                               <label key={k} className="block">
                                 <span className="text-[9px] uppercase text-[#888888]">{k}</span>
-                                <input
-                                  type="number"
-                                  min={k === 'x' || k === 'y' ? 0 : 10}
+                                <NumericDraftInput
                                   value={Math.round(cur[k])}
-                                  onChange={(e) => {
-                                    const next = { ...cur, [k]: Math.max(0, Number(e.target.value) || 0) };
+                                  commitOptions={{ min: k === 'x' || k === 'y' ? 0 : 10, decimals: 0 }}
+                                  onCommit={(val) => {
+                                    const next = { ...cur, [k]: Math.max(0, val) };
                                     next.x = Math.min(natW - 10, next.x);
                                     next.y = Math.min(natH - 10, next.y);
                                     next.width = Math.max(10, Math.min(natW - next.x, next.width));
@@ -1142,14 +1255,14 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                       <div className="grid grid-cols-2 gap-2">
                         <label className="block">
                           <span className="text-[10px] text-[#888888]">Target X (pt)</span>
-                          <input
-                            type="number"
+                          <NumericDraftInput
                             value={Math.round(el.calloutTarget.x)}
-                            onChange={(e) =>
+                            commitOptions={{ decimals: 1 }}
+                            onCommit={(val) =>
                               onUpdateElement(el.id, {
                                 calloutTarget: {
                                   ...el.calloutTarget!,
-                                  x: Number(e.target.value) || 0,
+                                  x: val,
                                 },
                               })
                             }
@@ -1158,14 +1271,14 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                         </label>
                         <label className="block">
                           <span className="text-[10px] text-[#888888]">Target Y (pt)</span>
-                          <input
-                            type="number"
+                          <NumericDraftInput
                             value={Math.round(el.calloutTarget.y)}
-                            onChange={(e) =>
+                            commitOptions={{ decimals: 1 }}
+                            onCommit={(val) =>
                               onUpdateElement(el.id, {
                                 calloutTarget: {
                                   ...el.calloutTarget!,
-                                  y: Number(e.target.value) || 0,
+                                  y: val,
                                 },
                               })
                             }
@@ -1251,16 +1364,13 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                             <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                               Quiet Zone (pt)
                             </span>
-                            <input
-                              type="number"
-                              min="0"
-                              max="36"
-                              step="1"
+                            <NumericDraftInput
                               onFocus={scrollOnFocus}
                               value={el.barcodeQuietZonePt ?? 6}
-                              onChange={(e) =>
+                              commitOptions={{ min: 0, max: 36, decimals: 1 }}
+                              onCommit={(val) =>
                                 onUpdateElement(el.id, {
-                                  barcodeQuietZonePt: Math.max(0, Number(e.target.value) || 0),
+                                  barcodeQuietZonePt: Math.max(0, Math.min(36, val)),
                                 })
                               }
                               className={`mt-0.5 w-full px-2 rounded-lg border studio-input tabular-nums ${inputHeightClass}`}
@@ -1274,16 +1384,13 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                           <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                             Quiet Zone Margin (pt)
                           </span>
-                          <input
-                            type="number"
-                            min="0"
-                            max="36"
-                            step="1"
+                          <NumericDraftInput
                             onFocus={scrollOnFocus}
                             value={el.barcodeQuietZonePt ?? 6}
-                            onChange={(e) =>
+                            commitOptions={{ min: 0, max: 36, decimals: 1 }}
+                            onCommit={(val) =>
                               onUpdateElement(el.id, {
-                                barcodeQuietZonePt: Math.max(0, Number(e.target.value) || 0),
+                                barcodeQuietZonePt: Math.max(0, Math.min(36, val)),
                               })
                             }
                             className={`mt-0.5 w-full px-2 rounded-lg border studio-input tabular-nums ${inputHeightClass}`}
@@ -1519,15 +1626,13 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                           >
                             <Minus className="w-3.5 h-3.5" />
                           </button>
-                          <input
-                            type="number"
-                            min="5"
-                            max="120"
+                          <NumericDraftInput
                             onFocus={scrollOnFocus}
                             value={el.fontSize}
-                            onChange={(e) =>
+                            commitOptions={{ min: 5, max: 120, decimals: 1 }}
+                            onCommit={(val) =>
                               onUpdateElement(el.id, {
-                                fontSize: Math.max(5, Number(e.target.value) || 11),
+                                fontSize: Math.max(5, Math.min(120, val)),
                                 eraseOriginal: el.isUserAdded ? false : true,
                               })
                             }
@@ -1739,13 +1844,12 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                     <div className="grid grid-cols-4 gap-1.5">
                       <label className="block">
                         <span className="text-[9px] text-[#888888]">Track</span>
-                        <input
-                          type="number"
-                          step="0.2"
+                        <NumericDraftInput
                           value={el.letterSpacing ?? 0}
-                          onChange={(e) =>
+                          commitOptions={{ decimals: 2 }}
+                          onCommit={(val) =>
                             onUpdateElement(el.id, {
-                              letterSpacing: Number(e.target.value) || 0,
+                              letterSpacing: val,
                               eraseOriginal: el.isUserAdded ? false : true,
                             })
                           }
@@ -1754,15 +1858,12 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                       </label>
                       <label className="block">
                         <span className="text-[9px] text-[#888888]">Line H</span>
-                        <input
-                          type="number"
-                          step="0.05"
-                          min="0.8"
-                          max="3"
+                        <NumericDraftInput
                           value={el.lineHeight ?? 1.2}
-                          onChange={(e) =>
+                          commitOptions={{ min: 0.8, max: 3, decimals: 2 }}
+                          onCommit={(val) =>
                             onUpdateElement(el.id, {
-                              lineHeight: Math.max(0.8, Number(e.target.value) || 1.2),
+                              lineHeight: Math.max(0.8, Math.min(3, val)),
                               eraseOriginal: el.isUserAdded ? false : true,
                             })
                           }
@@ -1771,14 +1872,12 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                       </label>
                       <label className="block">
                         <span className="text-[9px] text-[#888888]">Para pt</span>
-                        <input
-                          type="number"
-                          step="1"
-                          min="0"
+                        <NumericDraftInput
                           value={el.paragraphSpacing ?? 0}
-                          onChange={(e) =>
+                          commitOptions={{ min: 0, decimals: 1 }}
+                          onCommit={(val) =>
                             onUpdateElement(el.id, {
-                              paragraphSpacing: Math.max(0, Number(e.target.value) || 0),
+                              paragraphSpacing: Math.max(0, val),
                               eraseOriginal: el.isUserAdded ? false : true,
                             })
                           }
@@ -1787,14 +1886,12 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                       </label>
                       <label className="block">
                         <span className="text-[9px] text-[#888888]">Pad pt</span>
-                        <input
-                          type="number"
-                          step="0.5"
-                          min="0"
+                        <NumericDraftInput
                           value={el.paddingPt ?? 1}
-                          onChange={(e) =>
+                          commitOptions={{ min: 0, decimals: 1 }}
+                          onCommit={(val) =>
                             onUpdateElement(el.id, {
-                              paddingPt: Math.max(0, Number(e.target.value) || 0),
+                              paddingPt: Math.max(0, val),
                               eraseOriginal: el.isUserAdded ? false : true,
                             })
                           }
@@ -2153,13 +2250,11 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                 <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                   Width ({unit})
                 </span>
-                <input
-                  type="number"
-                  step="0.5"
+                <NumericDraftInput
                   value={ptToUnit(pageConfig.widthPt, unit)}
-                  onChange={(e) => {
-                    const num = Number(e.target.value);
-                    if (!Number.isFinite(num) || num <= 0) return;
+                  commitOptions={{ allowZero: false, decimals: 2 }}
+                  onCommit={(num) => {
+                    if (num <= 0) return;
                     const clamped = Math.max(
                       MIN_PAGE_DIM_PT,
                       Math.min(MAX_PAGE_DIM_PT, unitToPt(num, unit))
@@ -2178,13 +2273,11 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                 <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                   Height ({unit})
                 </span>
-                <input
-                  type="number"
-                  step="0.5"
+                <NumericDraftInput
                   value={ptToUnit(pageConfig.heightPt, unit)}
-                  onChange={(e) => {
-                    const num = Number(e.target.value);
-                    if (!Number.isFinite(num) || num <= 0) return;
+                  commitOptions={{ allowZero: false, decimals: 2 }}
+                  onCommit={(num) => {
+                    if (num <= 0) return;
                     const clamped = Math.max(
                       MIN_PAGE_DIM_PT,
                       Math.min(MAX_PAGE_DIM_PT, unitToPt(num, unit))
@@ -2229,14 +2322,12 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                 ).map(([label, key]) => (
                   <label key={key} className="block">
                     <span className="text-[10px] text-[#888888] dark:text-[#858585]">{label}</span>
-                    <input
-                      type="number"
-                      step="0.5"
-                      min="0"
+                    <NumericDraftInput
                       value={ptToUnit(pageConfig[key], unit)}
-                      onChange={(e) =>
+                      commitOptions={{ min: 0, decimals: 2 }}
+                      onCommit={(val) =>
                         onUpdatePageConfig({
-                          [key]: Math.max(0, unitToPt(Number(e.target.value) || 0, unit)),
+                          [key]: Math.max(0, unitToPt(val, unit)),
                         })
                       }
                       className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
@@ -2249,14 +2340,12 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
             <div className="grid grid-cols-2 gap-2">
               <label className="block">
                 <span className="text-[10px] text-[#888888] dark:text-[#858585]">Bleed ({unit})</span>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.5"
+                <NumericDraftInput
                   value={ptToUnit(pageConfig.bleedPt ?? 0, unit)}
-                  onChange={(e) =>
+                  commitOptions={{ min: 0, decimals: 2 }}
+                  onCommit={(val) =>
                     onUpdatePageConfig({
-                      bleedPt: Math.max(0, unitToPt(Number(e.target.value) || 0, unit)),
+                      bleedPt: Math.max(0, unitToPt(val, unit)),
                     })
                   }
                   className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
@@ -2499,13 +2588,12 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                     <div className="grid grid-cols-2 gap-2">
                       <label className="block">
                         <span className="text-[10px] text-[#888888] dark:text-[#858585]">Crop X</span>
-                        <input
-                          type="number"
-                          step="0.5"
+                        <NumericDraftInput
                           value={ptToUnit(activeSourceBox.x, unit)}
-                          onChange={(e) =>
+                          commitOptions={{ min: 0, decimals: 2 }}
+                          onCommit={(val) =>
                             updateNumericCrop({
-                              x: unitToPt(Number(e.target.value) || 0, unit),
+                              x: unitToPt(val, unit),
                             })
                           }
                           className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
@@ -2513,13 +2601,12 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                       </label>
                       <label className="block">
                         <span className="text-[10px] text-[#888888] dark:text-[#858585]">Crop Y</span>
-                        <input
-                          type="number"
-                          step="0.5"
+                        <NumericDraftInput
                           value={ptToUnit(activeSourceBox.y, unit)}
-                          onChange={(e) =>
+                          commitOptions={{ min: 0, decimals: 2 }}
+                          onCommit={(val) =>
                             updateNumericCrop({
-                              y: unitToPt(Number(e.target.value) || 0, unit),
+                              y: unitToPt(val, unit),
                             })
                           }
                           className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
@@ -2527,16 +2614,12 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                       </label>
                       <label className="block">
                         <span className="text-[10px] text-[#888888] dark:text-[#858585]">Crop Width</span>
-                        <input
-                          type="number"
-                          step="0.5"
+                        <NumericDraftInput
                           value={ptToUnit(activeSourceBox.width, unit)}
-                          onChange={(e) =>
+                          commitOptions={{ allowZero: false, decimals: 2 }}
+                          onCommit={(val) =>
                             updateNumericCrop({
-                              width: Math.max(
-                                16,
-                                unitToPt(Number(e.target.value) || 16, unit)
-                              ),
+                              width: Math.max(16, unitToPt(val, unit)),
                             })
                           }
                           className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
@@ -2544,16 +2627,12 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                       </label>
                       <label className="block">
                         <span className="text-[10px] text-[#888888] dark:text-[#858585]">Crop Height</span>
-                        <input
-                          type="number"
-                          step="0.5"
+                        <NumericDraftInput
                           value={ptToUnit(activeSourceBox.height, unit)}
-                          onChange={(e) =>
+                          commitOptions={{ allowZero: false, decimals: 2 }}
+                          onCommit={(val) =>
                             updateNumericCrop({
-                              height: Math.max(
-                                16,
-                                unitToPt(Number(e.target.value) || 16, unit)
-                              ),
+                              height: Math.max(16, unitToPt(val, unit)),
                             })
                           }
                           className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
@@ -2567,17 +2646,12 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                       <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                         Content Safety Padding ({unit})
                       </span>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.5"
+                      <NumericDraftInput
                         value={ptToUnit(fitConfig.cropPaddingPt, unit)}
-                        onChange={(e) =>
+                        commitOptions={{ min: 0, decimals: 2 }}
+                        onCommit={(val) =>
                           onUpdateFitConfig({
-                            cropPaddingPt: Math.max(
-                              0,
-                              unitToPt(Number(e.target.value) || 0, unit)
-                            ),
+                            cropPaddingPt: Math.max(0, unitToPt(val, unit)),
                           })
                         }
                         className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
@@ -2620,17 +2694,12 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                         <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                           Custom Scale (%)
                         </span>
-                        <input
-                          type="number"
-                          min="10"
-                          max="400"
+                        <NumericDraftInput
                           value={fitConfig.customPercent}
-                          onChange={(e) =>
+                          commitOptions={{ min: 10, max: 400, decimals: 0 }}
+                          onCommit={(val) =>
                             onUpdateFitConfig({
-                              customPercent: Math.max(
-                                10,
-                                Number(e.target.value) || 100
-                              ),
+                              customPercent: Math.max(10, Math.min(400, val)),
                             })
                           }
                           className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"

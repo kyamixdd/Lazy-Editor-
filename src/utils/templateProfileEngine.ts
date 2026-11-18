@@ -218,6 +218,9 @@ export function buildProfileFromProject(
       embedFonts: project.exportConfig.embedFonts,
     },
     exportConfig: structuredClone(project.exportConfig),
+    scanCorrectionRules: project.scanCorrectionRules
+      ? structuredClone(project.scanCorrectionRules)
+      : undefined,
   };
   profile.dna = computeTemplateDna(profile);
   return profile;
@@ -497,6 +500,12 @@ export function mergeTemplateProfileUpdate(
         ? nextMappings
         : structuredClone(savedProfile.fieldMappings),
     exportConfig: structuredClone(savedProfile.exportConfig),
+    scanCorrectionRules:
+      incomingProject.scanCorrectionRules || savedProfile.scanCorrectionRules
+        ? structuredClone(
+            incomingProject.scanCorrectionRules || savedProfile.scanCorrectionRules
+          )
+        : undefined,
   };
   updatedProfile.dna = computeTemplateDna(updatedProfile);
   return { updatedProfile, diffReport };
@@ -527,6 +536,9 @@ export function createProjectFromProfile(
     dataColumns: structuredClone(profile.dataColumns),
     dataRows: [],
     exportConfig: structuredClone(profile.exportConfig),
+    scanCorrectionRules: profile.scanCorrectionRules
+      ? structuredClone(profile.scanCorrectionRules)
+      : undefined,
     isTemplate: false,
     versions: [],
     operationLog: [
@@ -581,6 +593,9 @@ export function applyProfileSettingsToProject(
         ? structuredClone(profile.dataColumns)
         : project.dataColumns,
     exportConfig: structuredClone(profile.exportConfig),
+    scanCorrectionRules: profile.scanCorrectionRules
+      ? structuredClone(profile.scanCorrectionRules)
+      : project.scanCorrectionRules,
     updatedAt: now,
     operationLog: [
       {

@@ -17,6 +17,7 @@ import {
   PenTool,
   Plus,
   Printer,
+  ScanSearch,
   Search,
   Settings,
   ShieldCheck,
@@ -91,6 +92,14 @@ const NAV_ITEMS: Array<{
     shortLabel: 'Projects',
     desc: 'Projects & profiles',
     icon: Layers,
+  },
+  {
+    id: 'scan-inspector',
+    label: 'Scan Inspector',
+    shortLabel: 'Scan QC',
+    desc: 'Structure, trees & rules',
+    icon: ScanSearch,
+    requiresProject: true,
   },
   {
     id: 'editor',
@@ -192,6 +201,7 @@ const NAV_ITEMS: Array<{
 ];
 
 const TOOL_HUB_IDS: NavSection[] = [
+  'scan-inspector',
   'editor',
   'blueprint-studio',
   'bulk-generator',

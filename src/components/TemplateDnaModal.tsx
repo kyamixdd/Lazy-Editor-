@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -35,6 +35,10 @@ export const TemplateDnaModal: React.FC<TemplateDnaModalProps> = ({
   onApplyToActive,
 }) => {
   const [mergeFeedback, setMergeFeedback] = useState<string | null>(null);
+
+  useEffect(() => {
+    setMergeFeedback(null);
+  }, [isOpen, profile?.id]);
 
   const dna = useMemo(
     () => (profile ? profile.dna || computeTemplateDna(profile) : null),

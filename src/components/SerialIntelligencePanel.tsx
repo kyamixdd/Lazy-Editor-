@@ -15,6 +15,7 @@ import {
   SerialReservedRange,
   SerialSequenceRule,
 } from '../types/pdfStudio';
+import { triggerBlobDownload, triggerBytesDownload } from '../utils/downloadHelper';
 import {
   analyzeSerialIntelligence,
   buildSerialReportCsv,
@@ -22,6 +23,7 @@ import {
   generateSerialReportPdfBytes,
 } from '../utils/serialEngine';
 import { GlassCard } from './glass';
+import { NumericDraftInput } from './NumericDraftInput';
 
 interface SerialIntelligencePanelProps {
   project: PDFProject;
@@ -140,31 +142,24 @@ export const SerialIntelligencePanel: React.FC<SerialIntelligencePanelProps> = (
       projectBatches
     );
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${project.name.replace(/\s+/g, '_')}_serial_report.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    triggerBlobDownload(blob, `${project.name.replace(/\s+/g, '_')}_serial_report.csv`);
   };
 
   const handleExportPdfReport = async () => {
-    const bytes = await generateSerialReportPdfBytes(
-      project,
-      intelligence,
-      projectBatches
-    );
-    const blob = new Blob([new Uint8Array(bytes)], { type: 'application/pdf' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${project.name.replace(/\s+/g, '_')}_serial_report.pdf`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    try {
+      const bytes = await generateSerialReportPdfBytes(
+        project,
+        intelligence,
+        projectBatches
+      );
+      triggerBytesDownload(
+        bytes,
+        `${project.name.replace(/\s+/g, '_')}_serial_report.pdf`,
+        'application/pdf'
+      );
+    } catch (err) {
+      setReportNotice(err instanceof Error ? err.message : 'Failed to export serial PDF report.');
+    }
   };
 
   const minTimelineNum = useMemo(() => {
@@ -312,18 +307,18 @@ export const SerialIntelligencePanel: React.FC<SerialIntelligencePanelProps> = (
               </option>
             ))}
           </select>
-          <input
-            type="number"
+          <NumericDraftInput
             placeholder="Start"
             value={resStart}
-            onChange={(e) => setResStart(Number(e.target.value) || 0)}
+            commitOptions={{ decimals: 0 }}
+            onCommit={(val) => setResStart(val)}
             className="px-2 py-1 rounded-lg studio-input text-[11px] tabular-nums"
           />
-          <input
-            type="number"
+          <NumericDraftInput
             placeholder="End"
             value={resEnd}
-            onChange={(e) => setResEnd(Number(e.target.value) || 0)}
+            commitOptions={{ decimals: 0 }}
+            onCommit={(val) => setResEnd(val)}
             className="px-2 py-1 rounded-lg studio-input text-[11px] tabular-nums"
           />
           <input

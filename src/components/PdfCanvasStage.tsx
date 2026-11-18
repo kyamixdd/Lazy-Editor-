@@ -35,6 +35,10 @@ import {
 } from '../utils/alignmentEngine';
 import { encodeBarcode } from '../utils/barcodeEngine';
 import { clampRect } from '../utils/geometryEngine';
+import {
+  mergeTableCellRange,
+  splitMergedTableCell,
+} from '../utils/tableReconstructionEngine';
 import { computeTypographyLayout } from '../utils/typographyEngine';
 import { ptToUnit } from '../utils/units';
 
@@ -142,6 +146,11 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
 
   const longPressTimerRef = useRef<number | null>(null);
   const longPressStartPosRef = useRef<{ x: number; y: number } | null>(null);
+  const lastTouchEventAtRef = useRef<number>(0);
+  const isManipulatingRef = useRef<boolean>(false);
+  const pendingNarrowIdRef = useRef<string | null>(null);
+  const highlightRectRef = useRef<Konva.Rect | null>(null);
+  const stageBoxRef = useRef<HTMLDivElement>(null);
   const touchGestureRef = useRef<{
     active: boolean;
     initialDist: number;
@@ -163,6 +172,12 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
   const [inlineEditId, setInlineEditId] = useState<string | null>(null);
   const [inlineText, setInlineText] = useState('');
   const [tableEditId, setTableEditId] = useState<string | null>(null);
+  const [tableCellSel, setTableCellSel] = useState<{
+    r1: number;
+    c1: number;
+    r2: number;
+    c2: number;
+  } | null>(null);
   const [isManipulating, setIsManipulating] = useState(false);
   const [liveMeasureHint, setLiveMeasureHint] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{
@@ -202,6 +217,7 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
     currentPageNumber,
     measureUnit,
     viewportWidth: viewport.width,
+    isTouchLargeHandles,
   });
   callbacksRef.current = {
     onSelectIds,
@@ -228,6 +244,7 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
     currentPageNumber,
     measureUnit,
     viewportWidth: viewport.width,
+    isTouchLargeHandles,
   };
 
   const marqueeRef = useRef<{
@@ -361,7 +378,94 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
     stage.add(guideLayer);
     stage.add(cropLayer);
 
+    const cancelTransientStageGesture = () => {
+      const m = marqueeRef.current;
+      if (m.active) {
+        m.rectNode?.destroy();
+        m.lineNode?.destroy();
+        marqueeRef.current = {
+          active: false,
+          mode: 'marquee',
+          tool: 'select',
+          startX: 0,
+          startY: 0,
+          points: [],
+          rectNode: null,
+          lineNode: null,
+          shiftHeld: false,
+        };
+        guideLayer.batchDraw();
+      }
+      isManipulatingRef.current = false;
+      setIsManipulating(false);
+      setLiveMeasureHint(null);
+      clearLongPress();
+    };
+
+    tr.on('transformstart', () => {
+      clearLongPress();
+      isManipulatingRef.current = true;
+      setIsManipulating(true);
+    });
+
+    tr.on('transformend', () => {
+      isManipulatingRef.current = false;
+      setIsManipulating(false);
+      const nodes = tr.nodes();
+      if (!nodes || nodes.length === 0) return;
+
+      const updates: Array<{ id: string; patch: Partial<DocumentElement> }> = [];
+      for (const node of nodes) {
+        const id = node.id();
+        const el = callbacksRef.current.elements.find((x) => x.id === id);
+        const sx = node.scaleX();
+        const sy = node.scaleY();
+        node.scaleX(1);
+        node.scaleY(1);
+        if (!el || el.locked) continue;
+
+        const nextW = Number(Math.max(8, el.width * sx).toFixed(2));
+        const nextH = Number(Math.max(8, el.height * sy).toFixed(2));
+        const patch: Partial<DocumentElement> = {
+          x: Number(node.x().toFixed(2)),
+          y: Number(node.y().toFixed(2)),
+          width: nextW,
+          height: nextH,
+          rotation: Math.round(node.rotation()),
+          eraseOriginal: el.isUserAdded ? false : true,
+        };
+
+        // Proportionally scale relative vector points for freehand/line/polygon shapes
+        if (el.points && el.points.length >= 4 && (Math.abs(sx - 1) > 0.001 || Math.abs(sy - 1) > 0.001)) {
+          patch.points = el.points.map((val, idx) =>
+            Number((val * (idx % 2 === 0 ? sx : sy)).toFixed(2))
+          );
+        }
+
+        updates.push({ id, patch });
+      }
+
+      if (updates.length === 1) {
+        callbacksRef.current.onUpdateElement(updates[0].id, updates[0].patch);
+      } else if (updates.length > 1) {
+        callbacksRef.current.onUpdateElementsBatch(updates);
+      }
+    });
+
     stage.on('mousedown touchstart', (e) => {
+      const evtType = e.evt?.type || '';
+      if (evtType === 'touchstart') {
+        lastTouchEventAtRef.current = Date.now();
+        const te = e.evt as unknown as TouchEvent;
+        if (te.touches && te.touches.length >= 2) {
+          cancelTransientStageGesture();
+          return;
+        }
+      } else if (evtType === 'mousedown' && Date.now() - lastTouchEventAtRef.current < 450) {
+        // Ignore browser-synthesized mouse event right after touchstart
+        return;
+      }
+
       const tool = callbacksRef.current.activeTool;
       const isCreationTool =
         tool !== 'select' &&
@@ -370,7 +474,7 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
         tool !== 'style_painter' &&
         !callbacksRef.current.stylePainterActive;
 
-      if (e.target === stage || isCreationTool) {
+      if (e.target === stage || isCreationTool || tool === 'marquee') {
         setInlineEditId(null);
         setContextMenu(null);
         const evt = e.evt as MouseEvent;
@@ -385,6 +489,8 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
           const sy = pos.y / z;
 
           if (tool === 'draw') {
+            isManipulatingRef.current = true;
+            setIsManipulating(true);
             const lineNode = new Konva.Line({
               points: [sx, sy],
               stroke: '#101010',
@@ -410,6 +516,8 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
           }
 
           if (tool === 'measure' || tool === 'arrow' || tool === 'line') {
+            isManipulatingRef.current = true;
+            setIsManipulating(true);
             const lineNode = new Konva.Line({
               points: [sx, sy, sx, sy],
               stroke: '#101010',
@@ -443,6 +551,8 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
             tool === 'note' ||
             tool === 'text'
           ) {
+            isManipulatingRef.current = true;
+            setIsManipulating(true);
             const boxNode = new Konva.Rect({
               x: sx,
               y: sy,
@@ -474,8 +584,13 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
             return;
           }
 
-          const isMouse = evt && 'button' in evt && !('touches' in evt && (evt as unknown as TouchEvent).touches?.length);
-          if (isMouse && evt.button === 0 && e.target === stage) {
+          const hasTouch = 'touches' in (evt as unknown as TouchEvent) && Boolean((evt as unknown as TouchEvent).touches?.length);
+          const isLeftMouse = evt && 'button' in evt && !hasTouch && evt.button === 0;
+          const allowMarquee =
+            tool === 'marquee' ? e.target === stage || hasTouch || isLeftMouse : isLeftMouse && e.target === stage;
+          if (allowMarquee) {
+            isManipulatingRef.current = true;
+            setIsManipulating(true);
             const marqueeRect = new Konva.Rect({
               x: sx,
               y: sy,
@@ -497,7 +612,7 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
               points: [],
               rectNode: marqueeRect,
               lineNode: null,
-              shiftHeld: Boolean(evt.shiftKey),
+              shiftHeld: Boolean(evt?.shiftKey),
             };
             return;
           }
@@ -555,9 +670,15 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
       }
     });
 
-    stage.on('mouseup touchend', () => {
+    stage.on('mouseup touchend touchcancel', () => {
       const m = marqueeRef.current;
-      if (!m.active) return;
+      if (!m.active) {
+        if (isManipulatingRef.current) {
+          isManipulatingRef.current = false;
+          setIsManipulating(false);
+        }
+        return;
+      }
 
       const finishReset = () => {
         m.rectNode?.destroy();
@@ -574,6 +695,8 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
           shiftHeld: false,
         };
         guideLayer.batchDraw();
+        isManipulatingRef.current = false;
+        setIsManipulating(false);
         setLiveMeasureHint(null);
       };
 
@@ -909,6 +1032,21 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
       }
     });
 
+    const handleWindowBlur = () => cancelTransientStageGesture();
+    const handleStageKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') {
+        if (marqueeRef.current.active) {
+          cancelTransientStageGesture();
+        }
+        setContextMenu(null);
+        setTableEditId(null);
+        setTableCellSel(null);
+        setInlineEditId(null);
+      }
+    };
+    window.addEventListener('blur', handleWindowBlur);
+    window.addEventListener('keydown', handleStageKeyDown);
+
     stageRef.current = stage;
     bgLayerRef.current = bgLayer;
     gridLayerRef.current = gridLayer;
@@ -920,6 +1058,8 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
 
     return () => {
       clearLongPress();
+      window.removeEventListener('blur', handleWindowBlur);
+      window.removeEventListener('keydown', handleStageKeyDown);
       stage.destroy();
       stageRef.current = null;
     };
@@ -1034,15 +1174,19 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
     gridLayer.batchDraw();
   }, [showGrid, gridSizePt, canvasW, canvasH, zoom]);
 
-  // Render elements layer
+  // Render elements layer (only rebuilds when document geometry/content/images change, NOT on selection or zoom)
   useEffect(() => {
     const layer = elementsLayerRef.current;
     const tr = transformerRef.current;
     const guideLayer = guideLayerRef.current;
     if (!layer || !tr || !guideLayer) return;
 
-    const isPreview = interactionMode === 'preview';
-    layer.listening(!isPreview);
+    const currentZoom = callbacksRef.current.zoom || 1;
+    const isPreviewCurr = callbacksRef.current.interactionMode === 'preview';
+    const currTool = callbacksRef.current.activeTool;
+    const toolAllowsDrag =
+      (currTool === 'select' || currTool === 'marquee' || currTool === 'inspect') &&
+      !callbacksRef.current.stylePainterActive;
 
     // Remove all children except transformer
     layer.getChildren().forEach((child) => {
@@ -1051,6 +1195,7 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
       }
     });
     nodeMapRef.current.clear();
+    highlightRectRef.current = null;
 
     const drawGuides = (activeEl: DocumentElement, nx: number, ny: number) => {
       guideLayer.destroyChildren();
@@ -1146,13 +1291,13 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
         width: el.width,
         height: el.height,
         rotation: el.rotation || 0,
-        draggable: !isPreview && !el.locked,
+        draggable: !isPreviewCurr && !el.locked && toolAllowsDrag,
         opacity: el.opacity ?? 1,
       });
 
-      const isSelected = !isPreview && selectedIds.includes(el.id);
+      const isSelected = !isPreviewCurr && callbacksRef.current.selectedIds.includes(el.id);
       const showBoxOutline =
-        !isPreview &&
+        !isPreviewCurr &&
         (isSelected ||
           el.needsReview ||
           el.type === 'border' ||
@@ -1166,16 +1311,16 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
             width: el.width,
             height: el.height,
             fill: '#000000',
-            stroke: isPreview
+            stroke: isPreviewCurr
               ? 'transparent'
               : el.redactionApplied
               ? '#525252'
               : '#FFFFFF',
-            strokeWidth: 1 / zoom,
-            dash: !isPreview && !el.redactionApplied ? [4 / zoom, 2 / zoom] : undefined,
+            strokeWidth: 1 / currentZoom,
+            dash: !isPreviewCurr && !el.redactionApplied ? [4 / currentZoom, 2 / currentZoom] : undefined,
           })
         );
-        if (!isPreview) {
+        if (!isPreviewCurr) {
           group.add(
             new Konva.Text({
               width: el.width,
@@ -1424,24 +1569,32 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
           ? el.borderColor || el.color || '#1E293B'
           : isSelected
           ? '#101010'
-          : isPreview
+          : isPreviewCurr
           ? 'transparent'
           : 'rgba(16, 16, 16, 0.25)';
-        const strokeW = isModifiedOrAdded ? el.borderWidth ?? 1.2 : 0.75 / zoom;
+        const strokeW = isModifiedOrAdded ? el.borderWidth ?? 1.2 : 0.75 / currentZoom;
+        const dashArr =
+          isModifiedOrAdded && el.dashArray?.length ? el.dashArray : undefined;
+        const fillCol =
+          isModifiedOrAdded && el.backgroundColor !== 'transparent'
+            ? el.backgroundColor
+            : undefined;
 
-        if (el.shapeKind === 'circle') {
+        if (
+          el.shapeKind === 'circle' ||
+          el.objectSubtype === 'circle' ||
+          el.objectSubtype === 'ellipse'
+        ) {
           group.add(
             new Konva.Ellipse({
               x: el.width / 2,
               y: el.height / 2,
               radiusX: el.width / 2,
               radiusY: el.height / 2,
-              fill:
-                isModifiedOrAdded && el.backgroundColor !== 'transparent'
-                  ? el.backgroundColor
-                  : undefined,
+              fill: fillCol,
               stroke: strokeColor,
               strokeWidth: strokeW,
+              dash: dashArr,
               hitStrokeWidth: isTouchLargeHandles ? 16 : 6,
             })
           );
@@ -1461,48 +1614,100 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
               fill: strokeColor,
               stroke: strokeColor,
               strokeWidth: strokeW,
+              dash: dashArr,
               hitStrokeWidth: isTouchLargeHandles ? 18 : 8,
             })
           );
+        } else if (
+          el.shapeKind === 'polygon' ||
+          el.objectSubtype === 'polygon' ||
+          el.objectSubtype === 'freeform_path'
+        ) {
+          let relPts: number[] | null =
+            el.points && el.points.length >= 4 ? el.points : null;
+          if (!relPts && el.vectorPath?.points && el.vectorPath.points.length >= 4) {
+            relPts = [];
+            for (let pi = 0; pi < el.vectorPath.points.length; pi += 2) {
+              relPts.push(
+                el.vectorPath.points[pi] - el.x,
+                el.vectorPath.points[pi + 1] - el.y
+              );
+            }
+          }
+          if (relPts && relPts.length >= 4) {
+            group.add(
+              new Konva.Line({
+                points: relPts,
+                closed: el.vectorPath?.isClosed !== false,
+                fill: fillCol,
+                stroke: strokeColor,
+                strokeWidth: strokeW,
+                dash: dashArr,
+                hitStrokeWidth: isTouchLargeHandles ? 16 : 6,
+              })
+            );
+          } else {
+            group.add(
+              new Konva.Rect({
+                width: el.width,
+                height: el.height,
+                cornerRadius: el.cornerRadiusPt || 0,
+                fill: fillCol,
+                stroke: strokeColor,
+                strokeWidth: strokeW,
+                dash: dashArr,
+                hitStrokeWidth: isTouchLargeHandles ? 16 : 6,
+              })
+            );
+          }
         } else {
           group.add(
             new Konva.Rect({
               width: el.width,
               height: el.height,
-              fill:
-                isModifiedOrAdded && el.backgroundColor !== 'transparent'
-                  ? el.backgroundColor
-                  : undefined,
+              cornerRadius: el.cornerRadiusPt || 0,
+              fill: fillCol,
               stroke: strokeColor,
               strokeWidth: strokeW,
+              dash: dashArr,
               hitStrokeWidth: isTouchLargeHandles ? 16 : 6,
             })
           );
         }
       } else if (el.type === 'line') {
+        const hitH = Math.max(isTouchLargeHandles ? 20 : 8, el.height);
         group.add(
           new Konva.Rect({
-            width: el.width,
-            height: Math.max(isTouchLargeHandles ? 20 : 8, el.height),
+            y: el.height / 2 - hitH / 2,
+            width: Math.max(8, el.width),
+            height: hitH,
             fill: 'rgba(0,0,0,0.001)',
           })
         );
+        let linePts = [0, el.height / 2, el.width, el.height / 2];
+        if (el.points && el.points.length >= 4) {
+          linePts = [el.points[0], el.points[1], el.points[2], el.points[3]];
+        } else if (el.vectorPath?.points && el.vectorPath.points.length >= 4) {
+          linePts = [
+            el.vectorPath.points[0] - el.x,
+            el.vectorPath.points[1] - el.y,
+            el.vectorPath.points[2] - el.x,
+            el.vectorPath.points[3] - el.y,
+          ];
+        }
         group.add(
           new Konva.Line({
-            points: [
-              0,
-              Math.max(isTouchLargeHandles ? 20 : 8, el.height) / 2,
-              el.width,
-              Math.max(isTouchLargeHandles ? 20 : 8, el.height) / 2,
-            ],
+            points: linePts,
             stroke: isModifiedOrAdded
               ? el.color || '#1E293B'
               : isSelected
               ? '#101010'
-              : isPreview
+              : isPreviewCurr
               ? 'transparent'
               : 'rgba(16, 16, 16, 0.28)',
-            strokeWidth: isModifiedOrAdded ? el.borderWidth ?? 1.5 : 0.8 / zoom,
+            strokeWidth: isModifiedOrAdded ? el.borderWidth ?? 1.5 : 0.8 / currentZoom,
+            dash:
+              isModifiedOrAdded && el.dashArray?.length ? el.dashArray : undefined,
             hitStrokeWidth: isTouchLargeHandles ? 18 : 6,
           })
         );
@@ -1550,50 +1755,120 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
               height: el.height,
               fill: 'rgba(16, 16, 16, 0.04)',
               stroke: 'rgba(16, 16, 16, 0.4)',
-              strokeWidth: 0.8 / zoom,
+              strokeWidth: 0.8 / currentZoom,
               dash: [4, 2],
             })
           );
         }
       } else if (el.type === 'table' && el.tableData) {
-        const { rows, borderColor, headerBgColor, headerRow, cellPadding } =
-          el.tableData;
+        const {
+          rows,
+          borderColor,
+          headerBgColor,
+          headerRow,
+          cellPadding,
+          colWidthsPt,
+          rowHeightsPt,
+          mergedCells,
+          hasBorders,
+          borderWidthPt,
+        } = el.tableData;
         const rCount = Math.max(1, rows.length);
         const cCount = Math.max(1, rows[0]?.length || 1);
-        const rH = el.height / rCount;
-        const cW = el.width / cCount;
+
+        const rawColW =
+          colWidthsPt && colWidthsPt.length === cCount
+            ? colWidthsPt
+            : Array(cCount).fill(el.width / cCount);
+        const rawColSum = rawColW.reduce((s, v) => s + Math.max(4, v), 0) || el.width;
+        const colWidths = rawColW.map((v) => (Math.max(4, v) / rawColSum) * el.width);
+
+        const rawRowH =
+          rowHeightsPt && rowHeightsPt.length === rCount
+            ? rowHeightsPt
+            : Array(rCount).fill(el.height / rCount);
+        const rawRowSum = rawRowH.reduce((s, v) => s + Math.max(4, v), 0) || el.height;
+        const rowHeights = rawRowH.map((v) => (Math.max(4, v) / rawRowSum) * el.height);
+
+        const colX: number[] = [0];
+        for (let c = 0; c < cCount; c++) colX.push(colX[c] + colWidths[c]);
+        const rowY: number[] = [0];
+        for (let r = 0; r < rCount; r++) rowY.push(rowY[r] + rowHeights[r]);
+
+        const covered = new Set<string>();
+        const anchorMap = new Map<string, { rowSpan: number; colSpan: number }>();
+        for (const m of mergedCells || []) {
+          anchorMap.set(`${m.row}:${m.col}`, {
+            rowSpan: Math.max(1, m.rowSpan),
+            colSpan: Math.max(1, m.colSpan),
+          });
+          for (let rr = m.row; rr < Math.min(rCount, m.row + m.rowSpan); rr++) {
+            for (let cc = m.col; cc < Math.min(cCount, m.col + m.colSpan); cc++) {
+              if (rr !== m.row || cc !== m.col) covered.add(`${rr}:${cc}`);
+            }
+          }
+        }
+
+        const pad = cellPadding ?? 4;
+        const showCellStroke = hasBorders !== false;
 
         for (let r = 0; r < rCount; r++) {
           for (let c = 0; c < cCount; c++) {
+            const key = `${r}:${c}`;
+            if (covered.has(key)) continue;
+            const span = anchorMap.get(key) || { rowSpan: 1, colSpan: 1 };
+            const rEnd = Math.min(rCount, r + span.rowSpan);
+            const cEnd = Math.min(cCount, c + span.colSpan);
+            const cellX = colX[c];
+            const cellY = rowY[r];
+            const cellW = colX[cEnd] - cellX;
+            const cellH = rowY[rEnd] - cellY;
+            const cellText = String(rows[r]?.[c] ?? '');
+
             group.add(
               new Konva.Rect({
-                x: c * cW,
-                y: r * rH,
-                width: cW,
-                height: rH,
+                x: cellX,
+                y: cellY,
+                width: cellW,
+                height: cellH,
                 fill:
-                  headerRow && r === 0
-                    ? headerBgColor || '#F1F5F9'
-                    : '#FFFFFF',
-                stroke: borderColor || '#CBD5E1',
-                strokeWidth: 0.8,
+                  isModifiedOrAdded
+                    ? headerRow && r === 0
+                      ? headerBgColor || '#F1F5F9'
+                      : '#FFFFFF'
+                    : headerRow && r === 0 && isSelected
+                    ? 'rgba(241, 245, 249, 0.55)'
+                    : 'rgba(255, 255, 255, 0.001)',
+                stroke: showCellStroke
+                  ? borderColor || '#CBD5E1'
+                  : isSelected
+                  ? 'rgba(37, 99, 235, 0.35)'
+                  : 'transparent',
+                strokeWidth: showCellStroke
+                  ? borderWidthPt ?? 0.8
+                  : isSelected
+                  ? 0.5
+                  : 0,
               })
             );
-            group.add(
-              new Konva.Text({
-                x: c * cW + (cellPadding || 4),
-                y: r * rH + (cellPadding || 4),
-                width: Math.max(8, cW - (cellPadding || 4) * 2),
-                height: Math.max(8, rH - (cellPadding || 4) * 2),
-                text: String(rows[r]?.[c] ?? ''),
-                fontFamily: mapFontToCanvasCss(el.fontFamily),
-                fontSize: Math.min(el.fontSize || 9.5, rH * 0.6),
-                fontStyle: headerRow && r === 0 ? 'bold' : 'normal',
-                align: el.align || 'left',
-                fill: el.color || '#111827',
-                verticalAlign: 'middle',
-              })
-            );
+            if (isModifiedOrAdded || isSelected) {
+              group.add(
+                new Konva.Text({
+                  x: cellX + pad,
+                  y: cellY + pad,
+                  width: Math.max(8, cellW - pad * 2),
+                  height: Math.max(8, cellH - pad * 2),
+                  text: cellText,
+                  fontFamily: mapFontToCanvasCss(el.fontFamily),
+                  fontSize: Math.min(el.fontSize || 9.5, Math.max(6.5, cellH * 0.55)),
+                  fontStyle: headerRow && r === 0 ? 'bold' : 'normal',
+                  align: el.align || 'left',
+                  fill: el.color || '#111827',
+                  verticalAlign: 'middle',
+                  wrap: 'word',
+                })
+              );
+            }
           }
         }
       } else if (el.type === 'barcode' || el.type === 'qr_code') {
@@ -1613,13 +1888,13 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
             width: el.width,
             height: el.height,
             fill: bgFill,
-            stroke: isPreview
+            stroke: isPreviewCurr
               ? 'transparent'
               : encoded.ok
               ? 'rgba(16, 16, 16, 0.32)'
               : '#DC2626',
-            strokeWidth: (encoded.ok ? 0.7 : 1.3) / zoom,
-            dash: !isPreview && !encoded.ok ? [4 / zoom, 2 / zoom] : undefined,
+            strokeWidth: (encoded.ok ? 0.7 : 1.3) / currentZoom,
+            dash: !isPreviewCurr && !encoded.ok ? [4 / currentZoom, 2 / currentZoom] : undefined,
           })
         );
 
@@ -1729,18 +2004,18 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
             fill:
               el.backgroundColor && el.backgroundColor !== 'transparent'
                 ? el.backgroundColor
-                : isPreview
+                : isPreviewCurr
                 ? 'transparent'
                 : 'rgba(16, 16, 16, 0.015)',
-            stroke: isPreview
+            stroke: isPreviewCurr
               ? 'transparent'
               : el.needsReview
               ? '#D97706'
               : showBoxOutline
               ? 'rgba(16, 16, 16, 0.45)'
               : 'rgba(115, 115, 115, 0.25)',
-            strokeWidth: (el.needsReview ? 1.2 : 0.7) / zoom,
-            dash: !isPreview && el.needsReview ? [3 / zoom, 2 / zoom] : undefined,
+            strokeWidth: (el.needsReview ? 1.2 : 0.7) / currentZoom,
+            dash: !isPreviewCurr && el.needsReview ? [3 / currentZoom, 2 / currentZoom] : undefined,
           })
         );
 
@@ -1789,12 +2064,12 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
             cursorY += typo.lineHeightPt;
           });
           group.add(textClipGroup);
-          if (!isPreview && typo.isClipped) {
+          if (!isPreviewCurr && typo.isClipped) {
             group.add(
               new Konva.Circle({
-                x: el.width - 3 / zoom,
-                y: el.height - 3 / zoom,
-                radius: 2.5 / zoom,
+                x: el.width - 3 / currentZoom,
+                y: el.height - 3 / currentZoom,
+                radius: 2.5 / currentZoom,
                 fill: '#DC2626',
                 listening: false,
               })
@@ -1806,6 +2081,19 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
       // Click / single-finger tap selection + Style Painter + long-press trigger
       group.on('mousedown touchstart', (e) => {
         if (callbacksRef.current.interactionMode === 'preview') return;
+
+        const evtType = e.evt?.type || '';
+        if (evtType === 'touchstart') {
+          lastTouchEventAtRef.current = Date.now();
+          const te = e.evt as unknown as TouchEvent;
+          if (te.touches && te.touches.length >= 2) {
+            clearLongPress();
+            return;
+          }
+        } else if (evtType === 'mousedown' && Date.now() - lastTouchEventAtRef.current < 450) {
+          return;
+        }
+
         const activeT = callbacksRef.current.activeTool;
         if (
           callbacksRef.current.stylePainterActive ||
@@ -1830,7 +2118,6 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
         const touchEvt = e.evt as TouchEvent;
         if (touchEvt.touches && touchEvt.touches.length === 1) {
           const t = touchEvt.touches[0];
-          longPressStartPosRef.current = { x: t.clientX, y: t.clientY };
           clearLongPress();
           longPressStartPosRef.current = { x: t.clientX, y: t.clientY };
           longPressTimerRef.current = window.setTimeout(() => {
@@ -1845,18 +2132,34 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
         const evt = e.evt as MouseEvent;
         const curr = callbacksRef.current.selectedIds;
         if (evt.shiftKey) {
+          pendingNarrowIdRef.current = null;
           if (curr.includes(el.id)) {
             callbacksRef.current.onSelectIds(curr.filter((i) => i !== el.id));
           } else {
             callbacksRef.current.onSelectIds([...curr, el.id]);
           }
+        } else if (curr.length > 1 && curr.includes(el.id) && !el.groupId) {
+          // Preserve multi-selection on pointer down so user can drag multiple selected items cleanly;
+          // narrow to single item only on clean click/tap without dragging.
+          pendingNarrowIdRef.current = el.id;
         } else {
+          pendingNarrowIdRef.current = null;
           if (el.groupId) {
             const grouped = callbacksRef.current.elements
               .filter((x) => x.groupId === el.groupId)
               .map((x) => x.id);
             callbacksRef.current.onSelectIds(grouped);
-          } else {
+          } else if (!(curr.length === 1 && curr[0] === el.id)) {
+            callbacksRef.current.onSelectIds([el.id]);
+          }
+        }
+      });
+
+      group.on('click tap', (e) => {
+        if (pendingNarrowIdRef.current === el.id) {
+          pendingNarrowIdRef.current = null;
+          const evt = e.evt as MouseEvent;
+          if (!evt?.shiftKey) {
             callbacksRef.current.onSelectIds([el.id]);
           }
         }
@@ -1910,6 +2213,8 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
 
       group.on('dragstart', () => {
         clearLongPress();
+        pendingNarrowIdRef.current = null;
+        isManipulatingRef.current = true;
         setIsManipulating(true);
       });
 
@@ -1920,6 +2225,7 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
       });
 
       group.on('dragend', () => {
+        isManipulatingRef.current = false;
         setIsManipulating(false);
         guideLayer.destroyChildren();
         guideLayer.batchDraw();
@@ -1966,44 +2272,51 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
         }
       });
 
-      group.on('transformstart', () => {
-        clearLongPress();
-        setIsManipulating(true);
-      });
-
-      group.on('transformend', () => {
-        setIsManipulating(false);
-        const scaleX = group.scaleX();
-        const scaleY = group.scaleY();
-        group.scaleX(1);
-        group.scaleY(1);
-        callbacksRef.current.onUpdateElement(el.id, {
-          x: Number(group.x().toFixed(2)),
-          y: Number(group.y().toFixed(2)),
-          width: Number(Math.max(8, el.width * scaleX).toFixed(2)),
-          height: Number(Math.max(8, el.height * scaleY).toFixed(2)),
-          rotation: Math.round(group.rotation()),
-          eraseOriginal: el.isUserAdded ? false : true,
-        });
-      });
-
-      if (highlightedElementId === el.id) {
-        group.add(
-          new Konva.Rect({
-            x: -3 / zoom,
-            y: -3 / zoom,
-            width: el.width + 6 / zoom,
-            height: el.height + 6 / zoom,
-            stroke: '#F59E0B',
-            strokeWidth: 2 / zoom,
-            dash: [4 / zoom, 2 / zoom],
-            listening: false,
-          })
-        );
-      }
-
       layer.add(group);
       nodeMapRef.current.set(el.id, group);
+    }
+
+    // Re-attach transformer after element build
+    const selNow = callbacksRef.current.selectedIds;
+    const selectedNodes =
+      callbacksRef.current.cropMode || isPreviewCurr
+        ? []
+        : selNow
+            .map((id) => nodeMapRef.current.get(id))
+            .filter((n): n is Konva.Node => Boolean(n));
+    const lockRatio = elements.some(
+      (el) => selNow.includes(el.id) && Boolean(el.lockAspectRatio)
+    );
+    tr.keepRatio(lockRatio);
+    tr.nodes(selectedNodes);
+    tr.moveToTop();
+    layer.listening(!isPreviewCurr);
+    layer.batchDraw();
+  }, [
+    elements,
+    elementImgs,
+    pageConfig.backgroundColor,
+    measureUnit,
+  ]);
+
+  // Lightweight selection, highlight, tool-draggable & mode sync WITHOUT destroying Konva nodes mid-drag
+  useEffect(() => {
+    const layer = elementsLayerRef.current;
+    const tr = transformerRef.current;
+    if (!layer || !tr) return;
+
+    const isPreview = interactionMode === 'preview';
+    const toolAllowsDrag =
+      (activeTool === 'select' || activeTool === 'marquee' || activeTool === 'inspect') &&
+      !stylePainterActive;
+
+    layer.listening(!isPreview);
+
+    for (const el of elements) {
+      const node = nodeMapRef.current.get(el.id);
+      if (node) {
+        node.draggable(!isPreview && !el.locked && toolAllowsDrag);
+      }
     }
 
     const selectedNodes =
@@ -2018,18 +2331,41 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
     tr.keepRatio(lockRatio);
     tr.nodes(selectedNodes);
     tr.moveToTop();
+
+    // Update/remove highlight ring on elements layer without touching element groups
+    if (highlightRectRef.current) {
+      highlightRectRef.current.destroy();
+      highlightRectRef.current = null;
+    }
+    const hlEl = highlightedElementId
+      ? elements.find((e) => e.id === highlightedElementId && e.visible)
+      : null;
+    if (hlEl) {
+      const hlRect = new Konva.Rect({
+        x: hlEl.x - 3 / zoom,
+        y: hlEl.y - 3 / zoom,
+        width: hlEl.width + 6 / zoom,
+        height: hlEl.height + 6 / zoom,
+        rotation: hlEl.rotation || 0,
+        stroke: '#F59E0B',
+        strokeWidth: 2 / zoom,
+        dash: [4 / zoom, 2 / zoom],
+        listening: false,
+      });
+      layer.add(hlRect);
+      highlightRectRef.current = hlRect;
+    }
+
     layer.batchDraw();
   }, [
     elements,
     selectedIds,
-    elementImgs,
-    pageConfig,
     zoom,
     cropMode,
     interactionMode,
-    isTouchLargeHandles,
     highlightedElementId,
-    measureUnit,
+    activeTool,
+    stylePainterActive,
   ]);
 
   // Render content boundary indicator & interactive visual crop handles
@@ -2199,60 +2535,112 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
     zoom,
   ]);
 
-  // Pinch-to-Zoom and Two-Finger Panning Handlers on Scroll Container
-  const handleContainerTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (e.touches.length === 2) {
-      clearLongPress();
-      const t0 = e.touches[0];
-      const t1 = e.touches[1];
-      const dist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
-      const midX = (t0.clientX + t1.clientX) / 2;
-      const midY = (t0.clientY + t1.clientY) / 2;
-      touchGestureRef.current = {
-        active: true,
-        initialDist: Math.max(10, dist),
-        initialZoom: zoom,
-        lastMidX: midX,
-        lastMidY: midY,
-      };
-    }
-  };
+  // Native non-passive Pinch-to-Zoom, Two-Finger Pan & Active Gesture Scroll-Lock
+  useEffect(() => {
+    const wrapper = scrollWrapperRef.current;
+    const stageBox = stageBoxRef.current;
+    if (!wrapper) return;
 
-  const handleContainerTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
-    const g = touchGestureRef.current;
-    if (g.active && e.touches.length === 2) {
-      e.preventDefault();
-      const t0 = e.touches[0];
-      const t1 = e.touches[1];
-      const dist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
-      const midX = (t0.clientX + t1.clientX) / 2;
-      const midY = (t0.clientY + t1.clientY) / 2;
-
-      if (onZoomChange && g.initialDist > 0) {
-        const nextZoom = Math.max(
-          0.25,
-          Math.min(3, g.initialZoom * (dist / g.initialDist))
-        );
-        onZoomChange(Number(nextZoom.toFixed(2)));
+    const handleNativeTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        e.preventDefault();
+        clearLongPress();
+        const t0 = e.touches[0];
+        const t1 = e.touches[1];
+        const dist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+        const midX = (t0.clientX + t1.clientX) / 2;
+        const midY = (t0.clientY + t1.clientY) / 2;
+        touchGestureRef.current = {
+          active: true,
+          initialDist: Math.max(10, dist),
+          initialZoom: callbacksRef.current.zoom,
+          lastMidX: midX,
+          lastMidY: midY,
+        };
       }
+    };
 
-      const wrapper = scrollWrapperRef.current;
-      if (wrapper) {
+    const handleNativeTouchMove = (e: TouchEvent) => {
+      const g = touchGestureRef.current;
+      if (g.active && e.touches.length === 2) {
+        e.preventDefault();
+        const t0 = e.touches[0];
+        const t1 = e.touches[1];
+        const dist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+        const midX = (t0.clientX + t1.clientX) / 2;
+        const midY = (t0.clientY + t1.clientY) / 2;
+
+        if (callbacksRef.current.onZoomChange && g.initialDist > 0) {
+          const nextZoom = Math.max(
+            0.25,
+            Math.min(3, g.initialZoom * (dist / g.initialDist))
+          );
+          callbacksRef.current.onZoomChange(Number(nextZoom.toFixed(2)));
+        }
+
         const dx = midX - g.lastMidX;
         const dy = midY - g.lastMidY;
         wrapper.scrollLeft -= dx;
         wrapper.scrollTop -= dy;
+        g.lastMidX = midX;
+        g.lastMidY = midY;
+      } else if (
+        e.touches.length === 1 &&
+        (isManipulatingRef.current || marqueeRef.current.active)
+      ) {
+        e.preventDefault();
       }
-      g.lastMidX = midX;
-      g.lastMidY = midY;
-    }
-  };
+    };
 
-  const handleContainerTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (e.touches.length < 2) {
-      touchGestureRef.current.active = false;
-    }
-  };
+    const handleNativeTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) {
+        touchGestureRef.current.active = false;
+      }
+      if (e.touches.length === 0) {
+        clearLongPress();
+      }
+    };
+
+    const handleStageBoxTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const cfg = callbacksRef.current;
+      if (cfg.interactionMode !== 'edit') return;
+      const isNonSelectTool = cfg.activeTool !== 'select';
+      if (cfg.cropMode || isNonSelectTool || isManipulatingRef.current) {
+        e.preventDefault();
+        return;
+      }
+      // If single-touch begins directly over an element or transformer handle, prevent page scroll
+      // so touching & immediately dragging an unselected element works on the first swipe!
+      const stage = stageRef.current;
+      const container = containerRef.current;
+      if (stage && container) {
+        const rect = container.getBoundingClientRect();
+        const pt = {
+          x: e.touches[0].clientX - rect.left,
+          y: e.touches[0].clientY - rect.top,
+        };
+        const hit = stage.getIntersection(pt);
+        if (hit && (hit as unknown) !== stage) {
+          e.preventDefault();
+        }
+      }
+    };
+
+    wrapper.addEventListener('touchstart', handleNativeTouchStart, { passive: false });
+    wrapper.addEventListener('touchmove', handleNativeTouchMove, { passive: false });
+    wrapper.addEventListener('touchend', handleNativeTouchEnd);
+    wrapper.addEventListener('touchcancel', handleNativeTouchEnd);
+    stageBox?.addEventListener('touchstart', handleStageBoxTouchStart, { passive: false });
+
+    return () => {
+      wrapper.removeEventListener('touchstart', handleNativeTouchStart);
+      wrapper.removeEventListener('touchmove', handleNativeTouchMove);
+      wrapper.removeEventListener('touchend', handleNativeTouchEnd);
+      wrapper.removeEventListener('touchcancel', handleNativeTouchEnd);
+      stageBox?.removeEventListener('touchstart', handleStageBoxTouchStart);
+    };
+  }, []);
 
   const inlineElement = elements.find((e) => e.id === inlineEditId) || null;
   const tableElement = elements.find((e) => e.id === tableEditId) || null;
@@ -2267,17 +2655,18 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
   const vTicks: number[] = [];
   for (let y = 0; y <= canvasH; y += rulerStepPt) vTicks.push(y);
 
-  // Prevent browser page scroll while dragging/resizing selected element or cropping in Edit mode
+  // Prevent browser page scroll while using non-select creation/marquee tools, cropping, transforming, or dragging
   const blockStageTouchScroll =
     interactionMode === 'edit' &&
-    (selectedIds.length > 0 || cropMode || isManipulating);
+    (activeTool !== 'select' ||
+      stylePainterActive ||
+      selectedIds.length > 0 ||
+      cropMode ||
+      isManipulating);
 
   return (
     <div
       ref={scrollWrapperRef}
-      onTouchStart={handleContainerTouchStart}
-      onTouchMove={handleContainerTouchMove}
-      onTouchEnd={handleContainerTouchEnd}
       className="flex-1 overflow-auto bg-[#EFEFEF] dark:bg-[#0B0B0B] flex items-start justify-center p-2.5 tablet:p-5 desktop:p-6 relative overscroll-contain"
     >
       <div className="relative inline-block shadow-xl">
@@ -2320,6 +2709,7 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
 
           {/* Konva Canvas Container */}
           <div
+            ref={stageBoxRef}
             style={{
               touchAction: blockStageTouchScroll ? 'none' : 'pan-x pan-y',
               cursor:
@@ -2573,121 +2963,288 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
 
       {/* Table Cell Editor Modal */}
       <AnimatePresence>
-        {tableElement && tableElement.tableData && (
-          <motion.div
-            key="table-editor-backdrop"
-            variants={modalBackdropVariants}
-            initial="initial"
-            animate="animate"
-            exit="exit"
-            onClick={() => setTableEditId(null)}
-            className="fixed inset-0 z-50 bg-black/40 dark:bg-black/70 backdrop-blur-sm flex items-end tablet:items-center justify-center p-2 tablet:p-4"
-          >
+        {tableElement && tableElement.tableData && (() => {
+          const td = tableElement.tableData;
+          const rCount = td.rows.length;
+          const cCount = td.rows[0]?.length || 1;
+          const coveredSet = new Set<string>();
+          const anchorSpanMap = new Map<string, { rowSpan: number; colSpan: number }>();
+          for (const m of td.mergedCells || []) {
+            anchorSpanMap.set(`${m.row}:${m.col}`, {
+              rowSpan: m.rowSpan,
+              colSpan: m.colSpan,
+            });
+            for (let rr = m.row; rr < Math.min(rCount, m.row + m.rowSpan); rr++) {
+              for (let cc = m.col; cc < Math.min(cCount, m.col + m.colSpan); cc++) {
+                if (rr !== m.row || cc !== m.col) coveredSet.add(`${rr}:${cc}`);
+              }
+            }
+          }
+          const selMinR = tableCellSel ? Math.min(tableCellSel.r1, tableCellSel.r2) : -1;
+          const selMaxR = tableCellSel ? Math.max(tableCellSel.r1, tableCellSel.r2) : -1;
+          const selMinC = tableCellSel ? Math.min(tableCellSel.c1, tableCellSel.c2) : -1;
+          const selMaxC = tableCellSel ? Math.max(tableCellSel.c1, tableCellSel.c2) : -1;
+          const canMerge =
+            Boolean(tableCellSel) && (selMaxR > selMinR || selMaxC > selMinC);
+          const focusedAnchorMerged =
+            Boolean(tableCellSel) &&
+            (td.mergedCells || []).some(
+              (m) =>
+                selMinR >= m.row &&
+                selMinR < m.row + m.rowSpan &&
+                selMinC >= m.col &&
+                selMinC < m.col + m.colSpan
+            );
+
+          return (
             <motion.div
-              key="table-editor-panel"
-              variants={modalPanelVariants}
+              key="table-editor-backdrop"
+              variants={modalBackdropVariants}
               initial="initial"
               animate="animate"
               exit="exit"
-              onClick={(e) => e.stopPropagation()}
-              className="w-full max-w-xl max-h-[85dvh] rounded-t-3xl tablet:rounded-2xl border glass-level-4 p-4 tablet:p-5 flex flex-col"
+              onClick={() => {
+                setTableEditId(null);
+                setTableCellSel(null);
+              }}
+              className="fixed inset-0 z-50 bg-black/40 dark:bg-black/70 backdrop-blur-sm flex items-end tablet:items-center justify-center p-2 tablet:p-4"
             >
-              <div className="flex items-center justify-between pb-3 border-b border-black/10 dark:border-white/12 shrink-0">
-                <h3 className="text-sm font-semibold text-[#101010] dark:text-white">
-                  Edit Table Cells
-                </h3>
-                <button
-                  type="button"
-                  onClick={() => setTableEditId(null)}
-                  className="min-h-[44px] px-3 text-xs text-[#555555] hover:text-[#101010] dark:text-[#B5B5B5] dark:hover:text-white transition-colors"
-                >
-                  Done
-                </button>
-              </div>
-              <div className="mt-3 overflow-auto flex-1">
-                <table className="w-full border-collapse text-xs">
-                  <tbody>
-                    {tableElement.tableData.rows.map((row, rIdx) => (
-                      <tr key={rIdx}>
-                        {row.map((cell, cIdx) => (
-                          <td
-                            key={cIdx}
-                            className="border border-black/15 dark:border-white/15 p-0 min-w-[90px]"
-                          >
-                            <input
-                              type="text"
-                              value={cell}
-                              onChange={(e) => {
-                                const nextRows = tableElement.tableData!.rows.map(
-                                  (r, ri) =>
-                                    ri === rIdx
-                                      ? r.map((c, ci) =>
-                                          ci === cIdx ? e.target.value : c
-                                        )
-                                      : r
-                                );
-                                onUpdateElement(tableElement.id, {
-                                  tableData: {
-                                    ...tableElement.tableData!,
-                                    rows: nextRows,
-                                  },
-                                });
-                              }}
-                              className="w-full min-h-[40px] px-2.5 py-2 bg-transparent text-[#101010] dark:text-white focus:outline-none focus:bg-black/[0.04] dark:focus:bg-white/[0.06]"
-                            />
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <div className="mt-4 flex flex-wrap items-center justify-between gap-2 shrink-0 pb-safe">
-                <div className="flex items-center gap-2">
+              <motion.div
+                key="table-editor-panel"
+                variants={modalPanelVariants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                onClick={(e) => e.stopPropagation()}
+                className="w-full max-w-2xl max-h-[88dvh] rounded-t-3xl tablet:rounded-2xl border glass-level-4 p-4 tablet:p-5 flex flex-col"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-black/10 dark:border-white/12 shrink-0">
+                  <div>
+                    <h3 className="text-sm font-semibold text-[#101010] dark:text-white">
+                      Edit Table Structure &amp; Cells
+                    </h3>
+                    <p className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
+                      Click a cell to focus, Shift+Click another cell to select a range for Merge/Split.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="flex items-center gap-1.5 text-[11px] text-[#101010] dark:text-white cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={td.headerRow !== false}
+                        onChange={(e) =>
+                          onUpdateElement(tableElement.id, {
+                            eraseOriginal: tableElement.isUserAdded ? false : true,
+                            tableData: { ...td, headerRow: e.target.checked },
+                          })
+                        }
+                      />
+                      Header Row
+                    </label>
+                    <label className="flex items-center gap-1.5 text-[11px] text-[#101010] dark:text-white cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={td.hasBorders !== false}
+                        onChange={(e) =>
+                          onUpdateElement(tableElement.id, {
+                            eraseOriginal: tableElement.isUserAdded ? false : true,
+                            tableData: { ...td, hasBorders: e.target.checked },
+                          })
+                        }
+                      />
+                      Borders
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTableEditId(null);
+                        setTableCellSel(null);
+                      }}
+                      className="min-h-[36px] px-2.5 text-xs text-[#555555] hover:text-[#101010] dark:text-[#B5B5B5] dark:hover:text-white transition-colors"
+                    >
+                      Done
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-3 overflow-auto flex-1">
+                  <table className="w-full border-collapse text-xs">
+                    <tbody>
+                      {td.rows.map((row, rIdx) => (
+                        <tr key={rIdx}>
+                          {row.map((cell, cIdx) => {
+                            const key = `${rIdx}:${cIdx}`;
+                            if (coveredSet.has(key)) return null;
+                            const span = anchorSpanMap.get(key) || {
+                              rowSpan: 1,
+                              colSpan: 1,
+                            };
+                            const inSel =
+                              rIdx >= selMinR &&
+                              rIdx <= selMaxR &&
+                              cIdx >= selMinC &&
+                              cIdx <= selMaxC;
+                            return (
+                              <td
+                                key={cIdx}
+                                rowSpan={span.rowSpan}
+                                colSpan={span.colSpan}
+                                onClick={(e) => {
+                                  if (e.shiftKey && tableCellSel) {
+                                    setTableCellSel({
+                                      ...tableCellSel,
+                                      r2: rIdx,
+                                      c2: cIdx,
+                                    });
+                                  } else {
+                                    setTableCellSel({
+                                      r1: rIdx,
+                                      c1: cIdx,
+                                      r2: rIdx,
+                                      c2: cIdx,
+                                    });
+                                  }
+                                }}
+                                className={`border p-0 min-w-[96px] align-top transition-colors ${
+                                  inSel
+                                    ? 'border-blue-500 bg-blue-500/10'
+                                    : 'border-black/15 dark:border-white/15'
+                                }`}
+                              >
+                                <textarea
+                                  rows={Math.max(1, String(cell).split('\n').length)}
+                                  value={cell}
+                                  onChange={(e) => {
+                                    const nextRows = td.rows.map((r, ri) =>
+                                      ri === rIdx
+                                        ? r.map((c, ci) =>
+                                            ci === cIdx ? e.target.value : c
+                                          )
+                                        : r
+                                    );
+                                    onUpdateElement(tableElement.id, {
+                                      eraseOriginal: tableElement.isUserAdded
+                                        ? false
+                                        : true,
+                                      tableData: {
+                                        ...td,
+                                        rows: nextRows,
+                                      },
+                                    });
+                                  }}
+                                  className="w-full min-h-[38px] px-2.5 py-1.5 bg-transparent text-[#101010] dark:text-white resize-y focus:outline-none focus:bg-black/[0.04] dark:focus:bg-white/[0.06]"
+                                />
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-2 shrink-0 pb-safe">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextColW = td.colWidthsPt
+                          ? [...td.colWidthsPt]
+                          : undefined;
+                        const avgH = Number((tableElement.height / Math.max(1, rCount)).toFixed(2));
+                        const nextRowH = td.rowHeightsPt
+                          ? [...td.rowHeightsPt, avgH]
+                          : undefined;
+                        onUpdateElement(tableElement.id, {
+                          eraseOriginal: tableElement.isUserAdded ? false : true,
+                          tableData: {
+                            ...td,
+                            rows: [...td.rows, Array(cCount).fill('')],
+                            colWidthsPt: nextColW,
+                            rowHeightsPt: nextRowH,
+                          },
+                        });
+                      }}
+                      className="min-h-[38px] px-3 py-1.5 rounded-lg text-xs border border-black/15 dark:border-white/15 text-[#101010] dark:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
+                    >
+                      + Row
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const avgW = Number((tableElement.width / Math.max(1, cCount)).toFixed(2));
+                        const nextColW = td.colWidthsPt
+                          ? [...td.colWidthsPt, avgW]
+                          : undefined;
+                        onUpdateElement(tableElement.id, {
+                          eraseOriginal: tableElement.isUserAdded ? false : true,
+                          tableData: {
+                            ...td,
+                            rows: td.rows.map((r) => [...r, '']),
+                            colWidthsPt: nextColW,
+                          },
+                        });
+                      }}
+                      className="min-h-[38px] px-3 py-1.5 rounded-lg text-xs border border-black/15 dark:border-white/15 text-[#101010] dark:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
+                    >
+                      + Column
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!canMerge}
+                      onClick={() => {
+                        if (!tableCellSel) return;
+                        const merged = mergeTableCellRange(
+                          td,
+                          tableCellSel.r1,
+                          tableCellSel.c1,
+                          tableCellSel.r2,
+                          tableCellSel.c2
+                        );
+                        onUpdateElement(tableElement.id, {
+                          eraseOriginal: tableElement.isUserAdded ? false : true,
+                          tableData: merged,
+                        });
+                        setTableCellSel({
+                          r1: selMinR,
+                          c1: selMinC,
+                          r2: selMinR,
+                          c2: selMinC,
+                        });
+                      }}
+                      className="min-h-[38px] px-3 py-1.5 rounded-lg text-xs border border-black/15 dark:border-white/15 text-[#101010] dark:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08] disabled:opacity-40 transition-colors"
+                    >
+                      Merge Cells
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!focusedAnchorMerged}
+                      onClick={() => {
+                        if (!tableCellSel) return;
+                        const split = splitMergedTableCell(td, selMinR, selMinC);
+                        onUpdateElement(tableElement.id, {
+                          eraseOriginal: tableElement.isUserAdded ? false : true,
+                          tableData: split,
+                        });
+                      }}
+                      className="min-h-[38px] px-3 py-1.5 rounded-lg text-xs border border-black/15 dark:border-white/15 text-[#101010] dark:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08] disabled:opacity-40 transition-colors"
+                    >
+                      Split Cell
+                    </button>
+                  </div>
                   <button
                     type="button"
                     onClick={() => {
-                      const colCount = tableElement.tableData!.rows[0]?.length || 2;
-                      onUpdateElement(tableElement.id, {
-                        tableData: {
-                          ...tableElement.tableData!,
-                          rows: [
-                            ...tableElement.tableData!.rows,
-                            Array(colCount).fill(''),
-                          ],
-                        },
-                      });
+                      setTableEditId(null);
+                      setTableCellSel(null);
                     }}
-                    className="min-h-[44px] px-3 py-2 rounded-lg text-xs border border-black/15 dark:border-white/15 text-[#101010] dark:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
+                    className="min-h-[40px] px-4 py-2 rounded-lg text-xs font-semibold bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] transition-colors active:scale-[0.98]"
                   >
-                    + Row
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onUpdateElement(tableElement.id, {
-                        tableData: {
-                          ...tableElement.tableData!,
-                          rows: tableElement.tableData!.rows.map((r) => [...r, '']),
-                        },
-                      });
-                    }}
-                    className="min-h-[44px] px-3 py-2 rounded-lg text-xs border border-black/15 dark:border-white/15 text-[#101010] dark:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
-                  >
-                    + Column
+                    Apply Table
                   </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setTableEditId(null)}
-                  className="min-h-[44px] px-4 py-2 rounded-lg text-xs font-semibold bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] transition-colors active:scale-[0.98]"
-                >
-                  Apply Table
-                </button>
-              </div>
+              </motion.div>
             </motion.div>
-          </motion.div>
-        )}
+          );
+        })()}
       </AnimatePresence>
     </div>
   );

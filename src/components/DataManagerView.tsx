@@ -1,4 +1,4 @@
-import React, { useId, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'motion/react';
 import {
   AlertTriangle,
@@ -37,6 +37,7 @@ import {
 } from '../utils/dataFormulaEngine';
 import { GlassButton, GlassCard } from './glass';
 import { DataSimulatorPanel } from './DataSimulatorPanel';
+import { NumericDraftInput } from './NumericDraftInput';
 
 interface DataManagerViewProps {
   project: PDFProject;
@@ -72,6 +73,14 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
   const [workspaceMode, setWorkspaceMode] = useState<'spreadsheet' | 'simulator'>('spreadsheet');
 
   const { dataColumns, dataRows } = project;
+
+  useEffect(() => {
+    setDuplicateKeyCols((prev) => {
+      const valid = prev.filter((k) => dataColumns.some((c) => c.name === k));
+      if (valid.length > 0) return valid;
+      return dataColumns[0] ? [dataColumns[0].name] : [];
+    });
+  }, [project.id, dataColumns]);
 
   const commitData = (cols: DataColumn[], rows: DataRow[]) => {
     onUpdateProject({
@@ -150,6 +159,8 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
       setImportError(
         err instanceof Error ? err.message : 'Failed to parse spreadsheet'
       );
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -545,14 +556,15 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
             {editingColumn.type === 'number' && (
               <label className="block">
                 <span className="text-[11px] text-[#888888] dark:text-[#858585]">Decimal Places</span>
-                <input
-                  type="number"
+                <NumericDraftInput
                   min={0}
                   max={6}
+                  step={1}
+                  fallback={0}
                   value={editingColumn.numberDecimals ?? 0}
-                  onChange={(e) =>
+                  onCommit={(val) =>
                     handleUpdateColumn(editingColumn.id, {
-                      numberDecimals: Math.max(0, Math.min(6, Number(e.target.value) || 0)),
+                      numberDecimals: Math.max(0, Math.min(6, Math.round(val))),
                     })
                   }
                   className="mt-1 w-full px-2 py-1.5 rounded-xl studio-input tabular-nums"
@@ -960,6 +972,45 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
       {/* Mobile Cards View (Paginated) */}
       {viewport.isMobile && mobileViewMode === 'cards' ? (
         <div className="space-y-3">
+          {dataColumns.length > 0 && (
+            <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1">
+              {dataColumns.map((col) => (
+                <div
+                  key={col.id}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-xl border border-black/12 dark:border-white/15 glass-level-2 text-[11px] shrink-0"
+                >
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEditingColId(editingColId === col.id ? null : col.id)
+                    }
+                    className={`flex items-center gap-1 font-medium ${
+                      editingColId === col.id
+                        ? 'text-[#101010] dark:text-white underline'
+                        : 'text-[#555555] dark:text-[#B5B5B5]'
+                    }`}
+                  >
+                    <SlidersHorizontal className="w-3 h-3" />
+                    <span>{col.name}</span>
+                  </button>
+                  <button
+                    type="button"
+                    title={`Delete column ${col.name}`}
+                    onClick={() => {
+                      if (editingColId === col.id) setEditingColId(null);
+                      commitData(
+                        dataColumns.filter((c) => c.id !== col.id),
+                        dataRows
+                      );
+                    }}
+                    className="p-0.5 text-[#888888] hover:text-red-500"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           {pagedRows.map(({ row, originalIndex }) => {
             const isDup = duplicateRowIdSet.has(row._rowId);
             return (

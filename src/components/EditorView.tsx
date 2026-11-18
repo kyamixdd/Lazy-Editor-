@@ -2844,10 +2844,11 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   </>
                 )}
 
-                {activeCategory === 'text' && !isToolHidden('text') && (
+                {activeCategory === 'text' && (
                   <>
                     <button
                       type="button"
+                      hidden={isToolHidden('text')}
                       onClick={() => handleToggleTool('text')}
                       className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap ${
                         activeTool === 'text'
@@ -2860,6 +2861,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     </button>
                     <button
                       type="button"
+                      hidden={isToolHidden('text')}
                       onClick={() => addNewElement('text')}
                       className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
                     >
@@ -2921,10 +2923,11 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   </>
                 )}
 
-                {activeCategory === 'images' && !isToolHidden('image') && (
+                {activeCategory === 'images' && (
                   <>
                     <button
                       type="button"
+                      hidden={isToolHidden('image')}
                       onClick={() => imageUploadRef.current?.click()}
                       className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
                     >

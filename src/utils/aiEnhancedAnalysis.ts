@@ -4,7 +4,7 @@ import { appendOperationLog } from './projectStorage';
 
 export interface AiAnalysisResponseResult {
   ok: boolean;
-  code?: 'QUOTA_EXHAUSTED' | 'MISSING_API_KEY' | 'API_KEY_INVALID' | 'AI_UNAVAILABLE';
+  code?: 'QUOTA_EXHAUSTED' | 'MISSING_API_KEY' | 'API_KEY_INVALID' | 'AI_REQUEST_INVALID' | 'AI_UNAVAILABLE';
   message: string;
   updatedProject?: PDFProject;
   addedOrUpdatedCount?: number;
@@ -41,6 +41,12 @@ export function formatFriendlyAiError(
       code: 'MISSING_API_KEY',
       message:
         'Gemini API key is not configured in Settings > Secrets. Local PDF Scan and all editing, bulk generation, and export features remain fully active.',
+    };
+  }
+  if (code === 'AI_REQUEST_INVALID' || status === 400) {
+    return {
+      code: 'AI_REQUEST_INVALID',
+      message: rawMessage || 'The AI provider rejected this request. Check the selected model and request format; your API key may still be valid.',
     };
   }
   if (

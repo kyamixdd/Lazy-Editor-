@@ -2029,6 +2029,34 @@ export const EditorView: React.FC<EditorViewProps> = ({
     }
   };
 
+  const handleRunFavoriteTool = (toolId: string) => {
+    if (isToolHidden(toolId)) return;
+    if (['text', 'rect', 'circle', 'line', 'table', 'qr_code', 'barcode'].includes(toolId)) {
+      addNewElement(toolId as 'text' | 'rect' | 'circle' | 'line' | 'table' | 'qr_code' | 'barcode');
+      return;
+    }
+    if (toolId === 'image') {
+      imageUploadRef.current?.click();
+      return;
+    }
+    if (toolId === 'signature') {
+      setSignatureModalInitialTab('signature');
+      setSignatureStampOpen(true);
+      return;
+    }
+    if (toolId === 'redact') {
+      setActiveCategory('annotate');
+      handleToggleTool('redact');
+      setToolbarExpanded(true);
+      return;
+    }
+    if (toolId === 'measure') {
+      setActiveCategory('measure');
+      handleToggleTool('measure');
+      setToolbarExpanded(true);
+    }
+  };
+
   const handleToggleSnapAndGuides = () => {
     const next = toggleSyncedSnapAndGuides(snapToGrid, showGuides);
     setSnapToGrid(next.snapToGrid);
@@ -3445,6 +3473,23 @@ export const EditorView: React.FC<EditorViewProps> = ({
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Pinned favorite tools configured in Settings */}
+      {!viewport.isMobile && (settings.favoriteTools || ['text', 'rect', 'qr_code', 'barcode']).length > 0 && (
+        <div className="px-3 py-1 border-b border-black/10 dark:border-white/10 glass-level-1 flex items-center gap-1.5 text-[11px] shrink-0 overflow-x-auto no-scrollbar">
+          <span className="text-[#888888] dark:text-[#858585] shrink-0">Pinned:</span>
+          {(settings.favoriteTools || ['text', 'rect', 'qr_code', 'barcode']).filter((id) => !isToolHidden(id)).map((id) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => handleRunFavoriteTool(id)}
+              className="px-2 py-0.5 rounded-lg border border-black/10 dark:border-white/12 glass-level-3 text-[#555555] dark:text-[#B5B5B5] hover:border-black/40 dark:hover:border-white/40 hover:text-[#101010] dark:hover:text-white capitalize transition-colors"
+            >
+              {({ qr_code: 'QR Code', barcode: 'Barcode', image: 'Image', signature: 'Signature', redact: 'Redact', measure: 'Measure' } as Record<string, string>)[id] || id.replace(/_/g, ' ')}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Desktop Recent Tools Strip & Style Feedback */}
       {!viewport.isMobile &&

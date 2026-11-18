@@ -8,7 +8,8 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
+const PROJECT_API_ENABLED = process.env.ENABLE_PROJECT_API === 'true';
 
 app.use(express.json({ limit: '60mb' }));
 
@@ -45,7 +46,7 @@ function getGeminiClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
     const err = new Error(
-      'GEMINI_API_KEY is not configured. Please add your Gemini API key in Settings > Secrets.'
+      'GEMINI_API_KEY is not configured. Please add your Gemini API key in the server GEMINI_API_KEY environment variable.'
     ) as Error & { code?: string };
     err.code = 'MISSING_API_KEY';
     throw err;
@@ -93,7 +94,6 @@ function classifyGeminiHttpError(err: unknown): {
   }
   if (
     errObj?.status === 403 ||
-    errObj?.status === 400 ||
     lower.includes('permission_denied') ||
     lower.includes('api_key_invalid')
   ) {
@@ -101,7 +101,15 @@ function classifyGeminiHttpError(err: unknown): {
       status: 403,
       code: 'API_KEY_INVALID',
       error:
-        'Gemini API key was rejected or lacks permission. Please verify Settings > Secrets.',
+        'Gemini API key was rejected or lacks permission. Verify the server GEMINI_API_KEY environment variable.',
+    };
+  }
+  if (errObj?.status === 400 || lower.includes('invalid_argument')) {
+    return {
+      status: 400,
+      code: 'AI_REQUEST_INVALID',
+      error:
+        'Gemini rejected the request. Check the selected model, request format, and supported input limits; this does not necessarily indicate an invalid API key.',
     };
   }
   return {
@@ -113,7 +121,21 @@ function classifyGeminiHttpError(err: unknown): {
 
 // Health endpoint
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, service: 'pdf-studio-ai' });
+  res.json({ ok: true, service: 'lazy-editor' });
+});
+
+// Project persistence is disabled by default because these endpoints do not yet
+// implement user authentication or per-user ownership isolation. Enable only in a
+// trusted, single-user environment behind an authenticated reverse proxy.
+app.use('/api/projects', (_req, res, next) => {
+  if (!PROJECT_API_ENABLED) {
+    res.status(503).json({
+      error: 'Server project persistence is disabled until authenticated access is configured. Local browser storage remains available.',
+      code: 'PROJECT_API_DISABLED',
+    });
+    return;
+  }
+  next();
 });
 
 // Project & template persistence endpoints
@@ -409,7 +431,7 @@ app.post('/api/ai/analyze-pdf', async (req, res) => {
         ''
       );
 
-      const promptText = `You are a precision document layout analyzer for PDF Studio AI.
+      const promptText = `You are a precision document layout analyzer for Lazy Editor.
 Analyze Page ${page.pageNumber} of "${fileName}" (page size: ${page.widthPt.toFixed(2)}pt x ${page.heightPt.toFixed(2)}pt, top-left origin).
 
 Extracted text coordinates from PDF.js / OCR (in PDF points, top-left origin):
@@ -631,7 +653,7 @@ app.post('/api/ai/edit-command', async (req, res) => {
       })
     );
 
-    const prompt = `You are the AI Document Editing Assistant inside PDF Studio AI.
+    const prompt = `You are the AI Document Editing Assistant inside Lazy Editor.
 User instruction: "${instruction}"
 Current active page: ${currentPage}
 Page dimensions: ${pageConfig?.widthPt}pt x ${pageConfig?.heightPt}pt
@@ -747,7 +769,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`PDF Studio AI server running on http://localhost:${PORT}`);
+    console.log(`Lazy Editor server running on http://localhost:${PORT}`);
   });
 }
 

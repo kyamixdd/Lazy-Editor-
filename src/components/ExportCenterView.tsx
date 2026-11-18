@@ -1,4 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -14,6 +15,13 @@ import {
   Wrench,
 } from 'lucide-react';
 import { PDFDocument } from 'pdf-lib';
+import {
+  bannerVariants,
+  BUTTON_TAP,
+  MOTION_EASE,
+  MOTION_SPRING,
+  popoverVariants,
+} from '../config/motionSystem';
 import {
   AssetFontItem,
   BatchJob,
@@ -76,6 +84,7 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
   onEnqueueBatch,
   onRecordExportActivity,
 }) => {
+  const shouldReduceMotion = useReducedMotion();
   const { exportConfig } = project;
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState({ stage: '', current: 0, total: 1 });
@@ -404,12 +413,12 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
   return (
     <div className="flex-1 overflow-y-auto p-4 tablet:p-6 desktop:p-8 max-w-6xl mx-auto w-full space-y-5 tablet:space-y-6">
       {/* Header */}
-      <div className="flex flex-col tablet:flex-row tablet:items-center tablet:justify-between gap-4 pb-5 border-b border-slate-200/80 dark:border-white/10">
+      <div className="flex flex-col tablet:flex-row tablet:items-center tablet:justify-between gap-4 pb-5 border-b border-black/10 dark:border-white/12">
         <div>
-          <h1 className="text-xl tablet:text-2xl font-display font-semibold tracking-tight text-slate-900 dark:text-slate-100">
+          <h1 className="text-xl tablet:text-2xl font-display font-semibold tracking-tight text-[#101010] dark:text-white">
             Export Center & Quality Control
           </h1>
-          <p className="mt-1 text-xs tablet:text-sm text-slate-600 dark:text-slate-400">
+          <p className="mt-1 text-xs tablet:text-sm text-[#555555] dark:text-[#B5B5B5]">
             Validate layout geometry, serial sequences, and page boundaries before generating production PDF outputs.
           </p>
         </div>
@@ -451,19 +460,19 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
 
       {/* Quality Control Panel */}
       <GlassCard level={3} padding="none" className="overflow-hidden">
-        <div className="px-4 tablet:px-5 py-3.5 border-b border-slate-200/75 dark:border-white/10 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
-            <ShieldCheck className="w-4 h-4 text-blue-500" />
+        <div className="px-4 tablet:px-5 py-3.5 border-b border-black/10 dark:border-white/12 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-sm font-semibold text-[#101010] dark:text-white">
+            <ShieldCheck className="w-4 h-4 text-[#101010] dark:text-white" />
             Pre-Export Quality Control Check
           </div>
           <div className="text-xs tabular-nums">
             {errorIssues.length === 0 && warningIssues.length === 0 ? (
-              <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5 font-medium">
+              <span className="text-[#101010] dark:text-white flex items-center gap-1.5 font-medium">
                 <CheckCircle2 className="w-3.5 h-3.5" />
                 All 10 integrity checks passed
               </span>
             ) : (
-              <span className="text-slate-500 dark:text-slate-400">
+              <span className="text-[#555555] dark:text-[#B5B5B5]">
                 {errorIssues.length} errors · {warningIssues.length} warnings
               </span>
             )}
@@ -471,7 +480,7 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
         </div>
 
         {issues.length > 0 && (
-          <div className="divide-y divide-slate-200 dark:divide-slate-800 max-h-64 overflow-y-auto">
+          <div className="divide-y divide-black/10 dark:divide-white/10 max-h-64 overflow-y-auto">
             {issues.map((issue) => (
               <div
                 key={issue.id}
@@ -481,21 +490,21 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
                   <AlertTriangle
                     className={`w-4 h-4 shrink-0 mt-0.5 ${
                       issue.severity === 'error'
-                        ? 'text-red-500'
-                        : 'text-amber-500'
+                        ? 'text-red-600 dark:text-red-400'
+                        : 'text-amber-600 dark:text-amber-400'
                     }`}
                   />
                   <div>
                     <span
                       className={`font-semibold uppercase text-[10px] mr-2 ${
                         issue.severity === 'error'
-                          ? 'text-red-500'
-                          : 'text-amber-500'
+                          ? 'text-red-600 dark:text-red-400'
+                          : 'text-amber-600 dark:text-amber-400'
                       }`}
                     >
                       {issue.severity}
                     </span>
-                    <span className="text-slate-800 dark:text-slate-200">
+                    <span className="text-[#101010] dark:text-white">
                       {issue.message}
                     </span>
                   </div>
@@ -505,7 +514,7 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
                     <button
                       type="button"
                       onClick={() => handleAutoFix(issue)}
-                      className="min-h-[36px] tablet:min-h-0 px-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 font-medium flex items-center gap-1"
+                      className="min-h-[36px] tablet:min-h-0 px-2.5 py-1 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.04] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white font-medium flex items-center gap-1"
                     >
                       <Wrench className="w-3 h-3" />
                       {issue.autoFixLabel}
@@ -522,7 +531,7 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
                             )
                           : onJumpToEditor()
                       }
-                      className="min-h-[36px] tablet:min-h-0 px-2.5 py-1 rounded text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 font-medium"
+                      className="min-h-[36px] tablet:min-h-0 px-2.5 py-1 rounded-lg text-[#101010] dark:text-white hover:bg-black/[0.06] dark:hover:bg-white/[0.08] font-medium"
                     >
                       Inspect
                     </button>
@@ -535,238 +544,289 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
       </GlassCard>
 
       {/* Progress & Errors */}
-      {isExporting && (
-        <div className="p-4 rounded-lg border border-blue-500/40 bg-blue-500/5 text-xs">
-          <div className="flex justify-between mb-2 font-medium">
-            <span>{exportProgress.stage}</span>
-            <span className="tabular-nums">
-              {exportProgress.current} / {exportProgress.total}
-            </span>
-          </div>
-          <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
-            <div
-              className="h-full bg-blue-600 transition-all"
-              style={{
-                width: `${Math.round(
-                  (exportProgress.current / Math.max(1, exportProgress.total)) *
-                    100
-                )}%`,
-              }}
-            />
-          </div>
-        </div>
-      )}
-
-      {exportError && (
-        <div className="p-4 rounded-lg border border-red-500/40 bg-red-500/10 text-xs text-red-600 dark:text-red-300">
-          {exportError}
-        </div>
-      )}
-
-      {lastExportUrl && !isExporting && (
-        <div className="p-4 rounded-lg border border-emerald-500/40 bg-emerald-500/5 space-y-4 text-xs">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <div className="text-emerald-700 dark:text-emerald-300 font-semibold">
-                Generated {lastExportUrl.fileName}
-              </div>
-              {lastExportUrl.verifiedPageCount !== undefined && (
-                <div className="mt-0.5 text-slate-600 dark:text-slate-400 tabular-nums">
-                  Verified PDF: {lastExportUrl.verifiedPageCount} pages ·{' '}
-                  {lastExportUrl.verifiedWidthPt} × {lastExportUrl.verifiedHeightPt} pt ·{' '}
-                  {(lastExportUrl.bytes.byteLength / 1024).toFixed(1)} KB
-                </div>
-              )}
+      <AnimatePresence>
+        {isExporting && (
+          <motion.div
+            key="export-progress"
+            variants={popoverVariants}
+            initial={shouldReduceMotion ? false : 'initial'}
+            animate="animate"
+            exit="exit"
+            className="p-4 rounded-2xl border border-black/15 dark:border-white/15 glass-level-2 text-xs"
+          >
+            <div className="flex justify-between mb-2 font-medium text-[#101010] dark:text-white">
+              <span>{exportProgress.stage}</span>
+              <span className="tabular-nums">
+                {exportProgress.current} / {exportProgress.total}
+              </span>
             </div>
-            <div className="flex items-center gap-2">
-              {lastExportUrl.mimeType === 'application/pdf' && (
-                <button
-                  type="button"
-                  disabled={isReopening}
-                  onClick={() => void handleReopenExportedPdf()}
-                  className="px-3 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#111827] hover:bg-slate-100 dark:hover:bg-slate-800 font-medium flex items-center gap-1.5"
-                >
-                  <FolderOpen className="w-3.5 h-3.5" />
-                  {isReopening ? 'Opening...' : 'Reopen & Validate in Editor'}
-                </button>
-              )}
-              <a
-                href={lastExportUrl.url}
-                download={lastExportUrl.fileName}
-                className="px-3 py-1.5 rounded bg-emerald-600 text-white font-medium hover:bg-emerald-700"
-              >
-                Download Again
-              </a>
-            </div>
-          </div>
-
-          {previewPageImg && lastExportUrl.verifiedPageCount && (
-            <div className="pt-3 border-t border-emerald-500/20 flex flex-col items-center gap-3">
-              <div className="flex flex-wrap items-center justify-center gap-2.5">
-                <button
-                  type="button"
-                  disabled={previewPageNum <= 1}
-                  onClick={() =>
-                    void loadExportedPreviewPage(
-                      lastExportUrl.bytes,
-                      Math.max(1, previewPageNum - 1)
-                    )
-                  }
-                  className="min-h-[36px] min-w-[36px] flex items-center justify-center p-1 rounded border border-slate-300 dark:border-slate-700 disabled:opacity-40"
-                >
-                  <ChevronLeft className="w-4 h-4" />
-                </button>
-                <span className="tabular-nums font-medium">
-                  Page {previewPageNum} of {lastExportUrl.verifiedPageCount}
-                </span>
-                <button
-                  type="button"
-                  disabled={previewPageNum >= lastExportUrl.verifiedPageCount}
-                  onClick={() =>
-                    void loadExportedPreviewPage(
-                      lastExportUrl.bytes,
-                      Math.min(
-                        lastExportUrl.verifiedPageCount!,
-                        previewPageNum + 1
-                      )
-                    )
-                  }
-                  className="min-h-[36px] min-w-[36px] flex items-center justify-center p-1 rounded border border-slate-300 dark:border-slate-700 disabled:opacity-40"
-                >
-                  <ChevronRight className="w-4 h-4" />
-                </button>
-                {lastExportUrl.verifiedPageCount > 2 && (
-                  <button
-                    type="button"
-                    onClick={() =>
-                      void loadExportedPreviewPage(
-                        lastExportUrl.bytes,
-                        lastExportUrl.verifiedPageCount!
-                      )
-                    }
-                    className="min-h-[36px] px-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px]"
-                  >
-                    Last Page
-                  </button>
-                )}
-              </div>
-              <img
-                src={previewPageImg}
-                alt={`Exported page ${previewPageNum}`}
-                referrerPolicy="no-referrer"
-                className="w-full max-w-md max-h-96 object-contain rounded border border-slate-300 dark:border-slate-700 shadow-lg bg-white"
+            <div className="w-full h-1.5 rounded-full bg-black/10 dark:bg-white/10 overflow-hidden">
+              <motion.div
+                className="h-full bg-[#101010] dark:bg-white glass-progress-fill"
+                initial={false}
+                animate={{
+                  width: `${Math.round(
+                    (exportProgress.current / Math.max(1, exportProgress.total)) *
+                      100
+                  )}%`,
+                }}
+                transition={{ duration: 0.2, ease: MOTION_EASE.liquid }}
               />
             </div>
-          )}
-        </div>
-      )}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {exportError && (
+          <motion.div
+            key="export-error"
+            variants={bannerVariants}
+            initial={shouldReduceMotion ? false : 'initial'}
+            animate="animate"
+            exit="exit"
+            className="p-4 rounded-2xl border border-red-500/40 bg-red-500/10 text-xs text-red-700 dark:text-red-300"
+          >
+            {exportError}
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {lastExportUrl && !isExporting && (
+          <motion.div
+            key="export-complete"
+            variants={popoverVariants}
+            initial={shouldReduceMotion ? false : 'initial'}
+            animate="animate"
+            exit="exit"
+          >
+            <GlassCard level={3} padding="md" className="space-y-4 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-[#101010] dark:text-white font-semibold flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    <span>Generated {lastExportUrl.fileName}</span>
+                  </div>
+                  {lastExportUrl.verifiedPageCount !== undefined && (
+                    <div className="mt-0.5 text-[#555555] dark:text-[#B5B5B5] tabular-nums">
+                      Verified PDF: {lastExportUrl.verifiedPageCount} pages ·{' '}
+                      {lastExportUrl.verifiedWidthPt} × {lastExportUrl.verifiedHeightPt} pt ·{' '}
+                      {(lastExportUrl.bytes.byteLength / 1024).toFixed(1)} KB
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {lastExportUrl.mimeType === 'application/pdf' && (
+                    <button
+                      type="button"
+                      disabled={isReopening}
+                      onClick={() => void handleReopenExportedPdf()}
+                      className="px-3 py-1.5 rounded-xl border border-black/15 dark:border-white/15 bg-white/80 dark:bg-[#1B1B1B] hover:bg-black/[0.04] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white font-medium flex items-center gap-1.5 transition-colors"
+                    >
+                      <FolderOpen className="w-3.5 h-3.5" />
+                      {isReopening ? 'Opening...' : 'Reopen & Validate in Editor'}
+                    </button>
+                  )}
+                  <a
+                    href={lastExportUrl.url}
+                    download={lastExportUrl.fileName}
+                    className="px-3.5 py-1.5 rounded-xl bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] font-medium transition-colors"
+                  >
+                    Download Again
+                  </a>
+                </div>
+              </div>
+
+              {previewPageImg && lastExportUrl.verifiedPageCount && (
+                <div className="pt-3 border-t border-black/10 dark:border-white/10 flex flex-col items-center gap-3">
+                  <div className="flex flex-wrap items-center justify-center gap-2.5">
+                    <button
+                      type="button"
+                      disabled={previewPageNum <= 1}
+                      onClick={() =>
+                        void loadExportedPreviewPage(
+                          lastExportUrl.bytes,
+                          Math.max(1, previewPageNum - 1)
+                        )
+                      }
+                      className="min-h-[36px] min-w-[36px] flex items-center justify-center p-1 rounded-lg border border-black/15 dark:border-white/15 text-[#101010] dark:text-white disabled:opacity-35"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+                    <span className="tabular-nums font-medium text-[#101010] dark:text-white">
+                      Page {previewPageNum} of {lastExportUrl.verifiedPageCount}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={previewPageNum >= lastExportUrl.verifiedPageCount}
+                      onClick={() =>
+                        void loadExportedPreviewPage(
+                          lastExportUrl.bytes,
+                          Math.min(
+                            lastExportUrl.verifiedPageCount!,
+                            previewPageNum + 1
+                          )
+                        )
+                      }
+                      className="min-h-[36px] min-w-[36px] flex items-center justify-center p-1 rounded-lg border border-black/15 dark:border-white/15 text-[#101010] dark:text-white disabled:opacity-35"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                    {lastExportUrl.verifiedPageCount > 2 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void loadExportedPreviewPage(
+                            lastExportUrl.bytes,
+                            lastExportUrl.verifiedPageCount!
+                          )
+                        }
+                        className="min-h-[36px] px-2.5 py-1 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.04] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white text-[11px]"
+                      >
+                        Last Page
+                      </button>
+                    )}
+                  </div>
+                  <img
+                    src={previewPageImg}
+                    alt={`Exported page ${previewPageNum}`}
+                    referrerPolicy="no-referrer"
+                    className="w-full max-w-md max-h-96 object-contain rounded-lg border border-black/15 dark:border-white/15 shadow-lg bg-white"
+                  />
+                </div>
+              )}
+            </GlassCard>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Export Mode Grid & Parameters */}
       <div className="grid grid-cols-1 desktop:grid-cols-3 gap-6">
         <div className="desktop:col-span-2 space-y-3">
-          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+          <h2 className="text-sm font-semibold text-[#101010] dark:text-white">
             Export Format & Output Mode
           </h2>
           <div className="grid grid-cols-1 tablet:grid-cols-2 gap-2.5">
             {EXPORT_MODES.map((m) => (
-              <button
+              <motion.button
                 key={m.id}
                 type="button"
+                whileTap={shouldReduceMotion ? undefined : BUTTON_TAP}
+                transition={MOTION_SPRING.snappy}
                 onClick={() => updateExport({ mode: m.id })}
-                className={`p-3.5 rounded-2xl border text-left transition-[border-color,background-color,transform] duration-150 ${
+                className={`p-3.5 rounded-2xl border text-left transition-[border-color,background-color] duration-150 ${
                   exportConfig.mode === m.id
-                    ? 'border-blue-500/70 bg-blue-500/12 shadow-[inset_0_1px_0_rgba(255,255,255,0.2)]'
-                    : 'glass-level-3 hover:border-blue-500/40'
+                    ? 'studio-active-surface'
+                    : 'glass-level-3 border-black/10 dark:border-white/12 hover:border-black/25 dark:hover:border-white/25'
                 }`}
               >
-                <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+                <div className="text-xs font-semibold text-[#101010] dark:text-white">
                   {m.label}
                 </div>
-                <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+                <div className="mt-0.5 text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                   {m.desc}
                 </div>
-              </button>
+              </motion.button>
             ))}
           </div>
 
-          {exportConfig.mode === 'merge' && (
-            <GlassCard level={3} padding="md" className="space-y-3 text-xs">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold">Additional PDFs to Append</span>
-                <input
-                  ref={mergeInputRef}
-                  type="file"
-                  accept=".pdf,application/pdf"
-                  multiple
-                  className="hidden"
-                  onChange={(e) => void handleMergeFilesPicked(e.target.files)}
-                />
-                <GlassButton
-                  variant="glass"
-                  size="sm"
-                  onClick={() => mergeInputRef.current?.click()}
-                >
-                  <Upload className="w-3.5 h-3.5" />
-                  Add PDFs
-                </GlassButton>
-              </div>
-              {mergeFiles.length > 0 && (
-                <ul className="space-y-1 text-slate-600 dark:text-slate-300">
-                  {mergeFiles.map((f, idx) => (
-                    <li key={idx} className="flex justify-between">
-                      <span>{f.name}</span>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setMergeFiles((prev) =>
-                            prev.filter((_, i) => i !== idx)
-                          )
-                        }
-                        className="text-red-500"
-                      >
-                        Remove
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </GlassCard>
-          )}
+          <AnimatePresence>
+            {exportConfig.mode === 'merge' && (
+              <motion.div
+                key="export-merge-panel"
+                variants={popoverVariants}
+                initial={shouldReduceMotion ? false : 'initial'}
+                animate="animate"
+                exit="exit"
+              >
+                <GlassCard level={3} padding="md" className="space-y-3 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-[#101010] dark:text-white">Additional PDFs to Append</span>
+                    <input
+                      ref={mergeInputRef}
+                      type="file"
+                      accept=".pdf,application/pdf"
+                      multiple
+                      className="hidden"
+                      onChange={(e) => void handleMergeFilesPicked(e.target.files)}
+                    />
+                    <GlassButton
+                      variant="glass"
+                      size="sm"
+                      onClick={() => mergeInputRef.current?.click()}
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      Add PDFs
+                    </GlassButton>
+                  </div>
+                  {mergeFiles.length > 0 && (
+                    <ul className="space-y-1 text-[#555555] dark:text-[#B5B5B5]">
+                      {mergeFiles.map((f, idx) => (
+                        <li key={idx} className="flex justify-between">
+                          <span>{f.name}</span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setMergeFiles((prev) =>
+                                prev.filter((_, i) => i !== idx)
+                              )
+                            }
+                            className="text-[#888888] hover:text-[#101010] dark:text-[#858585] dark:hover:text-white font-medium"
+                          >
+                            Remove
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </GlassCard>
+              </motion.div>
+            )}
 
-          {exportConfig.mode === 'selected_pages' && (
-            <GlassCard level={3} padding="md" className="text-xs">
-              <label className="block">
-                <span className="font-medium text-slate-700 dark:text-slate-300">
-                  Page Range (e.g. 1-3, 5)
-                </span>
-                <input
-                  type="text"
-                  value={exportConfig.selectedPagesRange}
-                  onChange={(e) =>
-                    updateExport({ selectedPagesRange: e.target.value })
-                  }
-                  className="mt-1.5 w-full min-h-[40px] px-3 py-1.5 rounded-xl border border-slate-300/80 dark:border-white/15 bg-white/60 dark:bg-white/5 font-mono"
-                />
-              </label>
-            </GlassCard>
-          )}
+            {exportConfig.mode === 'selected_pages' && (
+              <motion.div
+                key="export-selected-pages-panel"
+                variants={popoverVariants}
+                initial={shouldReduceMotion ? false : 'initial'}
+                animate="animate"
+                exit="exit"
+              >
+                <GlassCard level={3} padding="md" className="text-xs">
+                  <label className="block">
+                    <span className="font-medium text-[#555555] dark:text-[#B5B5B5]">
+                      Page Range (e.g. 1-3, 5)
+                    </span>
+                    <input
+                      type="text"
+                      value={exportConfig.selectedPagesRange}
+                      onChange={(e) =>
+                        updateExport({ selectedPagesRange: e.target.value })
+                      }
+                      className="mt-1.5 w-full min-h-[40px] px-3 py-1.5 rounded-xl studio-input font-mono"
+                    />
+                  </label>
+                </GlassCard>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
         {/* Right Options Panel */}
         <GlassCard level={3} padding="md" className="space-y-4 text-xs h-fit">
-          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+          <h2 className="text-sm font-semibold text-[#101010] dark:text-white">
             Print & Output Options
           </h2>
 
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
-              <span className="text-[11px] text-slate-500">Resolution (DPI)</span>
+              <span className="text-[11px] text-[#888888] dark:text-[#858585]">Resolution (DPI)</span>
               <select
                 value={exportConfig.dpi}
                 onChange={(e) =>
                   updateExport({ dpi: Number(e.target.value) as 72 | 150 | 300 | 600 })
                 }
-                className="mt-1 w-full min-h-[38px] px-2 py-1.5 rounded-xl border border-slate-300/80 dark:border-white/15 bg-white/80 dark:bg-[#0E131D]"
+                className="mt-1 w-full min-h-[38px] px-2 py-1.5 rounded-xl studio-select"
               >
                 <option value={72}>72 DPI (Screen)</option>
                 <option value={150}>150 DPI (Standard)</option>
@@ -775,7 +835,7 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
               </select>
             </label>
             <label className="block">
-              <span className="text-[11px] text-slate-500">Bleed (pt)</span>
+              <span className="text-[11px] text-[#888888] dark:text-[#858585]">Bleed (pt)</span>
               <input
                 type="number"
                 min="0"
@@ -784,61 +844,61 @@ export const ExportCenterView: React.FC<ExportCenterViewProps> = ({
                 onChange={(e) =>
                   updateExport({ bleedPt: Math.max(0, Number(e.target.value) || 0) })
                 }
-                className="mt-1 w-full px-2 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                className="mt-1 w-full px-2 py-1.5 rounded-xl studio-input tabular-nums"
               />
             </label>
           </div>
 
           <label className="block">
-            <span className="text-[11px] text-slate-500">Watermark Text (Optional)</span>
+            <span className="text-[11px] text-[#888888] dark:text-[#858585]">Watermark Text (Optional)</span>
             <input
               type="text"
               placeholder="e.g. CONFIDENTIAL or COPY"
               value={exportConfig.watermarkText}
               onChange={(e) => updateExport({ watermarkText: e.target.value })}
-              className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent"
+              className="mt-1 w-full px-2.5 py-1.5 rounded-xl studio-input"
             />
           </label>
 
-          <label className="flex items-center gap-2 cursor-pointer">
+          <label className="flex items-center gap-2 cursor-pointer text-[#101010] dark:text-white">
             <input
               type="checkbox"
               checked={exportConfig.addPageNumbers}
               onChange={(e) => updateExport({ addPageNumbers: e.target.checked })}
-              className="rounded border-slate-400 text-blue-600"
+              className="rounded border-black/30 dark:border-white/30 accent-[#101010] dark:accent-white"
             />
             <span>Stamp Page Numbers (Footer)</span>
           </label>
 
-          <label className="flex items-center gap-2 cursor-pointer">
+          <label className="flex items-center gap-2 cursor-pointer text-[#101010] dark:text-white">
             <input
               type="checkbox"
               checked={exportConfig.cropMarks}
               onChange={(e) => updateExport({ cropMarks: e.target.checked })}
-              className="rounded border-slate-400 text-blue-600"
+              className="rounded border-black/30 dark:border-white/30 accent-[#101010] dark:accent-white"
             />
             <span>Include Press Crop Marks</span>
           </label>
 
-          <label className="flex items-center gap-2 cursor-pointer">
+          <label className="flex items-center gap-2 cursor-pointer text-[#101010] dark:text-white">
             <input
               type="checkbox"
               checked={exportConfig.embedFonts}
               onChange={(e) => updateExport({ embedFonts: e.target.checked })}
-              className="rounded border-slate-400 text-blue-600"
+              className="rounded border-black/30 dark:border-white/30 accent-[#101010] dark:accent-white"
             />
             <span>Standardize / Embed PDF Fonts</span>
           </label>
 
-          <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-1 text-[11px] tabular-nums text-slate-600 dark:text-slate-400">
+          <div className="pt-3 border-t border-black/10 dark:border-white/10 space-y-1 text-[11px] tabular-nums text-[#555555] dark:text-[#B5B5B5]">
             <div className="flex items-center justify-between">
-              <span className="font-semibold text-slate-900 dark:text-slate-100">
+              <span className="font-semibold text-[#101010] dark:text-white">
                 Output Geometry Summary
               </span>
               <button
                 type="button"
                 onClick={() => setShowPageSetupModal(true)}
-                className="text-blue-600 dark:text-blue-400 hover:underline font-medium"
+                className="text-[#101010] dark:text-white hover:underline font-medium"
               >
                 Configure Paper...
               </button>

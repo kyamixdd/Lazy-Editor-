@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Konva from 'konva';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
   ArrowDown,
   ArrowUp,
@@ -12,7 +13,16 @@ import {
   X,
 } from 'lucide-react';
 import {
+  MOTION_DURATION,
+  MOTION_SPRING,
+  modalBackdropVariants,
+  modalPanelVariants,
+  popoverVariants,
+} from '../config/motionSystem';
+import {
+  ActiveEditorTool,
   DocumentElement,
+  MeasurementUnit,
   PageConfig,
   RectPt,
   SourceFitConfig,
@@ -23,6 +33,7 @@ import {
   getElementsInMarquee,
 } from '../utils/alignmentEngine';
 import { clampRect } from '../utils/geometryEngine';
+import { computeTypographyLayout } from '../utils/typographyEngine';
 import { ptToUnit } from '../utils/units';
 
 interface PdfCanvasStageProps {
@@ -33,6 +44,10 @@ interface PdfCanvasStageProps {
   selectedIds: string[];
   zoom: number;
   interactionMode?: 'preview' | 'edit';
+  activeTool?: ActiveEditorTool;
+  stylePainterActive?: boolean;
+  currentPageNumber?: number;
+  measureUnit?: MeasurementUnit;
   showRulers: boolean;
   showGrid: boolean;
   snapToGrid: boolean;
@@ -59,6 +74,8 @@ interface PdfCanvasStageProps {
   onUpdateElementsBatch: (
     updates: Array<{ id: string; patch: Partial<DocumentElement> }>
   ) => void;
+  onCreateElement?: (element: DocumentElement) => void;
+  onStylePaintTarget?: (targetId: string) => void;
 }
 
 function mapFontToCanvasCss(fontFamily: string): string {
@@ -80,6 +97,10 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
   selectedIds,
   zoom,
   interactionMode = 'edit',
+  activeTool = 'select',
+  stylePainterActive = false,
+  currentPageNumber = 1,
+  measureUnit = 'mm',
   showRulers,
   showGrid,
   snapToGrid,
@@ -101,6 +122,8 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
   onSelectIds,
   onUpdateElement,
   onUpdateElementsBatch,
+  onCreateElement,
+  onStylePaintTarget,
 }) => {
   const viewport = useViewport();
   const scrollWrapperRef = useRef<HTMLDivElement>(null);
@@ -132,11 +155,14 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
   });
 
   const [bgImgObj, setBgImgObj] = useState<HTMLImageElement | null>(null);
-  const [elementImgs, setElementImgs] = useState<Record<string, HTMLImageElement>>({});
+  const [elementImgs, setElementImgs] = useState<
+    Record<string, { src: string; img: HTMLImageElement }>
+  >({});
   const [inlineEditId, setInlineEditId] = useState<string | null>(null);
   const [inlineText, setInlineText] = useState('');
   const [tableEditId, setTableEditId] = useState<string | null>(null);
   const [isManipulating, setIsManipulating] = useState(false);
+  const [liveMeasureHint, setLiveMeasureHint] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{
     elementId: string;
     x: number;
@@ -155,6 +181,8 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
     onUpdateElementsBatch,
     onChangeCropRect,
     onZoomChange,
+    onCreateElement,
+    onStylePaintTarget,
     selectedIds,
     elements,
     snapToGrid,
@@ -167,6 +195,10 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
     canvasH,
     interactionMode,
     cropMode,
+    activeTool,
+    stylePainterActive,
+    currentPageNumber,
+    measureUnit,
     viewportWidth: viewport.width,
   });
   callbacksRef.current = {
@@ -175,6 +207,8 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
     onUpdateElementsBatch,
     onChangeCropRect,
     onZoomChange,
+    onCreateElement,
+    onStylePaintTarget,
     selectedIds,
     elements,
     snapToGrid,
@@ -187,16 +221,34 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
     canvasH,
     interactionMode,
     cropMode,
+    activeTool,
+    stylePainterActive,
+    currentPageNumber,
+    measureUnit,
     viewportWidth: viewport.width,
   };
 
   const marqueeRef = useRef<{
     active: boolean;
+    mode: 'marquee' | 'draw' | 'box' | 'line';
+    tool: ActiveEditorTool;
     startX: number;
     startY: number;
+    points: number[];
     rectNode: Konva.Rect | null;
+    lineNode: Konva.Line | null;
     shiftHeld: boolean;
-  }>({ active: false, startX: 0, startY: 0, rectNode: null, shiftHeld: false });
+  }>({
+    active: false,
+    mode: 'marquee',
+    tool: 'select',
+    startX: 0,
+    startY: 0,
+    points: [],
+    rectNode: null,
+    lineNode: null,
+    shiftHeld: false,
+  });
 
   const stageW = Math.round(canvasW * zoom);
   const stageH = Math.round(canvasH * zoom);
@@ -234,15 +286,20 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
     img.src = backgroundImageUrl;
   }, [backgroundImageUrl]);
 
-  // Load any added element images
+  // Load any added element images & signatures (reloads cleanly on image replacement)
   useEffect(() => {
     elements.forEach((el) => {
-      if (el.type === 'image' && el.imageDataUrl && !elementImgs[el.id]) {
+      if (
+        (el.type === 'image' || el.type === 'signature') &&
+        el.imageDataUrl &&
+        elementImgs[el.id]?.src !== el.imageDataUrl
+      ) {
+        const src = el.imageDataUrl;
         const img = new Image();
         img.onload = () => {
-          setElementImgs((prev) => ({ ...prev, [el.id]: img }));
+          setElementImgs((prev) => ({ ...prev, [el.id]: { src, img } }));
         };
-        img.src = el.imageDataUrl;
+        img.src = src;
       }
     });
   }, [elements, elementImgs]);
@@ -264,9 +321,9 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
 
     const tr = new Konva.Transformer({
       rotateEnabled: true,
-      borderStroke: '#3B82F6',
+      borderStroke: '#101010',
       borderStrokeWidth: isTouchLargeHandles ? 2 : 1.5,
-      anchorStroke: '#3B82F6',
+      anchorStroke: '#101010',
       anchorFill: '#FFFFFF',
       anchorSize: isTouchLargeHandles ? 16 : 7,
       anchorCornerRadius: isTouchLargeHandles ? 4 : 0,
@@ -282,9 +339,9 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
 
     const cropTr = new Konva.Transformer({
       rotateEnabled: false,
-      borderStroke: '#10B981',
+      borderStroke: '#101010',
       borderStrokeWidth: isTouchLargeHandles ? 2.2 : 1.8,
-      anchorStroke: '#10B981',
+      anchorStroke: '#101010',
       anchorFill: '#FFFFFF',
       anchorSize: isTouchLargeHandles ? 18 : 8,
       anchorCornerRadius: isTouchLargeHandles ? 4 : 0,
@@ -303,15 +360,20 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
     stage.add(cropLayer);
 
     stage.on('mousedown touchstart', (e) => {
-      if (e.target === stage) {
+      const tool = callbacksRef.current.activeTool;
+      const isCreationTool =
+        tool !== 'select' &&
+        tool !== 'marquee' &&
+        tool !== 'inspect' &&
+        tool !== 'style_painter' &&
+        !callbacksRef.current.stylePainterActive;
+
+      if (e.target === stage || isCreationTool) {
         setInlineEditId(null);
         setContextMenu(null);
         const evt = e.evt as MouseEvent;
-        const isMouse = evt && 'button' in evt && !('touches' in evt && (evt as unknown as TouchEvent).touches?.length);
         const pos = stage.getPointerPosition();
         if (
-          isMouse &&
-          evt.button === 0 &&
           pos &&
           callbacksRef.current.interactionMode === 'edit' &&
           !callbacksRef.current.cropMode
@@ -319,51 +381,331 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
           const z = callbacksRef.current.zoom;
           const sx = pos.x / z;
           const sy = pos.y / z;
-          const marqueeRect = new Konva.Rect({
-            x: sx,
-            y: sy,
-            width: 0,
-            height: 0,
-            fill: 'rgba(37, 99, 235, 0.12)',
-            stroke: '#2563EB',
-            strokeWidth: 1 / z,
-            dash: [4 / z, 2 / z],
-            listening: false,
-          });
-          guideLayer.add(marqueeRect);
-          marqueeRef.current = {
-            active: true,
-            startX: sx,
-            startY: sy,
-            rectNode: marqueeRect,
-            shiftHeld: Boolean(evt.shiftKey),
-          };
-        } else {
+
+          if (tool === 'draw') {
+            const lineNode = new Konva.Line({
+              points: [sx, sy],
+              stroke: '#101010',
+              strokeWidth: 2,
+              lineCap: 'round',
+              lineJoin: 'round',
+              tension: 0.35,
+              listening: false,
+            });
+            guideLayer.add(lineNode);
+            marqueeRef.current = {
+              active: true,
+              mode: 'draw',
+              tool,
+              startX: sx,
+              startY: sy,
+              points: [sx, sy],
+              rectNode: null,
+              lineNode,
+              shiftHeld: false,
+            };
+            return;
+          }
+
+          if (tool === 'measure' || tool === 'arrow' || tool === 'line') {
+            const lineNode = new Konva.Line({
+              points: [sx, sy, sx, sy],
+              stroke: '#101010',
+              strokeWidth: 1.5,
+              dash: tool === 'measure' ? [4 / z, 2 / z] : undefined,
+              listening: false,
+            });
+            guideLayer.add(lineNode);
+            marqueeRef.current = {
+              active: true,
+              mode: 'line',
+              tool,
+              startX: sx,
+              startY: sy,
+              points: [sx, sy, sx, sy],
+              rectNode: null,
+              lineNode,
+              shiftHeld: false,
+            };
+            return;
+          }
+
+          if (
+            tool === 'highlight' ||
+            tool === 'underline_annot' ||
+            tool === 'strikeout_annot' ||
+            tool === 'redact' ||
+            tool === 'rect' ||
+            tool === 'circle' ||
+            tool === 'callout' ||
+            tool === 'note' ||
+            tool === 'text'
+          ) {
+            const boxNode = new Konva.Rect({
+              x: sx,
+              y: sy,
+              width: 0,
+              height: 0,
+              fill:
+                tool === 'redact'
+                  ? 'rgba(0,0,0,0.45)'
+                  : tool === 'highlight'
+                  ? 'rgba(200,200,200,0.35)'
+                  : 'rgba(16,16,16,0.08)',
+              stroke: '#101010',
+              strokeWidth: 1 / z,
+              dash: [4 / z, 2 / z],
+              listening: false,
+            });
+            guideLayer.add(boxNode);
+            marqueeRef.current = {
+              active: true,
+              mode: 'box',
+              tool,
+              startX: sx,
+              startY: sy,
+              points: [],
+              rectNode: boxNode,
+              lineNode: null,
+              shiftHeld: false,
+            };
+            return;
+          }
+
+          const isMouse = evt && 'button' in evt && !('touches' in evt && (evt as unknown as TouchEvent).touches?.length);
+          if (isMouse && evt.button === 0 && e.target === stage) {
+            const marqueeRect = new Konva.Rect({
+              x: sx,
+              y: sy,
+              width: 0,
+              height: 0,
+              fill: 'rgba(16, 16, 16, 0.08)',
+              stroke: '#101010',
+              strokeWidth: 1 / z,
+              dash: [4 / z, 2 / z],
+              listening: false,
+            });
+            guideLayer.add(marqueeRect);
+            marqueeRef.current = {
+              active: true,
+              mode: 'marquee',
+              tool: 'select',
+              startX: sx,
+              startY: sy,
+              points: [],
+              rectNode: marqueeRect,
+              lineNode: null,
+              shiftHeld: Boolean(evt.shiftKey),
+            };
+            return;
+          }
+        }
+        if (e.target === stage) {
           callbacksRef.current.onSelectIds([]);
         }
       }
     });
 
-    stage.on('mousemove', () => {
+    stage.on('mousemove touchmove', () => {
       const m = marqueeRef.current;
-      if (!m.active || !m.rectNode) return;
+      if (!m.active) return;
       const pos = stage.getPointerPosition();
       if (!pos) return;
       const z = callbacksRef.current.zoom;
       const cx = pos.x / z;
       const cy = pos.y / z;
-      m.rectNode.setAttrs({
-        x: Math.min(m.startX, cx),
-        y: Math.min(m.startY, cy),
-        width: Math.abs(cx - m.startX),
-        height: Math.abs(cy - m.startY),
-      });
-      guideLayer.batchDraw();
+
+      if (m.mode === 'draw' && m.lineNode) {
+        const lastX = m.points[m.points.length - 2];
+        const lastY = m.points[m.points.length - 1];
+        if (Math.hypot(cx - lastX, cy - lastY) >= 1.5) {
+          m.points.push(cx, cy);
+          m.lineNode.points(m.points);
+          guideLayer.batchDraw();
+        }
+        return;
+      }
+
+      if (m.mode === 'line' && m.lineNode) {
+        m.points = [m.startX, m.startY, cx, cy];
+        m.lineNode.points(m.points);
+        guideLayer.batchDraw();
+        if (m.tool === 'measure') {
+          const distPt = Math.hypot(cx - m.startX, cy - m.startY);
+          const dxPt = Math.abs(cx - m.startX);
+          const dyPt = Math.abs(cy - m.startY);
+          const u = callbacksRef.current.measureUnit;
+          setLiveMeasureHint(
+            `Dist: ${ptToUnit(distPt, u)} ${u} (ΔX ${ptToUnit(dxPt, u)} · ΔY ${ptToUnit(dyPt, u)})`
+          );
+        }
+        return;
+      }
+
+      if (m.rectNode) {
+        m.rectNode.setAttrs({
+          x: Math.min(m.startX, cx),
+          y: Math.min(m.startY, cy),
+          width: Math.abs(cx - m.startX),
+          height: Math.abs(cy - m.startY),
+        });
+        guideLayer.batchDraw();
+      }
     });
 
-    stage.on('mouseup', () => {
+    stage.on('mouseup touchend', () => {
       const m = marqueeRef.current;
       if (!m.active) return;
+
+      const finishReset = () => {
+        m.rectNode?.destroy();
+        m.lineNode?.destroy();
+        marqueeRef.current = {
+          active: false,
+          mode: 'marquee',
+          tool: 'select',
+          startX: 0,
+          startY: 0,
+          points: [],
+          rectNode: null,
+          lineNode: null,
+          shiftHeld: false,
+        };
+        guideLayer.batchDraw();
+        setLiveMeasureHint(null);
+      };
+
+      const createCb = callbacksRef.current.onCreateElement;
+      const pNum = callbacksRef.current.currentPageNumber;
+
+      if (m.mode === 'draw') {
+        const pts = [...m.points];
+        finishReset();
+        if (createCb && pts.length >= 4) {
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          for (let i = 0; i < pts.length; i += 2) {
+            minX = Math.min(minX, pts[i]);
+            maxX = Math.max(maxX, pts[i]);
+            minY = Math.min(minY, pts[i + 1]);
+            maxY = Math.max(maxY, pts[i + 1]);
+          }
+          const pad = 4;
+          const bx = Math.max(0, minX - pad);
+          const by = Math.max(0, minY - pad);
+          const bw = Math.max(12, maxX - minX + pad * 2);
+          const bh = Math.max(12, maxY - minY + pad * 2);
+          const relPts = pts.map((val, idx) =>
+            Number((idx % 2 === 0 ? val - bx : val - by).toFixed(2))
+          );
+          createCb({
+            id: `el-draw-${Date.now().toString(36)}`,
+            type: 'draw',
+            pageNumber: pNum,
+            x: Number(bx.toFixed(2)),
+            y: Number(by.toFixed(2)),
+            width: Number(bw.toFixed(2)),
+            height: Number(bh.toFixed(2)),
+            rotation: 0,
+            text: 'Ink Stroke',
+            fontFamily: 'Helvetica',
+            fontSize: 10,
+            fontWeight: 'normal',
+            fontStyle: 'normal',
+            color: '#111111',
+            backgroundColor: 'transparent',
+            borderColor: '#111111',
+            borderWidth: 2,
+            align: 'left',
+            opacity: 1,
+            editable: true,
+            locked: false,
+            visible: true,
+            confidence: 1,
+            needsReview: false,
+            points: relPts,
+            sourceOrigin: 'annotation',
+            isUserAdded: true,
+          });
+        }
+        return;
+      }
+
+      if (m.mode === 'line') {
+        const [x1, y1, x2, y2] = m.points;
+        finishReset();
+        if (!createCb) return;
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        const len = Math.hypot(dx, dy);
+        const effLen = Math.max(36, len);
+        const angle = len > 4 ? Number(((Math.atan2(dy, dx) * 180) / Math.PI).toFixed(1)) : 0;
+        const u = callbacksRef.current.measureUnit;
+
+        if (m.tool === 'measure') {
+          const valLabel = `${ptToUnit(effLen, u)} ${u}`;
+          createCb({
+            id: `el-meas-${Date.now().toString(36)}`,
+            type: 'measure',
+            pageNumber: pNum,
+            x: Number(x1.toFixed(2)),
+            y: Number((y1 - 8).toFixed(2)),
+            width: Number(effLen.toFixed(2)),
+            height: 16,
+            rotation: angle,
+            text: valLabel,
+            fontFamily: 'JetBrains Mono',
+            fontSize: 9,
+            fontWeight: 'bold',
+            fontStyle: 'normal',
+            color: '#101010',
+            backgroundColor: 'transparent',
+            borderColor: '#101010',
+            borderWidth: 1.2,
+            align: 'center',
+            opacity: 1,
+            editable: true,
+            locked: false,
+            visible: true,
+            confidence: 1,
+            needsReview: false,
+            measureUnit: u,
+            sourceOrigin: 'annotation',
+            isUserAdded: true,
+          });
+        } else {
+          createCb({
+            id: `el-${m.tool}-${Date.now().toString(36)}`,
+            type: m.tool === 'arrow' ? 'shape' : 'line',
+            shapeKind: m.tool === 'arrow' ? 'arrow' : 'line',
+            pageNumber: pNum,
+            x: Number(x1.toFixed(2)),
+            y: Number((y1 - 6).toFixed(2)),
+            width: Number(effLen.toFixed(2)),
+            height: 12,
+            rotation: angle,
+            text: m.tool === 'arrow' ? 'Arrow' : 'Rule Line',
+            fontFamily: 'Helvetica',
+            fontSize: 10,
+            fontWeight: 'normal',
+            fontStyle: 'normal',
+            color: '#111111',
+            backgroundColor: 'transparent',
+            borderColor: '#111111',
+            borderWidth: 1.8,
+            align: 'left',
+            opacity: 1,
+            editable: true,
+            locked: false,
+            visible: true,
+            confidence: 1,
+            needsReview: false,
+            sourceOrigin: 'user_overlay',
+            isUserAdded: true,
+          });
+        }
+        return;
+      }
+
       const rect = m.rectNode
         ? {
             x: m.rectNode.x(),
@@ -372,19 +714,187 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
             height: m.rectNode.height(),
           }
         : null;
-      m.rectNode?.destroy();
-      marqueeRef.current = {
-        active: false,
-        startX: 0,
-        startY: 0,
-        rectNode: null,
-        shiftHeld: false,
-      };
-      guideLayer.batchDraw();
+      const startPt = { x: m.startX, y: m.startY };
+      const toolUsed = m.tool;
+      const modeUsed = m.mode;
+      const shiftHeld = m.shiftHeld;
+      finishReset();
+
+      if (modeUsed === 'box' && createCb) {
+        const hasDrag = rect && (rect.width > 8 || rect.height > 8);
+        const bx = Number((hasDrag ? rect!.x : startPt.x).toFixed(2));
+        const by = Number((hasDrag ? rect!.y : startPt.y).toFixed(2));
+        const bw = Number((hasDrag ? Math.max(16, rect!.width) : toolUsed === 'note' ? 26 : 140).toFixed(2));
+        const bh = Number((hasDrag ? Math.max(12, rect!.height) : toolUsed === 'note' ? 26 : toolUsed === 'callout' ? 42 : 22).toFixed(2));
+        const baseId = `el-${toolUsed}-${Date.now().toString(36)}`;
+
+        if (toolUsed === 'redact') {
+          createCb({
+            id: baseId,
+            type: 'redaction',
+            pageNumber: pNum,
+            x: bx,
+            y: by,
+            width: bw,
+            height: bh,
+            rotation: 0,
+            text: 'REDACTION ZONE',
+            fontFamily: 'Helvetica',
+            fontSize: 9,
+            fontWeight: 'bold',
+            fontStyle: 'normal',
+            color: '#FFFFFF',
+            backgroundColor: '#000000',
+            borderColor: '#000000',
+            borderWidth: 1,
+            align: 'center',
+            opacity: 1,
+            editable: true,
+            locked: false,
+            visible: true,
+            confidence: 1,
+            needsReview: false,
+            redactionMode: 'visual_mask',
+            redactionApplied: false,
+            sourceOrigin: 'redaction',
+            isUserAdded: true,
+          });
+        } else if (
+          toolUsed === 'highlight' ||
+          toolUsed === 'underline_annot' ||
+          toolUsed === 'strikeout_annot' ||
+          toolUsed === 'note'
+        ) {
+          const kind =
+            toolUsed === 'underline_annot'
+              ? 'underline'
+              : toolUsed === 'strikeout_annot'
+              ? 'strikeout'
+              : toolUsed;
+          createCb({
+            id: baseId,
+            type: 'annotation',
+            annotationKind: kind,
+            pageNumber: pNum,
+            x: bx,
+            y: by,
+            width: bw,
+            height: bh,
+            rotation: 0,
+            text: kind === 'note' ? 'Comment Note' : `Annotation (${kind})`,
+            commentText: kind === 'note' ? 'Review this section before final print.' : '',
+            fontFamily: 'Helvetica',
+            fontSize: 10,
+            fontWeight: 'normal',
+            fontStyle: 'normal',
+            color: kind === 'highlight' ? '#A3A3A3' : '#111111',
+            backgroundColor: kind === 'highlight' ? '#D4D4D4' : 'transparent',
+            borderColor: '#111111',
+            borderWidth: 1.4,
+            align: 'left',
+            opacity: kind === 'highlight' ? 0.35 : 1,
+            editable: true,
+            locked: false,
+            visible: true,
+            confidence: 1,
+            needsReview: false,
+            sourceOrigin: 'annotation',
+            isUserAdded: true,
+          });
+        } else if (toolUsed === 'callout') {
+          createCb({
+            id: baseId,
+            type: 'callout',
+            pageNumber: pNum,
+            x: bx,
+            y: by,
+            width: Math.max(96, bw),
+            height: Math.max(32, bh),
+            rotation: 0,
+            text: 'Callout Note',
+            calloutTarget: { x: Math.max(0, bx - 28), y: by + bh + 24 },
+            fontFamily: 'Helvetica',
+            fontSize: 10,
+            fontWeight: 'normal',
+            fontStyle: 'normal',
+            color: '#111111',
+            backgroundColor: '#FFFFFF',
+            borderColor: '#111111',
+            borderWidth: 1.2,
+            align: 'left',
+            opacity: 1,
+            editable: true,
+            locked: false,
+            visible: true,
+            confidence: 1,
+            needsReview: false,
+            sourceOrigin: 'annotation',
+            isUserAdded: true,
+          });
+        } else if (toolUsed === 'rect' || toolUsed === 'circle') {
+          createCb({
+            id: baseId,
+            type: 'shape',
+            shapeKind: toolUsed,
+            pageNumber: pNum,
+            x: bx,
+            y: by,
+            width: Math.max(24, bw),
+            height: Math.max(20, bh),
+            rotation: 0,
+            text: '',
+            fontFamily: 'Helvetica',
+            fontSize: 10,
+            fontWeight: 'normal',
+            fontStyle: 'normal',
+            color: '#111111',
+            backgroundColor: 'transparent',
+            borderColor: '#111111',
+            borderWidth: 1.4,
+            align: 'left',
+            opacity: 1,
+            editable: true,
+            locked: false,
+            visible: true,
+            confidence: 1,
+            needsReview: false,
+            sourceOrigin: 'user_overlay',
+            isUserAdded: true,
+          });
+        } else if (toolUsed === 'text') {
+          createCb({
+            id: baseId,
+            type: 'text',
+            pageNumber: pNum,
+            x: bx,
+            y: by,
+            width: Math.max(120, bw),
+            height: Math.max(22, bh),
+            rotation: 0,
+            text: 'New Text Block',
+            fontFamily: 'Helvetica',
+            fontSize: 12,
+            fontWeight: 'normal',
+            fontStyle: 'normal',
+            color: '#111111',
+            backgroundColor: 'transparent',
+            align: 'left',
+            opacity: 1,
+            editable: true,
+            locked: false,
+            visible: true,
+            confidence: 1,
+            needsReview: false,
+            sourceOrigin: 'user_overlay',
+            isUserAdded: true,
+          });
+        }
+        return;
+      }
 
       if (rect && (rect.width > 4 || rect.height > 4)) {
         const hitIds = getElementsInMarquee(callbacksRef.current.elements, rect);
-        if (m.shiftHeld) {
+        if (shiftHeld) {
           const merged = Array.from(
             new Set([...callbacksRef.current.selectedIds, ...hitIds])
           );
@@ -392,7 +902,7 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
         } else {
           callbacksRef.current.onSelectIds(hitIds);
         }
-      } else if (!m.shiftHeld) {
+      } else if (!shiftHeld) {
         callbacksRef.current.onSelectIds([]);
       }
     });
@@ -484,7 +994,7 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
           0,
           canvasH - pageConfig.marginTopPt - pageConfig.marginBottomPt
         ),
-        stroke: 'rgba(59, 130, 246, 0.28)',
+        stroke: 'rgba(64, 64, 64, 0.35)',
         strokeWidth: 0.8 / zoom,
         dash: [4 / zoom, 4 / zoom],
       })
@@ -504,7 +1014,7 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
         gridLayer.add(
           new Konva.Line({
             points: [x, 0, x, canvasH],
-            stroke: 'rgba(148, 163, 184, 0.22)',
+            stroke: 'rgba(115, 115, 115, 0.22)',
             strokeWidth: 0.6 / zoom,
           })
         );
@@ -513,7 +1023,7 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
         gridLayer.add(
           new Konva.Line({
             points: [0, y, canvasW, y],
-            stroke: 'rgba(148, 163, 184, 0.22)',
+            stroke: 'rgba(115, 115, 115, 0.22)',
             strokeWidth: 0.6 / zoom,
           })
         );
@@ -574,7 +1084,7 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
           guideLayer.add(
             new Konva.Line({
               points: [g.pos, g.start, g.pos, g.end],
-              stroke: g.kind === 'spacing' ? '#10B981' : '#2563EB',
+              stroke: g.kind === 'spacing' ? '#404040' : '#101010',
               strokeWidth: 0.9 / callbacksRef.current.zoom,
               dash: [3 / callbacksRef.current.zoom, 3 / callbacksRef.current.zoom],
             })
@@ -583,7 +1093,7 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
           guideLayer.add(
             new Konva.Line({
               points: [g.start, g.pos, g.end, g.pos],
-              stroke: g.kind === 'spacing' ? '#10B981' : '#2563EB',
+              stroke: g.kind === 'spacing' ? '#404040' : '#101010',
               strokeWidth: 0.9 / callbacksRef.current.zoom,
               dash: g.kind === 'spacing' ? undefined : [3 / callbacksRef.current.zoom, 3 / callbacksRef.current.zoom],
             })
@@ -595,7 +1105,7 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
                 y: g.pos - 12 / callbacksRef.current.zoom,
                 text: g.label,
                 fontSize: 9 / callbacksRef.current.zoom,
-                fill: '#10B981',
+                fill: '#101010',
                 fontStyle: 'bold',
               })
             );
@@ -648,14 +1158,273 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
 
       const isModifiedOrAdded = Boolean(el.isUserAdded || el.eraseOriginal);
 
-      if (el.type === 'shape' || el.type === 'border') {
+      if (el.type === 'redaction') {
+        group.add(
+          new Konva.Rect({
+            width: el.width,
+            height: el.height,
+            fill: '#000000',
+            stroke: isPreview
+              ? 'transparent'
+              : el.redactionApplied
+              ? '#525252'
+              : '#FFFFFF',
+            strokeWidth: 1 / zoom,
+            dash: !isPreview && !el.redactionApplied ? [4 / zoom, 2 / zoom] : undefined,
+          })
+        );
+        if (!isPreview) {
+          group.add(
+            new Konva.Text({
+              width: el.width,
+              height: el.height,
+              text: el.redactionApplied ? 'REDACTED' : 'MARKED REDACT',
+              fontSize: Math.max(7, Math.min(10, el.height * 0.55)),
+              fontStyle: 'bold',
+              fill: '#FFFFFF',
+              align: 'center',
+              verticalAlign: 'middle',
+            })
+          );
+        }
+      } else if (el.type === 'draw' && el.points && el.points.length >= 4) {
+        group.add(
+          new Konva.Rect({
+            width: el.width,
+            height: el.height,
+            fill: 'rgba(0,0,0,0.001)',
+          })
+        );
+        group.add(
+          new Konva.Line({
+            points: el.points,
+            stroke: el.color || '#111111',
+            strokeWidth: el.borderWidth ?? 2,
+            lineCap: 'round',
+            lineJoin: 'round',
+            tension: 0.35,
+            hitStrokeWidth: isTouchLargeHandles ? 18 : 8,
+          })
+        );
+      } else if (el.type === 'measure') {
+        const midY = el.height / 2;
+        group.add(
+          new Konva.Rect({
+            width: el.width,
+            height: el.height,
+            fill: 'rgba(0,0,0,0.001)',
+          })
+        );
+        group.add(
+          new Konva.Line({
+            points: [0, midY, el.width, midY],
+            stroke: el.color || '#101010',
+            strokeWidth: el.borderWidth ?? 1.2,
+          })
+        );
+        group.add(
+          new Konva.Line({
+            points: [0, midY - 4, 0, midY + 4],
+            stroke: el.color || '#101010',
+            strokeWidth: 1.2,
+          })
+        );
+        group.add(
+          new Konva.Line({
+            points: [el.width, midY - 4, el.width, midY + 4],
+            stroke: el.color || '#101010',
+            strokeWidth: 1.2,
+          })
+        );
+        group.add(
+          new Konva.Text({
+            x: 0,
+            y: midY - 12,
+            width: Math.max(40, el.width),
+            text: el.text || `${ptToUnit(el.width, measureUnit)} ${measureUnit}`,
+            fontFamily: 'JetBrains Mono, monospace',
+            fontSize: 8.5,
+            fontStyle: 'bold',
+            fill: el.color || '#101010',
+            align: 'center',
+          })
+        );
+      } else if (el.type === 'callout') {
+        if (el.calloutTarget) {
+          group.add(
+            new Konva.Line({
+              points: [
+                el.width / 2,
+                el.height,
+                el.calloutTarget.x - el.x,
+                el.calloutTarget.y - el.y,
+              ],
+              stroke: el.borderColor || el.color || '#111111',
+              strokeWidth: 1.2,
+            })
+          );
+          group.add(
+            new Konva.Circle({
+              x: el.calloutTarget.x - el.x,
+              y: el.calloutTarget.y - el.y,
+              radius: 3,
+              fill: el.borderColor || el.color || '#111111',
+            })
+          );
+        }
+        group.add(
+          new Konva.Rect({
+            width: el.width,
+            height: el.height,
+            fill: el.backgroundColor === 'transparent' ? '#FFFFFF' : el.backgroundColor,
+            stroke: el.borderColor || el.color || '#111111',
+            strokeWidth: el.borderWidth ?? 1.2,
+            cornerRadius: 4,
+          })
+        );
+        group.add(
+          new Konva.Text({
+            width: el.width,
+            height: el.height,
+            text: el.text,
+            fontFamily: mapFontToCanvasCss(el.fontFamily),
+            fontSize: el.fontSize || 10,
+            fill: el.color || '#111111',
+            padding: 4,
+            verticalAlign: 'middle',
+          })
+        );
+      } else if (el.type === 'stamp') {
+        const col = el.color || '#111111';
+        group.add(
+          new Konva.Rect({
+            width: el.width,
+            height: el.height,
+            stroke: col,
+            strokeWidth: el.borderWidth ?? 2,
+            cornerRadius: 4,
+          })
+        );
+        group.add(
+          new Konva.Rect({
+            x: 3,
+            y: 3,
+            width: Math.max(4, el.width - 6),
+            height: Math.max(4, el.height - 6),
+            stroke: col,
+            strokeWidth: 0.8,
+            cornerRadius: 2,
+          })
+        );
+        group.add(
+          new Konva.Text({
+            width: el.width,
+            height: el.stampDate ? el.height * 0.65 : el.height,
+            text: el.stampText || el.text || 'APPROVED',
+            fontFamily: 'Helvetica, Arial, sans-serif',
+            fontSize: Math.max(8, Math.min(el.fontSize || 14, el.height * 0.52)),
+            fontStyle: 'bold',
+            fill: col,
+            align: 'center',
+            verticalAlign: 'middle',
+          })
+        );
+        if (el.stampDate) {
+          group.add(
+            new Konva.Text({
+              y: el.height * 0.6,
+              width: el.width,
+              height: el.height * 0.35,
+              text: el.stampDate,
+              fontFamily: 'JetBrains Mono, monospace',
+              fontSize: 7.5,
+              fontStyle: 'bold',
+              fill: col,
+              align: 'center',
+              verticalAlign: 'middle',
+            })
+          );
+        }
+      } else if (el.type === 'annotation') {
+        const kind = el.annotationKind || 'highlight';
+        const col = el.color || '#111111';
+        if (kind === 'highlight') {
+          group.add(
+            new Konva.Rect({
+              width: el.width,
+              height: el.height,
+              fill: el.backgroundColor !== 'transparent' ? el.backgroundColor : col,
+              opacity: Math.min(0.45, el.opacity ?? 0.32),
+            })
+          );
+        } else if (kind === 'underline' || kind === 'strikeout') {
+          const lineY = kind === 'underline' ? el.height - 2 : el.height / 2;
+          group.add(
+            new Konva.Rect({
+              width: el.width,
+              height: el.height,
+              fill: 'rgba(0,0,0,0.001)',
+            })
+          );
+          group.add(
+            new Konva.Line({
+              points: [0, lineY, el.width, lineY],
+              stroke: col,
+              strokeWidth: el.borderWidth ?? 1.6,
+            })
+          );
+        } else if (kind === 'note') {
+          group.add(
+            new Konva.Rect({
+              width: el.width,
+              height: el.height,
+              fill: '#F5F5F5',
+              stroke: col,
+              strokeWidth: 1.2,
+              cornerRadius: 4,
+            })
+          );
+          group.add(
+            new Konva.Text({
+              width: el.width,
+              height: el.height,
+              text: 'NOTE',
+              fontSize: Math.max(6, Math.min(8, el.width * 0.25)),
+              fontStyle: 'bold',
+              fill: col,
+              align: 'center',
+              verticalAlign: 'middle',
+            })
+          );
+        } else if (kind === 'ellipse') {
+          group.add(
+            new Konva.Ellipse({
+              x: el.width / 2,
+              y: el.height / 2,
+              radiusX: el.width / 2,
+              radiusY: el.height / 2,
+              stroke: col,
+              strokeWidth: el.borderWidth ?? 1.5,
+            })
+          );
+        } else {
+          group.add(
+            new Konva.Rect({
+              width: el.width,
+              height: el.height,
+              stroke: col,
+              strokeWidth: el.borderWidth ?? 1.5,
+            })
+          );
+        }
+      } else if (el.type === 'shape' || el.type === 'border') {
         const strokeColor = isModifiedOrAdded
           ? el.borderColor || el.color || '#1E293B'
           : isSelected
-          ? '#3B82F6'
+          ? '#101010'
           : isPreview
           ? 'transparent'
-          : 'rgba(59, 130, 246, 0.22)';
+          : 'rgba(16, 16, 16, 0.25)';
         const strokeW = isModifiedOrAdded ? el.borderWidth ?? 1.2 : 0.75 / zoom;
 
         if (el.shapeKind === 'circle') {
@@ -672,6 +1441,25 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
               stroke: strokeColor,
               strokeWidth: strokeW,
               hitStrokeWidth: isTouchLargeHandles ? 16 : 6,
+            })
+          );
+        } else if (el.shapeKind === 'arrow') {
+          group.add(
+            new Konva.Rect({
+              width: el.width,
+              height: Math.max(isTouchLargeHandles ? 20 : 12, el.height),
+              fill: 'rgba(0,0,0,0.001)',
+            })
+          );
+          group.add(
+            new Konva.Arrow({
+              points: [0, el.height / 2, el.width, el.height / 2],
+              pointerLength: Math.min(12, Math.max(6, el.width * 0.14)),
+              pointerWidth: Math.min(10, Math.max(5, el.width * 0.12)),
+              fill: strokeColor,
+              stroke: strokeColor,
+              strokeWidth: strokeW,
+              hitStrokeWidth: isTouchLargeHandles ? 18 : 8,
             })
           );
         } else {
@@ -708,31 +1496,58 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
             stroke: isModifiedOrAdded
               ? el.color || '#1E293B'
               : isSelected
-              ? '#3B82F6'
+              ? '#101010'
               : isPreview
               ? 'transparent'
-              : 'rgba(59, 130, 246, 0.25)',
+              : 'rgba(16, 16, 16, 0.28)',
             strokeWidth: isModifiedOrAdded ? el.borderWidth ?? 1.5 : 0.8 / zoom,
             hitStrokeWidth: isTouchLargeHandles ? 18 : 6,
           })
         );
-      } else if (el.type === 'image') {
-        const imgObj = elementImgs[el.id];
-        if (imgObj) {
-          group.add(
-            new Konva.Image({
-              width: el.width,
-              height: el.height,
-              image: imgObj,
-            })
-          );
+      } else if (el.type === 'image' || el.type === 'signature') {
+        const imgEntry = elementImgs[el.id];
+        if (imgEntry?.img) {
+          const imgNode = new Konva.Image({
+            width: el.width,
+            height: el.height,
+            image: imgEntry.img,
+            crop: el.imageCropRect
+              ? {
+                  x: el.imageCropRect.x,
+                  y: el.imageCropRect.y,
+                  width: Math.max(2, el.imageCropRect.width),
+                  height: Math.max(2, el.imageCropRect.height),
+                }
+              : undefined,
+          });
+          if (el.maskShape === 'circle') {
+            group.clipFunc((ctx) => {
+              ctx.beginPath();
+              ctx.ellipse(
+                el.width / 2,
+                el.height / 2,
+                el.width / 2,
+                el.height / 2,
+                0,
+                0,
+                Math.PI * 2
+              );
+            });
+          } else if (el.maskShape === 'rounded') {
+            const rad = Math.min(el.width, el.height) * 0.14;
+            group.clipFunc((ctx) => {
+              ctx.beginPath();
+              ctx.roundRect(0, 0, el.width, el.height, rad);
+            });
+          }
+          group.add(imgNode);
         } else {
           group.add(
             new Konva.Rect({
               width: el.width,
               height: el.height,
-              fill: 'rgba(59, 130, 246, 0.06)',
-              stroke: 'rgba(59, 130, 246, 0.45)',
+              fill: 'rgba(16, 16, 16, 0.04)',
+              stroke: 'rgba(16, 16, 16, 0.4)',
               strokeWidth: 0.8 / zoom,
               dash: [4, 2],
             })
@@ -781,6 +1596,7 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
         const shouldDrawFillAndText = Boolean(
           el.isUserAdded || el.eraseOriginal
         );
+        const typo = shouldDrawFillAndText ? computeTypographyLayout(el) : null;
         group.add(
           new Konva.Rect({
             width: el.width,
@@ -790,41 +1606,83 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
                 ? el.backgroundColor
                 : isPreview
                 ? 'transparent'
-                : 'rgba(59, 130, 246, 0.02)',
+                : 'rgba(16, 16, 16, 0.015)',
             stroke: isPreview
               ? 'transparent'
               : el.needsReview
               ? '#D97706'
               : showBoxOutline
-              ? 'rgba(59, 130, 246, 0.45)'
-              : 'rgba(148, 163, 184, 0.25)',
+              ? 'rgba(16, 16, 16, 0.45)'
+              : 'rgba(115, 115, 115, 0.25)',
             strokeWidth: (el.needsReview ? 1.2 : 0.7) / zoom,
             dash: !isPreview && el.needsReview ? [3 / zoom, 2 / zoom] : undefined,
           })
         );
 
-        if (shouldDrawFillAndText) {
+        if (shouldDrawFillAndText && typo) {
+          const textDeco = [
+            el.underline ? 'underline' : '',
+            el.strikethrough ? 'line-through' : '',
+          ]
+            .filter(Boolean)
+            .join(' ');
           group.add(
             new Konva.Text({
+              y: -(el.baselineOffset || 0),
               width: el.width,
               height: el.height,
               text: el.text,
               fontFamily: mapFontToCanvasCss(el.fontFamily),
-              fontSize: el.fontSize || 11,
-              fontStyle: `${el.fontWeight === 'bold' ? 'bold' : ''} ${
-                el.fontStyle === 'italic' ? 'italic' : ''
-              }`.trim() || 'normal',
+              fontSize: typo.effectiveFontSize,
+              fontStyle:
+                `${el.fontWeight === 'bold' ? 'bold' : ''} ${
+                  el.fontStyle === 'italic' ? 'italic' : ''
+                }`.trim() || 'normal',
+              textDecoration: textDeco || undefined,
+              letterSpacing: el.letterSpacing ?? 0,
+              lineHeight: el.lineHeight ?? 1.2,
               fill: el.color || '#111827',
               align: el.align || 'left',
-              padding: 1,
+              verticalAlign: el.verticalAlign || 'top',
+              wrap: el.textWrap === false ? 'none' : 'word',
+              padding: Math.max(0, el.paddingPt ?? 1),
             })
           );
+          if (!isPreview && typo.isClipped) {
+            group.add(
+              new Konva.Circle({
+                x: el.width - 3 / zoom,
+                y: el.height - 3 / zoom,
+                radius: 2.5 / zoom,
+                fill: '#DC2626',
+                listening: false,
+              })
+            );
+          }
         }
       }
 
-      // Click / single-finger tap selection + long-press trigger
+      // Click / single-finger tap selection + Style Painter + long-press trigger
       group.on('mousedown touchstart', (e) => {
         if (callbacksRef.current.interactionMode === 'preview') return;
+        const activeT = callbacksRef.current.activeTool;
+        if (
+          callbacksRef.current.stylePainterActive ||
+          activeT === 'style_painter'
+        ) {
+          e.cancelBubble = true;
+          callbacksRef.current.onStylePaintTarget?.(el.id);
+          return;
+        }
+        // Let pointer creation tools draw across existing elements instead of selecting background boxes
+        if (
+          activeT !== 'select' &&
+          activeT !== 'marquee' &&
+          activeT !== 'inspect'
+        ) {
+          return;
+        }
+
         e.cancelBubble = true;
         setContextMenu(null);
 
@@ -1013,6 +1871,10 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
         : selectedIds
             .map((id) => nodeMapRef.current.get(id))
             .filter((n): n is Konva.Node => Boolean(n));
+    const lockRatio = elements.some(
+      (el) => selectedIds.includes(el.id) && Boolean(el.lockAspectRatio)
+    );
+    tr.keepRatio(lockRatio);
     tr.nodes(selectedNodes);
     tr.moveToTop();
     layer.batchDraw();
@@ -1026,6 +1888,7 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
     interactionMode,
     isTouchLargeHandles,
     highlightedElementId,
+    measureUnit,
   ]);
 
   // Render content boundary indicator & interactive visual crop handles
@@ -1046,7 +1909,7 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
           y: detectedContentBox.y,
           width: detectedContentBox.width,
           height: detectedContentBox.height,
-          stroke: '#10B981',
+          stroke: '#525252',
           strokeWidth: 1 / zoom,
           dash: [5 / zoom, 3 / zoom],
           listening: false,
@@ -1059,7 +1922,7 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
 
     if (showDimOverlay) {
       const b = activeSourceBox;
-      const maskFill = cropMode ? 'rgba(15, 23, 42, 0.45)' : 'rgba(15, 23, 42, 0.24)';
+      const maskFill = cropMode ? 'rgba(0, 0, 0, 0.46)' : 'rgba(0, 0, 0, 0.24)';
       if (b.y > 0) {
         cropLayer.add(
           new Konva.Rect({
@@ -1118,9 +1981,9 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
         y: b.y,
         width: b.width,
         height: b.height,
-        stroke: '#10B981',
+        stroke: '#101010',
         strokeWidth: 1.5 / zoom,
-        fill: 'rgba(16, 185, 129, 0.04)',
+        fill: 'rgba(16, 16, 16, 0.04)',
         draggable: true,
         dragBoundFunc: (pos) => {
           const z = callbacksRef.current.zoom;
@@ -1177,7 +2040,7 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
           y: activeSourceBox.y,
           width: activeSourceBox.width,
           height: activeSourceBox.height,
-          stroke: '#10B981',
+          stroke: '#404040',
           strokeWidth: 1.2 / zoom,
           listening: false,
         })
@@ -1274,20 +2137,20 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
       onTouchStart={handleContainerTouchStart}
       onTouchMove={handleContainerTouchMove}
       onTouchEnd={handleContainerTouchEnd}
-      className="flex-1 overflow-auto bg-slate-200/75 dark:bg-[#080B11] flex items-start justify-center p-2.5 tablet:p-5 desktop:p-6 relative overscroll-contain"
+      className="flex-1 overflow-auto bg-[#EFEFEF] dark:bg-[#0B0B0B] flex items-start justify-center p-2.5 tablet:p-5 desktop:p-6 relative overscroll-contain"
     >
       <div className="relative inline-block shadow-xl">
         {/* Horizontal Ruler */}
         {effectiveRulers && (
           <div
             style={{ width: stageW, marginLeft: 24 }}
-            className="h-6 bg-slate-100 dark:bg-[#131A26] border border-slate-300 dark:border-slate-800 relative overflow-hidden select-none"
+            className="h-6 bg-[#F7F7F7] dark:bg-[#111111] border border-black/15 dark:border-white/12 relative overflow-hidden select-none"
           >
             {hTicks.map((pt) => (
               <div
                 key={pt}
                 style={{ left: pt * zoom }}
-                className="absolute top-0 bottom-0 border-l border-slate-300 dark:border-slate-700 text-[9px] font-mono text-slate-500 dark:text-slate-400 pl-1 pt-0.5 tabular-nums"
+                className="absolute top-0 bottom-0 border-l border-black/15 dark:border-white/15 text-[9px] font-mono text-[#555555] dark:text-[#858585] pl-1 pt-0.5 tabular-nums"
               >
                 {ptToUnit(pt, pageConfig.unit)}
               </div>
@@ -1300,13 +2163,13 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
           {effectiveRulers && (
             <div
               style={{ height: stageH }}
-              className="w-6 bg-slate-100 dark:bg-[#131A26] border-y border-l border-slate-300 dark:border-slate-800 relative overflow-hidden select-none shrink-0"
+              className="w-6 bg-[#F7F7F7] dark:bg-[#111111] border-y border-l border-black/15 dark:border-white/12 relative overflow-hidden select-none shrink-0"
             >
               {vTicks.map((pt) => (
                 <div
                   key={pt}
                   style={{ top: pt * zoom }}
-                  className="absolute left-0 right-0 border-t border-slate-300 dark:border-slate-700 text-[9px] font-mono text-slate-500 dark:text-slate-400 pl-0.5 pt-0.5 tabular-nums"
+                  className="absolute left-0 right-0 border-t border-black/15 dark:border-white/15 text-[9px] font-mono text-[#555555] dark:text-[#858585] pl-0.5 pt-0.5 tabular-nums"
                 >
                   {Math.round(ptToUnit(pt, pageConfig.unit))}
                 </div>
@@ -1318,10 +2181,24 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
           <div
             style={{
               touchAction: blockStageTouchScroll ? 'none' : 'pan-x pan-y',
+              cursor:
+                stylePainterActive || activeTool === 'style_painter'
+                  ? 'copy'
+                  : activeTool !== 'select' &&
+                    activeTool !== 'marquee' &&
+                    activeTool !== 'inspect'
+                  ? 'crosshair'
+                  : 'default',
             }}
-            className="relative border border-slate-300 dark:border-slate-700 bg-white select-none"
+            className="relative border border-black/20 dark:border-white/15 bg-white select-none"
           >
             <div ref={containerRef} />
+
+            {liveMeasureHint && (
+              <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30 px-2.5 py-1 rounded-lg bg-[#101010] text-white text-[10px] font-mono shadow-lg pointer-events-none tabular-nums whitespace-nowrap">
+                {liveMeasureHint}
+              </div>
+            )}
 
             {/* Inline double-click / double-tap text editor */}
             {inlineElement && (
@@ -1359,7 +2236,7 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
                   fontWeight: inlineElement.fontWeight,
                   color: inlineElement.color,
                 }}
-                className="absolute z-20 p-1.5 bg-white/95 border-2 border-blue-500 rounded-xs outline-none resize-none leading-tight shadow-md"
+                className="absolute z-20 p-1.5 bg-white/95 border-2 border-[#101010] rounded-xs outline-none resize-none leading-tight shadow-md"
               />
             )}
           </div>
@@ -1367,265 +2244,303 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
       </div>
 
       {/* Long-Press / Right-Click Context Menu */}
-      {contextMenu && contextElement && (
-        <div
-          className="fixed inset-0 z-50 bg-black/25 tablet:bg-transparent"
-          onClick={() => setContextMenu(null)}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={
-              viewport.isMobile
-                ? undefined
-                : {
-                    left: Math.min(viewport.width - 230, Math.max(12, contextMenu.x)),
-                    top: Math.min(viewport.height - 320, Math.max(12, contextMenu.y)),
-                  }
-            }
-            className={
-              viewport.isMobile
-                ? 'fixed inset-x-3 bottom-4 z-50 rounded-2xl border glass-level-4 p-2 pb-safe'
-                : 'fixed z-50 w-56 rounded-2xl border glass-level-4 p-1.5'
-            }
+      <AnimatePresence>
+        {contextMenu && contextElement && (
+          <motion.div
+            key="canvas-context-backdrop"
+            variants={modalBackdropVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            className="fixed inset-0 z-50 bg-black/25 tablet:bg-transparent"
+            onClick={() => setContextMenu(null)}
           >
-            <div className="px-3 py-2 flex items-center justify-between border-b border-slate-200/80 dark:border-white/10 mb-1">
-              <div className="min-w-0">
-                <div className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
-                  {contextElement.text || contextElement.type}
+            <motion.div
+              key="canvas-context-menu"
+              variants={
+                viewport.isMobile
+                  ? {
+                      initial: { opacity: 0, y: 24 },
+                      animate: { opacity: 1, y: 0, transition: MOTION_SPRING.sheet },
+                      exit: { opacity: 0, y: 20, pointerEvents: 'none', transition: { duration: MOTION_DURATION.fast } },
+                    }
+                  : popoverVariants
+              }
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              onClick={(e) => e.stopPropagation()}
+              style={
+                viewport.isMobile
+                  ? undefined
+                  : {
+                      left: Math.min(viewport.width - 230, Math.max(12, contextMenu.x)),
+                      top: Math.min(viewport.height - 320, Math.max(12, contextMenu.y)),
+                    }
+              }
+              className={
+                viewport.isMobile
+                  ? 'fixed inset-x-3 bottom-4 z-50 rounded-2xl border glass-level-4 p-2 pb-safe'
+                  : 'fixed z-50 w-56 rounded-2xl border glass-level-4 p-1.5'
+              }
+            >
+              <div className="px-3 py-2 flex items-center justify-between border-b border-black/10 dark:border-white/12 mb-1">
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold text-[#101010] dark:text-white truncate">
+                    {contextElement.text || contextElement.type}
+                  </div>
+                  <div className="text-[10px] text-[#888888] dark:text-[#858585] capitalize">
+                    {contextElement.type.replace('_', ' ')}
+                  </div>
                 </div>
-                <div className="text-[10px] text-slate-500 capitalize">
-                  {contextElement.type.replace('_', ' ')}
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setContextMenu(null)}
+                  className="p-2 text-[#888888] hover:text-[#101010] dark:text-[#858585] dark:hover:text-white transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setContextMenu(null)}
-                className="p-2 text-slate-400 hover:text-slate-900 dark:hover:text-slate-100"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
 
-            <div className="space-y-0.5 text-xs">
-              {!contextElement.locked &&
-                contextElement.type !== 'image' &&
-                contextElement.type !== 'line' &&
-                contextElement.type !== 'shape' && (
+              <div className="space-y-0.5 text-xs">
+                {!contextElement.locked &&
+                  contextElement.type !== 'image' &&
+                  contextElement.type !== 'line' &&
+                  contextElement.type !== 'shape' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (contextElement.type === 'table') {
+                          setTableEditId(contextElement.id);
+                        } else {
+                          setInlineEditId(contextElement.id);
+                          setInlineText(contextElement.text);
+                        }
+                        setContextMenu(null);
+                      }}
+                      className="w-full min-h-[44px] tablet:min-h-[34px] px-3 rounded-lg flex items-center gap-2.5 text-[#101010] dark:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
+                    >
+                      <Edit3 className="w-4 h-4 text-[#101010] dark:text-white" />
+                      {contextElement.type === 'table' ? 'Edit Table Cells' : 'Edit Text'}
+                    </button>
+                  )}
+
+                {onOpenProperties && (
                   <button
                     type="button"
                     onClick={() => {
-                      if (contextElement.type === 'table') {
-                        setTableEditId(contextElement.id);
-                      } else {
-                        setInlineEditId(contextElement.id);
-                        setInlineText(contextElement.text);
-                      }
+                      onSelectIds([contextElement.id]);
+                      onOpenProperties();
                       setContextMenu(null);
                     }}
-                    className="w-full min-h-[44px] tablet:min-h-[34px] px-3 rounded-md flex items-center gap-2.5 text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800"
+                    className="w-full min-h-[44px] tablet:min-h-[34px] px-3 rounded-lg flex items-center gap-2.5 text-[#101010] dark:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
                   >
-                    <Edit3 className="w-4 h-4 text-blue-500" />
-                    {contextElement.type === 'table' ? 'Edit Table Cells' : 'Edit Text'}
+                    <Sliders className="w-4 h-4 text-[#555555] dark:text-[#B5B5B5]" />
+                    Element Properties
                   </button>
                 )}
 
-              {onOpenProperties && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    onSelectIds([contextElement.id]);
-                    onOpenProperties();
-                    setContextMenu(null);
-                  }}
-                  className="w-full min-h-[44px] tablet:min-h-[34px] px-3 rounded-md flex items-center gap-2.5 text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800"
-                >
-                  <Sliders className="w-4 h-4 text-slate-500" />
-                  Element Properties
-                </button>
-              )}
-
-              {onDuplicateElement && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    onDuplicateElement(contextElement.id);
-                    setContextMenu(null);
-                  }}
-                  className="w-full min-h-[44px] tablet:min-h-[34px] px-3 rounded-md flex items-center gap-2.5 text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800"
-                >
-                  <Copy className="w-4 h-4 text-slate-500" />
-                  Duplicate
-                </button>
-              )}
-
-              {onReorderElement && (
-                <div className="grid grid-cols-2 gap-1 px-1 py-0.5">
+                {onDuplicateElement && (
                   <button
                     type="button"
                     onClick={() => {
-                      onReorderElement(contextElement.id, 'forward');
+                      onDuplicateElement(contextElement.id);
                       setContextMenu(null);
                     }}
-                    className="min-h-[44px] tablet:min-h-[32px] px-2 rounded-md flex items-center justify-center gap-1.5 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                    className="w-full min-h-[44px] tablet:min-h-[34px] px-3 rounded-lg flex items-center gap-2.5 text-[#101010] dark:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
                   >
-                    <ArrowUp className="w-3.5 h-3.5" />
-                    Forward
+                    <Copy className="w-4 h-4 text-[#555555] dark:text-[#B5B5B5]" />
+                    Duplicate
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onReorderElement(contextElement.id, 'backward');
-                      setContextMenu(null);
-                    }}
-                    className="min-h-[44px] tablet:min-h-[32px] px-2 rounded-md flex items-center justify-center gap-1.5 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
-                  >
-                    <ArrowDown className="w-3.5 h-3.5" />
-                    Backward
-                  </button>
-                </div>
-              )}
-
-              <button
-                type="button"
-                onClick={() => {
-                  onUpdateElement(contextElement.id, {
-                    locked: !contextElement.locked,
-                  });
-                  setContextMenu(null);
-                }}
-                className="w-full min-h-[44px] tablet:min-h-[34px] px-3 rounded-md flex items-center gap-2.5 text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800"
-              >
-                {contextElement.locked ? (
-                  <>
-                    <Unlock className="w-4 h-4 text-amber-500" />
-                    Unlock Layer
-                  </>
-                ) : (
-                  <>
-                    <Lock className="w-4 h-4 text-slate-500" />
-                    Lock Layer
-                  </>
                 )}
-              </button>
 
-              {onDeleteElement && (
+                {onReorderElement && (
+                  <div className="grid grid-cols-2 gap-1 px-1 py-0.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onReorderElement(contextElement.id, 'forward');
+                        setContextMenu(null);
+                      }}
+                      className="min-h-[44px] tablet:min-h-[32px] px-2 rounded-lg flex items-center justify-center gap-1.5 border border-black/15 dark:border-white/15 text-[#101010] dark:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
+                    >
+                      <ArrowUp className="w-3.5 h-3.5" />
+                      Forward
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onReorderElement(contextElement.id, 'backward');
+                        setContextMenu(null);
+                      }}
+                      className="min-h-[44px] tablet:min-h-[32px] px-2 rounded-lg flex items-center justify-center gap-1.5 border border-black/15 dark:border-white/15 text-[#101010] dark:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
+                    >
+                      <ArrowDown className="w-3.5 h-3.5" />
+                      Backward
+                    </button>
+                  </div>
+                )}
+
                 <button
                   type="button"
                   onClick={() => {
-                    onDeleteElement(contextElement.id);
+                    onUpdateElement(contextElement.id, {
+                      locked: !contextElement.locked,
+                    });
                     setContextMenu(null);
                   }}
-                  className="w-full min-h-[44px] tablet:min-h-[34px] px-3 rounded-md flex items-center gap-2.5 text-red-600 dark:text-red-400 hover:bg-red-500/10"
+                  className="w-full min-h-[44px] tablet:min-h-[34px] px-3 rounded-lg flex items-center gap-2.5 text-[#101010] dark:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
                 >
-                  <Trash2 className="w-4 h-4" />
-                  Delete Element
+                  {contextElement.locked ? (
+                    <>
+                      <Unlock className="w-4 h-4 text-[#101010] dark:text-white" />
+                      Unlock Layer
+                    </>
+                  ) : (
+                    <>
+                      <Lock className="w-4 h-4 text-[#555555] dark:text-[#B5B5B5]" />
+                      Lock Layer
+                    </>
+                  )}
                 </button>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+
+                {onDeleteElement && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onDeleteElement(contextElement.id);
+                      setContextMenu(null);
+                    }}
+                    className="w-full min-h-[44px] tablet:min-h-[34px] px-3 rounded-lg flex items-center gap-2.5 text-[#555555] hover:text-[#101010] dark:text-[#B5B5B5] dark:hover:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Delete Element
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Table Cell Editor Modal */}
-      {tableElement && tableElement.tableData && (
-        <div className="fixed inset-0 z-50 bg-slate-950/45 dark:bg-black/65 backdrop-blur-sm flex items-end tablet:items-center justify-center p-2 tablet:p-4">
-          <div className="w-full max-w-xl max-h-[85dvh] rounded-t-3xl tablet:rounded-2xl border glass-level-4 p-4 tablet:p-5 flex flex-col">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-200/80 dark:border-white/10 shrink-0">
-              <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                Edit Table Cells
-              </h3>
-              <button
-                type="button"
-                onClick={() => setTableEditId(null)}
-                className="min-h-[44px] px-3 text-xs text-slate-500 hover:text-slate-900 dark:hover:text-slate-100"
-              >
-                Done
-              </button>
-            </div>
-            <div className="mt-3 overflow-auto flex-1">
-              <table className="w-full border-collapse text-xs">
-                <tbody>
-                  {tableElement.tableData.rows.map((row, rIdx) => (
-                    <tr key={rIdx}>
-                      {row.map((cell, cIdx) => (
-                        <td
-                          key={cIdx}
-                          className="border border-slate-300 dark:border-slate-700 p-0 min-w-[90px]"
-                        >
-                          <input
-                            type="text"
-                            value={cell}
-                            onChange={(e) => {
-                              const nextRows = tableElement.tableData!.rows.map(
-                                (r, ri) =>
-                                  ri === rIdx
-                                    ? r.map((c, ci) =>
-                                        ci === cIdx ? e.target.value : c
-                                      )
-                                    : r
-                              );
-                              onUpdateElement(tableElement.id, {
-                                tableData: {
-                                  ...tableElement.tableData!,
-                                  rows: nextRows,
-                                },
-                              });
-                            }}
-                            className="w-full min-h-[40px] px-2.5 py-2 bg-transparent text-slate-900 dark:text-slate-100 focus:outline-none focus:bg-blue-500/10"
-                          />
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-2 shrink-0 pb-safe">
-              <div className="flex items-center gap-2">
+      <AnimatePresence>
+        {tableElement && tableElement.tableData && (
+          <motion.div
+            key="table-editor-backdrop"
+            variants={modalBackdropVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            onClick={() => setTableEditId(null)}
+            className="fixed inset-0 z-50 bg-black/40 dark:bg-black/70 backdrop-blur-sm flex items-end tablet:items-center justify-center p-2 tablet:p-4"
+          >
+            <motion.div
+              key="table-editor-panel"
+              variants={modalPanelVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-xl max-h-[85dvh] rounded-t-3xl tablet:rounded-2xl border glass-level-4 p-4 tablet:p-5 flex flex-col"
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-black/10 dark:border-white/12 shrink-0">
+                <h3 className="text-sm font-semibold text-[#101010] dark:text-white">
+                  Edit Table Cells
+                </h3>
                 <button
                   type="button"
-                  onClick={() => {
-                    const colCount = tableElement.tableData!.rows[0]?.length || 2;
-                    onUpdateElement(tableElement.id, {
-                      tableData: {
-                        ...tableElement.tableData!,
-                        rows: [
-                          ...tableElement.tableData!.rows,
-                          Array(colCount).fill(''),
-                        ],
-                      },
-                    });
-                  }}
-                  className="min-h-[44px] px-3 py-2 rounded text-xs border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+                  onClick={() => setTableEditId(null)}
+                  className="min-h-[44px] px-3 text-xs text-[#555555] hover:text-[#101010] dark:text-[#B5B5B5] dark:hover:text-white transition-colors"
                 >
-                  + Row
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onUpdateElement(tableElement.id, {
-                      tableData: {
-                        ...tableElement.tableData!,
-                        rows: tableElement.tableData!.rows.map((r) => [...r, '']),
-                      },
-                    });
-                  }}
-                  className="min-h-[44px] px-3 py-2 rounded text-xs border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
-                >
-                  + Column
+                  Done
                 </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setTableEditId(null)}
-                className="min-h-[44px] px-4 py-2 rounded text-xs font-medium bg-blue-600 text-white hover:bg-blue-700"
-              >
-                Apply Table
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+              <div className="mt-3 overflow-auto flex-1">
+                <table className="w-full border-collapse text-xs">
+                  <tbody>
+                    {tableElement.tableData.rows.map((row, rIdx) => (
+                      <tr key={rIdx}>
+                        {row.map((cell, cIdx) => (
+                          <td
+                            key={cIdx}
+                            className="border border-black/15 dark:border-white/15 p-0 min-w-[90px]"
+                          >
+                            <input
+                              type="text"
+                              value={cell}
+                              onChange={(e) => {
+                                const nextRows = tableElement.tableData!.rows.map(
+                                  (r, ri) =>
+                                    ri === rIdx
+                                      ? r.map((c, ci) =>
+                                          ci === cIdx ? e.target.value : c
+                                        )
+                                      : r
+                                );
+                                onUpdateElement(tableElement.id, {
+                                  tableData: {
+                                    ...tableElement.tableData!,
+                                    rows: nextRows,
+                                  },
+                                });
+                              }}
+                              className="w-full min-h-[40px] px-2.5 py-2 bg-transparent text-[#101010] dark:text-white focus:outline-none focus:bg-black/[0.04] dark:focus:bg-white/[0.06]"
+                            />
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-2 shrink-0 pb-safe">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const colCount = tableElement.tableData!.rows[0]?.length || 2;
+                      onUpdateElement(tableElement.id, {
+                        tableData: {
+                          ...tableElement.tableData!,
+                          rows: [
+                            ...tableElement.tableData!.rows,
+                            Array(colCount).fill(''),
+                          ],
+                        },
+                      });
+                    }}
+                    className="min-h-[44px] px-3 py-2 rounded-lg text-xs border border-black/15 dark:border-white/15 text-[#101010] dark:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
+                  >
+                    + Row
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onUpdateElement(tableElement.id, {
+                        tableData: {
+                          ...tableElement.tableData!,
+                          rows: tableElement.tableData!.rows.map((r) => [...r, '']),
+                        },
+                      });
+                    }}
+                    className="min-h-[44px] px-3 py-2 rounded-lg text-xs border border-black/15 dark:border-white/15 text-[#101010] dark:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
+                  >
+                    + Column
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setTableEditId(null)}
+                  className="min-h-[44px] px-4 py-2 rounded-lg text-xs font-semibold bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] transition-colors active:scale-[0.98]"
+                >
+                  Apply Table
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

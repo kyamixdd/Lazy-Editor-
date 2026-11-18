@@ -1,4 +1,5 @@
 import React, { useRef, useState } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import {
   AlertTriangle,
@@ -11,6 +12,14 @@ import {
   Upload,
   X,
 } from 'lucide-react';
+import {
+  bannerVariants,
+  CARD_HOVER,
+  CARD_TAP,
+  MOTION_EASE,
+  MOTION_SPRING,
+  popoverVariants,
+} from '../config/motionSystem';
 import { PDFProject, StudioSettings } from '../types/pdfStudio';
 import { runOptionalAiEnhancedAnalysis } from '../utils/aiEnhancedAnalysis';
 import { scanPdfLocally } from '../utils/localPdfScanner';
@@ -249,6 +258,7 @@ export const NewProjectView: React.FC<NewProjectViewProps> = ({
   onProjectCreated,
   onUpdateProject,
 }) => {
+  const shouldReduceMotion = useReducedMotion();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cancelScanRef = useRef(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -469,17 +479,19 @@ export const NewProjectView: React.FC<NewProjectViewProps> = ({
 
   return (
     <div className="flex-1 overflow-y-auto p-4 tablet:p-6 desktop:p-8 max-w-5xl mx-auto w-full">
-      <div className="pb-5 tablet:pb-6 border-b border-slate-200/80 dark:border-white/10">
-        <h1 className="text-xl tablet:text-2xl font-display font-semibold tracking-tight text-slate-900 dark:text-slate-100">
+      <div className="pb-5 tablet:pb-6 border-b border-black/10 dark:border-white/12">
+        <h1 className="text-xl tablet:text-2xl font-display font-semibold tracking-tight text-[#101010] dark:text-white">
           New PDF Project
         </h1>
-        <p className="mt-1 text-xs tablet:text-sm text-slate-600 dark:text-slate-400">
+        <p className="mt-1 text-xs tablet:text-sm text-[#555555] dark:text-[#B5B5B5]">
           Upload one or multiple PDFs (multi-page, native text, or scanned) to run a fast, 100% local scan with PDF.js and Tesseract OCR while preserving the original PDF bytes and geometry.
         </p>
       </div>
 
       {/* Dropzone */}
-      <div
+      <motion.div
+        animate={shouldReduceMotion ? undefined : { scale: isDragging ? 1.01 : 1 }}
+        transition={MOTION_SPRING.snappy}
         onDragOver={(e) => {
           e.preventDefault();
           setIsDragging(true);
@@ -493,8 +505,8 @@ export const NewProjectView: React.FC<NewProjectViewProps> = ({
         onClick={() => !isProcessing && fileInputRef.current?.click()}
         className={`mt-5 tablet:mt-6 rounded-2xl border-2 border-dashed p-6 tablet:p-10 text-center cursor-pointer transition-colors touch-manipulation ${
           isDragging
-            ? 'border-blue-500 bg-blue-500/10'
-            : 'glass-level-3 border-slate-300/90 dark:border-white/18 hover:border-blue-500/60'
+            ? 'border-[#101010] bg-black/[0.06] dark:border-white dark:bg-white/[0.08]'
+            : 'glass-level-3 border-black/20 dark:border-white/20 hover:border-black/45 dark:hover:border-white/45'
         }`}
       >
         <input
@@ -505,29 +517,29 @@ export const NewProjectView: React.FC<NewProjectViewProps> = ({
           className="hidden"
           onChange={(e) => void handleFilesSelected(e.target.files)}
         />
-        <Upload className="w-8 h-8 tablet:w-9 tablet:h-9 text-blue-600 dark:text-blue-400 mx-auto mb-3" />
-        <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+        <Upload className="w-8 h-8 tablet:w-9 tablet:h-9 text-[#101010] dark:text-white mx-auto mb-3" />
+        <div className="text-sm font-semibold text-[#101010] dark:text-white">
           Drop PDF files here or tap to browse
         </div>
-        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+        <p className="mt-1 text-xs text-[#555555] dark:text-[#B5B5B5]">
           Supports multiple PDFs, multi-page documents, scanned/image PDFs, and offline local scanning
         </p>
         <div className="mt-4">
-          <span className="inline-flex min-h-[44px] items-center justify-center px-5 py-2 rounded-xl bg-gradient-to-b from-blue-500 to-blue-600 text-white text-xs font-medium shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_8px_20px_-6px_rgba(37,99,235,0.5)]">
+          <span className="inline-flex min-h-[44px] items-center justify-center px-5 py-2 rounded-xl bg-[#101010] text-white dark:bg-white dark:text-[#050505] text-xs font-medium shadow-[0_8px_20px_-8px_rgba(0,0,0,0.45)]">
             Choose PDF File
           </span>
         </div>
-      </div>
+      </motion.div>
 
       {/* Scanning Modes & Options */}
       <div className="mt-4 grid grid-cols-1 tablet:grid-cols-2 gap-3.5 tablet:gap-4">
-        <GlassCard level={3} padding="md" className="flex items-start gap-3 border-emerald-500/35">
-          <Cpu className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+        <GlassCard level={3} padding="md" className="flex items-start gap-3 border-black/15 dark:border-white/18">
+          <Cpu className="w-4 h-4 text-[#101010] dark:text-white shrink-0 mt-0.5" />
           <div>
-            <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+            <div className="text-xs font-semibold text-[#101010] dark:text-white">
               Local PDF Scan — Active Default (No AI credits required)
             </div>
-            <p className="mt-0.5 text-xs text-slate-600 dark:text-slate-400">
+            <p className="mt-0.5 text-xs text-[#555555] dark:text-[#B5B5B5]">
               Extracts text, exact coordinates, fonts, colors, vector lines/borders, images, tables, and repeated receipt blocks locally via PDF.js without calling Gemini API.
             </p>
           </div>
@@ -539,14 +551,14 @@ export const NewProjectView: React.FC<NewProjectViewProps> = ({
               type="checkbox"
               checked={enableOcr}
               onChange={(e) => setEnableOcr(e.target.checked)}
-              className="mt-0.5 rounded border-slate-400 text-blue-600 focus:ring-blue-500"
+              className="mt-0.5 rounded border-black/25 dark:border-white/25"
             />
             <div>
-              <div className="text-xs font-semibold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
-                <ScanText className="w-3.5 h-3.5 text-blue-500" />
+              <div className="text-xs font-semibold text-[#101010] dark:text-white flex items-center gap-1.5">
+                <ScanText className="w-3.5 h-3.5 text-[#101010] dark:text-white" />
                 Local Tesseract OCR for Scanned Pages
               </div>
-              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+              <p className="mt-0.5 text-xs text-[#555555] dark:text-[#B5B5B5]">
                 Runs local browser-based OCR strictly on image-only pages that have minimal embedded PDF text. No AI credits consumed.
               </p>
             </div>
@@ -554,14 +566,14 @@ export const NewProjectView: React.FC<NewProjectViewProps> = ({
         </GlassCard>
       </div>
 
-      <GlassCard level={2} padding="sm" className="mt-3 flex items-start gap-2.5 text-xs text-slate-600 dark:text-slate-400">
-        <Sparkles className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
+      <GlassCard level={2} padding="sm" className="mt-3 flex items-start gap-2.5 text-xs text-[#555555] dark:text-[#B5B5B5]">
+        <Sparkles className="w-4 h-4 text-[#101010] dark:text-white shrink-0 mt-0.5" />
         <div>
-          <span className="font-semibold text-slate-800 dark:text-slate-200">
+          <span className="font-semibold text-[#101010] dark:text-white">
             Optional AI-Enhanced Analysis:
           </span>{' '}
           Never executed automatically on upload. After scanning locally, you can explicitly click{' '}
-          <span className="font-medium text-slate-900 dark:text-slate-100">
+          <span className="font-medium text-[#101010] dark:text-white">
             AI-Enhanced Analysis
           </span>{' '}
           in the Editor&apos;s AI Assist tab or on scanned cards below (requires Gemini API access and may consume AI quota).
@@ -569,178 +581,225 @@ export const NewProjectView: React.FC<NewProjectViewProps> = ({
       </GlassCard>
 
       {/* Progress Bar */}
-      {isProcessing && (
-        <GlassCard level={3} padding="md" className="mt-6 border-blue-500/40">
-          <div className="flex items-center justify-between gap-2 text-xs font-medium text-slate-800 dark:text-slate-200 mb-2">
-            <span className="flex items-center gap-2 min-w-0">
-              <Loader2 className="w-4 h-4 animate-spin text-blue-500 shrink-0" />
-              <span className="truncate">{progressStage}</span>
-            </span>
-            <div className="flex items-center gap-2 shrink-0">
-              <span className="tabular-nums">{progressPercent}%</span>
-              <GlassButton
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  cancelScanRef.current = true;
-                }}
-              >
-                <X className="w-3.5 h-3.5" />
-                Cancel
-              </GlassButton>
-            </div>
-          </div>
-          <div className="w-full h-1.5 rounded-full bg-slate-200/80 dark:bg-white/10 overflow-hidden">
-            <div
-              className="h-full bg-blue-600 transition-all duration-200"
-              style={{ width: `${progressPercent}%` }}
-            />
-          </div>
-        </GlassCard>
-      )}
-
-      {/* Error Notice */}
-      {errorMessage && (
-        <div className="mt-6 p-4 rounded-lg border border-red-500/40 bg-red-500/10 text-xs text-red-700 dark:text-red-300 flex items-start gap-2.5">
-          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-          <div>
-            <div className="font-semibold">Local PDF Scan Error</div>
-            <div className="mt-0.5">{errorMessage}</div>
-          </div>
-        </div>
-      )}
-
-      {/* Optional AI Notice (non-blocking) */}
-      {aiNotice && (
-        <div
-          className={`mt-4 p-4 rounded-lg border text-xs flex items-start gap-2.5 ${
-            aiNotice.kind === 'warning'
-              ? 'border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300'
-              : 'border-blue-500/40 bg-blue-500/10 text-blue-800 dark:text-blue-300'
-          }`}
-        >
-          {aiNotice.kind === 'warning' ? (
-            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-          ) : (
-            <Sparkles className="w-4 h-4 shrink-0 mt-0.5" />
-          )}
-          <div>
-            <div className="font-semibold">
-              {aiNotice.kind === 'warning'
-                ? 'Optional AI-Enhanced Analysis Unavailable'
-                : 'AI-Enhanced Analysis Applied'}
-            </div>
-            <div className="mt-0.5">{aiNotice.message}</div>
-          </div>
-        </div>
-      )}
-
-      {/* Multi-file Results */}
-      {completedProjects.length > 0 && !isProcessing && (
-        <div className="mt-6 p-4 rounded-lg border border-emerald-500/40 bg-emerald-500/5 space-y-3">
-          <div className="flex items-center gap-2 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
-            <CheckCircle2 className="w-4 h-4" />
-            Locally Scanned {completedProjects.length} PDF project(s) — Ready for Editing
-          </div>
-          {completedProjects.map((proj) => {
-            const reviewCount = proj.elements.filter((e) => e.needsReview).length;
-            const enhancingThis = aiEnhancingId === proj.id;
-            return (
-              <div
-                key={proj.id}
-                className="flex flex-col tablet:flex-row tablet:items-center justify-between gap-3 p-3 rounded-md bg-white dark:bg-[#111827] border border-slate-200 dark:border-slate-800 text-xs"
-              >
-                <div>
-                  <div className="font-semibold text-slate-900 dark:text-slate-100">
-                    {proj.name}
-                  </div>
-                  <div className="mt-0.5 text-slate-500 dark:text-slate-400 tabular-nums">
-                    {proj.pageCount} pages · {proj.elements.length} detected elements
-                    {reviewCount > 0 ? ` · ${reviewCount} flagged for manual review` : ''}
-                  </div>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    disabled={Boolean(aiEnhancingId)}
-                    onClick={() => void handleRunExplicitAiEnhance(proj)}
-                    title="Optional Gemini semantic analysis (requires Gemini API access & quota)"
-                    className="min-h-[40px] tablet:min-h-0 px-3 py-1.5 rounded border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 font-medium flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50 touch-manipulation"
+      <AnimatePresence>
+        {isProcessing && (
+          <motion.div
+            key="scan-progress"
+            variants={popoverVariants}
+            initial={shouldReduceMotion ? false : 'initial'}
+            animate="animate"
+            exit="exit"
+          >
+            <GlassCard level={3} padding="md" className="mt-6 border-black/25 dark:border-white/25">
+              <div className="flex items-center justify-between gap-2 text-xs font-medium text-[#101010] dark:text-white mb-2">
+                <span className="flex items-center gap-2 min-w-0">
+                  <Loader2 className="w-4 h-4 animate-spin text-[#101010] dark:text-white shrink-0" />
+                  <span className="truncate">{progressStage}</span>
+                </span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="tabular-nums">{progressPercent}%</span>
+                  <GlassButton
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      cancelScanRef.current = true;
+                    }}
                   >
-                    {enhancingThis ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500" />
-                    ) : (
-                      <Sparkles className="w-3.5 h-3.5 text-blue-500" />
-                    )}
-                    {enhancingThis ? 'Enhancing...' : 'AI-Enhanced Analysis'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onProjectCreated(proj, true)}
-                    className="min-h-[40px] tablet:min-h-0 px-3 py-1.5 rounded bg-blue-600 text-white font-medium hover:bg-blue-700 whitespace-nowrap touch-manipulation"
-                  >
-                    Open in Editor
-                  </button>
+                    <X className="w-3.5 h-3.5" />
+                    Cancel
+                  </GlassButton>
                 </div>
               </div>
-            );
-          })}
-        </div>
-      )}
+              <div className="w-full h-1.5 rounded-full bg-black/10 dark:bg-white/12 overflow-hidden">
+                <motion.div
+                  className="h-full bg-[#101010] dark:bg-white glass-progress-fill"
+                  initial={false}
+                  animate={{ width: `${progressPercent}%` }}
+                  transition={{ duration: 0.22, ease: MOTION_EASE.liquid }}
+                />
+              </div>
+            </GlassCard>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Error Notice */}
+      <AnimatePresence>
+        {errorMessage && (
+          <motion.div
+            key="scan-error"
+            variants={bannerVariants}
+            initial={shouldReduceMotion ? false : 'initial'}
+            animate="animate"
+            exit="exit"
+            className="mt-6 p-4 rounded-xl border border-red-500/40 bg-red-500/8 text-xs text-red-700 dark:text-red-300 flex items-start gap-2.5"
+          >
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            <div>
+              <div className="font-semibold">Local PDF Scan Error</div>
+              <div className="mt-0.5">{errorMessage}</div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Optional AI Notice (non-blocking) */}
+      <AnimatePresence>
+        {aiNotice && (
+          <motion.div
+            key="ai-notice"
+            variants={bannerVariants}
+            initial={shouldReduceMotion ? false : 'initial'}
+            animate="animate"
+            exit="exit"
+            className={`mt-4 p-4 rounded-xl border text-xs flex items-start gap-2.5 glass-level-3 ${
+              aiNotice.kind === 'warning'
+                ? 'border-amber-500/40 text-amber-800 dark:text-amber-300'
+                : 'border-black/20 dark:border-white/20 text-[#101010] dark:text-white'
+            }`}
+          >
+            {aiNotice.kind === 'warning' ? (
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            ) : (
+              <Sparkles className="w-4 h-4 shrink-0 mt-0.5" />
+            )}
+            <div>
+              <div className="font-semibold">
+                {aiNotice.kind === 'warning'
+                  ? 'Optional AI-Enhanced Analysis Unavailable'
+                  : 'AI-Enhanced Analysis Applied'}
+              </div>
+              <div className="mt-0.5 text-[#555555] dark:text-[#B5B5B5]">{aiNotice.message}</div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Multi-file Results */}
+      <AnimatePresence>
+        {completedProjects.length > 0 && !isProcessing && (
+          <motion.div
+            key="scan-results"
+            variants={popoverVariants}
+            initial={shouldReduceMotion ? false : 'initial'}
+            animate="animate"
+            exit="exit"
+          >
+            <GlassCard level={3} padding="md" className="mt-6 border-black/20 dark:border-white/20 space-y-3">
+              <div className="flex items-center gap-2 text-xs font-semibold text-[#101010] dark:text-white">
+                <CheckCircle2 className="w-4 h-4" />
+                Locally Scanned {completedProjects.length} PDF project(s) — Ready for Editing
+              </div>
+              {completedProjects.map((proj) => {
+                const reviewCount = proj.elements.filter((e) => e.needsReview).length;
+                const enhancingThis = aiEnhancingId === proj.id;
+                return (
+                  <div
+                    key={proj.id}
+                    className="flex flex-col tablet:flex-row tablet:items-center justify-between gap-3 p-3 rounded-xl bg-[#F7F7F7] dark:bg-[#0B0B0B] border border-black/10 dark:border-white/12 text-xs"
+                  >
+                    <div>
+                      <div className="font-semibold text-[#101010] dark:text-white">
+                        {proj.name}
+                      </div>
+                      <div className="mt-0.5 text-[#555555] dark:text-[#B5B5B5] tabular-nums">
+                        {proj.pageCount} pages · {proj.elements.length} detected elements
+                        {reviewCount > 0 ? ` · ${reviewCount} flagged for manual review` : ''}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={Boolean(aiEnhancingId)}
+                        onClick={() => void handleRunExplicitAiEnhance(proj)}
+                        title="Optional Gemini semantic analysis (requires Gemini API access & quota)"
+                        className="min-h-[40px] tablet:min-h-0 px-3 py-1.5 rounded-lg glass-level-2 border border-black/15 dark:border-white/15 text-[#101010] dark:text-white hover:bg-black/[0.04] dark:hover:bg-white/[0.08] font-medium flex items-center gap-1.5 whitespace-nowrap disabled:opacity-50 touch-manipulation"
+                      >
+                        {enhancingThis ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Sparkles className="w-3.5 h-3.5" />
+                        )}
+                        {enhancingThis ? 'Enhancing...' : 'AI-Enhanced Analysis'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onProjectCreated(proj, true)}
+                        className="min-h-[40px] tablet:min-h-0 px-3.5 py-1.5 rounded-lg bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] font-medium whitespace-nowrap touch-manipulation"
+                      >
+                        Open in Editor
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </GlassCard>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Create Sample or Blank PDF Documents */}
-      <div className="mt-8 pt-6 border-t border-slate-200/80 dark:border-white/10">
-        <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+      <div className="mt-8 pt-6 border-t border-black/10 dark:border-white/12">
+        <h2 className="text-sm font-semibold text-[#101010] dark:text-white">
           Or Create a Sample or Blank PDF Document
         </h2>
-        <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+        <p className="mt-1 text-xs text-[#555555] dark:text-[#B5B5B5]">
           Creates a vector PDF locally via pdf-lib and scans its layout structure with 0 AI credits used.
         </p>
         <div className="mt-4 grid grid-cols-1 tablet:grid-cols-3 gap-3">
-          <button
+          <motion.button
             type="button"
             disabled={isProcessing}
+            whileHover={shouldReduceMotion || isProcessing ? undefined : CARD_HOVER}
+            whileTap={shouldReduceMotion || isProcessing ? undefined : CARD_TAP}
+            transition={MOTION_SPRING.snappy}
             onClick={() => void handleCreateStarter('dual_receipt')}
-            className="p-4 rounded-2xl border glass-level-3 glass-interactive hover:border-blue-500/50 text-left disabled:opacity-50"
+            className="p-4 rounded-2xl border glass-level-3 glass-interactive text-left disabled:opacity-50"
           >
-            <FileText className="w-4 h-4 text-blue-500 mb-2" />
-            <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+            <FileText className="w-4 h-4 text-[#101010] dark:text-white mb-2" />
+            <div className="text-xs font-semibold text-[#101010] dark:text-white">
               Dual-Block Receipt Sheet
             </div>
-            <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+            <div className="mt-0.5 text-[11px] text-[#555555] dark:text-[#B5B5B5]">
               2 repeated receipt blocks for testing independent serial sequences
             </div>
-          </button>
+          </motion.button>
 
-          <button
+          <motion.button
             type="button"
             disabled={isProcessing}
+            whileHover={shouldReduceMotion || isProcessing ? undefined : CARD_HOVER}
+            whileTap={shouldReduceMotion || isProcessing ? undefined : CARD_TAP}
+            transition={MOTION_SPRING.snappy}
             onClick={() => void handleCreateStarter('invoice')}
-            className="p-4 rounded-2xl border glass-level-3 glass-interactive hover:border-blue-500/50 text-left disabled:opacity-50"
+            className="p-4 rounded-2xl border glass-level-3 glass-interactive text-left disabled:opacity-50"
           >
-            <FileText className="w-4 h-4 text-blue-500 mb-2" />
-            <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+            <FileText className="w-4 h-4 text-[#101010] dark:text-white mb-2" />
+            <div className="text-xs font-semibold text-[#101010] dark:text-white">
               Standard Invoice PDF
             </div>
-            <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+            <div className="mt-0.5 text-[11px] text-[#555555] dark:text-[#B5B5B5]">
               Structured header, invoice number, customer block & line table
             </div>
-          </button>
+          </motion.button>
 
-          <button
+          <motion.button
             type="button"
             disabled={isProcessing}
+            whileHover={shouldReduceMotion || isProcessing ? undefined : CARD_HOVER}
+            whileTap={shouldReduceMotion || isProcessing ? undefined : CARD_TAP}
+            transition={MOTION_SPRING.snappy}
             onClick={() => void handleCreateStarter('blank')}
-            className="p-4 rounded-2xl border glass-level-3 glass-interactive hover:border-blue-500/50 text-left disabled:opacity-50"
+            className="p-4 rounded-2xl border glass-level-3 glass-interactive text-left disabled:opacity-50"
           >
-            <FileText className="w-4 h-4 text-blue-500 mb-2" />
-            <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+            <FileText className="w-4 h-4 text-[#101010] dark:text-white mb-2" />
+            <div className="text-xs font-semibold text-[#101010] dark:text-white">
               Blank A4 PDF Canvas
             </div>
-            <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+            <div className="mt-0.5 text-[11px] text-[#555555] dark:text-[#B5B5B5]">
               Empty vector PDF ready for custom text, shapes, tables & logos
             </div>
-          </button>
+          </motion.button>
         </div>
       </div>
     </div>

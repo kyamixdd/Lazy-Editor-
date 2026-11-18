@@ -22,7 +22,7 @@ export const BrandMark: React.FC<BrandMarkProps> = ({
   return (
     <div
       aria-hidden="true"
-      className={`${sizeClasses} bg-gradient-to-br from-blue-500 via-blue-600 to-indigo-600 text-white flex items-center justify-center shrink-0 border border-white/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.45),0_6px_16px_-4px_rgba(37,99,235,0.45)] ${className}`}
+      className={`${sizeClasses} bg-[#101010] text-white dark:bg-white dark:text-[#050505] flex items-center justify-center shrink-0 border border-black/15 dark:border-white/40 shadow-[inset_0_1px_0_rgba(255,255,255,0.22),0_6px_16px_-6px_rgba(0,0,0,0.45)] ${className}`}
     >
       <svg
         viewBox="0 0 24 24"

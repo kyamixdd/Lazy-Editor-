@@ -1,4 +1,6 @@
-import React from 'react';
+import React, { useId } from 'react';
+import { LayoutGroup, motion, useReducedMotion } from 'motion/react';
+import { MOTION_DURATION, MOTION_SPRING } from '../../config/motionSystem';
 
 export interface SegmentedOption<T extends string> {
   value: T;
@@ -19,35 +21,52 @@ export function GlassSegmentedControl<T extends string>({
   onChange,
   className = '',
 }: GlassSegmentedControlProps<T>) {
+  const groupId = useId();
+  const prefersReduced = useReducedMotion();
+
   return (
-    <div
-      role="tablist"
-      className={`inline-flex items-center gap-1 p-1 rounded-xl glass-level-2 border overflow-x-auto max-w-full no-scrollbar ${className}`}
-    >
-      {options.map((opt) => {
-        const active = opt.value === value;
-        return (
-          <button
-            key={opt.value}
-            type="button"
-            role="tab"
-            aria-selected={active}
-            onClick={() => onChange(opt.value)}
-            className={`min-h-[38px] tablet:min-h-[32px] px-3 py-1 rounded-lg text-xs font-medium whitespace-nowrap touch-manipulation transition-[background-color,color,box-shadow] duration-150 flex items-center gap-1.5 ${
-              active
-                ? 'bg-white dark:bg-white/14 text-slate-900 dark:text-white shadow-sm border border-slate-200/80 dark:border-white/15'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100 border border-transparent'
-            }`}
-          >
-            <span>{opt.label}</span>
-            {typeof opt.count === 'number' && (
-              <span className="text-[11px] opacity-70 tabular-nums">
-                {opt.count}
-              </span>
-            )}
-          </button>
-        );
-      })}
-    </div>
+    <LayoutGroup id={`seg-${groupId}`}>
+      <div
+        role="tablist"
+        className={`inline-flex items-center gap-1 p-1 rounded-xl glass-level-2 border overflow-x-auto max-w-full no-scrollbar ${className}`}
+      >
+        {options.map((opt) => {
+          const active = opt.value === value;
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => onChange(opt.value)}
+              className={`relative min-h-[38px] tablet:min-h-[32px] px-3 py-1 rounded-lg text-xs font-medium whitespace-nowrap touch-manipulation transition-colors duration-150 flex items-center gap-1.5 ${
+                active
+                  ? 'text-white dark:text-[#050505]'
+                  : 'text-[#555555] dark:text-[#B5B5B5] hover:text-[#101010] dark:hover:text-white'
+              }`}
+            >
+              {active && (
+                <motion.span
+                  layoutId={`seg-pill-${groupId}`}
+                  transition={
+                    prefersReduced
+                      ? { duration: MOTION_DURATION.instant }
+                      : MOTION_SPRING.nav
+                  }
+                  className="absolute inset-0 rounded-lg bg-[#101010] dark:bg-white shadow-sm border border-black/15 dark:border-white/30"
+                  aria-hidden="true"
+                />
+              )}
+              <span className="relative z-10">{opt.label}</span>
+              {typeof opt.count === 'number' && (
+                <span className="relative z-10 text-[11px] opacity-70 tabular-nums">
+                  {opt.count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </LayoutGroup>
   );
 }

@@ -1,4 +1,6 @@
 import React from 'react';
+import { motion, useReducedMotion, type HTMLMotionProps } from 'motion/react';
+import { CARD_HOVER, CARD_TAP, MOTION_SPRING } from '../../config/motionSystem';
 
 export type GlassLevel = 1 | 2 | 3 | 4;
 
@@ -30,11 +32,25 @@ export const GlassCard: React.FC<GlassCardProps> = ({
   children,
   ...rest
 }) => {
+  const prefersReduced = useReducedMotion();
+
+  if (interactive) {
+    return (
+      <motion.div
+        whileHover={!prefersReduced ? CARD_HOVER : undefined}
+        whileTap={!prefersReduced ? CARD_TAP : undefined}
+        transition={MOTION_SPRING.snappy}
+        className={`rounded-2xl border ${LEVEL_CLASS[level]} ${PADDING_CLASS[padding]} glass-interactive cursor-pointer ${className}`}
+        {...(rest as HTMLMotionProps<'div'>)}
+      >
+        {children}
+      </motion.div>
+    );
+  }
+
   return (
     <div
-      className={`rounded-2xl border ${LEVEL_CLASS[level]} ${PADDING_CLASS[padding]} ${
-        interactive ? 'glass-interactive cursor-pointer' : ''
-      } ${className}`}
+      className={`rounded-2xl border ${LEVEL_CLASS[level]} ${PADDING_CLASS[padding]} ${className}`}
       {...rest}
     >
       {children}

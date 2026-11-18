@@ -60,6 +60,8 @@ export const DEFAULT_SETTINGS: StudioSettings = {
   inspectorWidthPx: 320,
   hiddenEditorTools: [],
   recentTools: ['text', 'rect', 'line', 'table'],
+  recentFonts: ['Helvetica', 'Times-Roman', 'Courier'],
+  favoriteFonts: ['Helvetica', 'Plus Jakarta Sans'],
   shortcuts: DEFAULT_SHORTCUTS,
   autoSnapshotIntervalSec: 120,
 };

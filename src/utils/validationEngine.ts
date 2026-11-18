@@ -1,6 +1,7 @@
 import { AssetFontItem, PDFProject, ValidationIssue } from '../types/pdfStudio';
 import { computeSheetLayout } from './geometryEngine';
 import { generateSerialPreview } from './serialEngine';
+import { computeTypographyLayout } from './typographyEngine';
 import { validatePageConfigDimensions } from './units';
 
 const STANDARD_PDF_FONTS = new Set([
@@ -97,39 +98,31 @@ export function validateProject(
       });
     }
 
-    // Text overflow estimate
+    // Text overflow & clipping telemetry via shared typographyEngine
     if (
       (el.type === 'text' ||
         el.type === 'heading' ||
         el.type === 'invoice_number' ||
-        el.type === 'receipt_number') &&
+        el.type === 'receipt_number' ||
+        el.type === 'callout') &&
       el.text.trim().length > 0
     ) {
-      const avgCharWidth = el.fontSize * 0.56;
-      const lines = el.text.split('\n');
-      const longestLine = Math.max(...lines.map((l) => l.length));
-      const estimatedRequiredWidth = longestLine * avgCharWidth;
-      const estimatedLines = Math.max(
-        lines.length,
-        Math.ceil(estimatedRequiredWidth / Math.max(20, el.width))
-      );
-      const estimatedRequiredHeight = estimatedLines * el.fontSize * 1.25;
-
-      if (estimatedRequiredHeight > el.height + 6) {
+      const typo = computeTypographyLayout(el);
+      if (typo.isOverflowingY || typo.isOverflowingX) {
         issues.push({
           id: `qc-overflow-${el.id}`,
-          severity: 'warning',
-          category: 'text_overflow',
+          severity: typo.isOverflowingY && el.height < typo.effectiveFontSize * 1.1 ? 'error' : 'warning',
+          category: typo.isClipped ? 'clipping' : 'text_overflow',
           elementId: el.id,
           pageNumber: el.pageNumber,
-          message: `Potential text overflow in "${el.text.slice(0, 24)}" (box height ${Math.round(el.height)}pt vs est. ${Math.round(estimatedRequiredHeight)}pt).`,
+          message: `Text overflow/clipping in "${el.text.slice(0, 24)}" (box ${Math.round(el.width)}×${Math.round(el.height)}pt vs content ${Math.round(typo.totalTextWidthPt)}×${Math.round(typo.totalTextHeightPt)}pt).`,
           autoFixLabel: 'Expand Box Height',
         });
       }
     }
 
-    // Missing images & Effective DPI Resolution Check (Module 5)
-    if (el.type === 'image') {
+    // Missing images, Effective DPI & Aspect Ratio Distortion Check
+    if (el.type === 'image' || el.type === 'signature') {
       if (el.isUserAdded && !el.imageDataUrl) {
         issues.push({
           id: `qc-img-${el.id}`,
@@ -140,6 +133,22 @@ export function validateProject(
           message: `Image element on Page ${el.pageNumber} has no image source attached.`,
         });
       } else if (el.imageNaturalWidth && el.imageNaturalHeight && el.width > 1 && el.height > 1) {
+        const srcW = el.imageCropRect ? Math.max(1, el.imageCropRect.width) : el.imageNaturalWidth;
+        const srcH = el.imageCropRect ? Math.max(1, el.imageCropRect.height) : el.imageNaturalHeight;
+        const naturalRatio = srcW / srcH;
+        const boxRatio = el.width / el.height;
+        const distortion = Math.abs(boxRatio - naturalRatio) / Math.max(0.01, naturalRatio);
+        if (distortion > 0.22) {
+          issues.push({
+            id: `qc-img-ratio-${el.id}`,
+            severity: 'warning',
+            category: 'aspect_ratio',
+            elementId: el.id,
+            pageNumber: el.pageNumber,
+            message: `Distorted aspect ratio (${Math.round(distortion * 100)}% stretch) on "${el.text || 'Image'}" (Page ${el.pageNumber}).`,
+          });
+        }
+
         const dpiX = el.imageNaturalWidth / (el.width / 72);
         const dpiY = el.imageNaturalHeight / (el.height / 72);
         const effDpi = Math.round(Math.min(dpiX, dpiY));
@@ -454,6 +463,53 @@ export function validateProject(
           message: `Required mapped field "${col.name}" has ${emptyCount} empty row(s) in Data Manager.`,
         });
       }
+    }
+  }
+
+  // 8. Unexpected blank page/region check
+  for (let p = 1; p <= Math.max(1, project.pageCount); p++) {
+    const pageMeta = project.originalPages.find((pg) => pg.pageNumber === p);
+    const visibleOnPage = visibleElements.filter((e) => e.pageNumber === p);
+    const hasOriginalContent = Boolean(
+      project.sourcePdfBase64 && pageMeta && !pageMeta.isBlankInserted
+    );
+    if (!hasOriginalContent && visibleOnPage.length === 0) {
+      issues.push({
+        id: `qc-blank-p${p}`,
+        severity: 'warning',
+        category: 'blank_region',
+        pageNumber: p,
+        message: `Page ${p} has no visible elements or source PDF content (blank page).`,
+      });
+    }
+  }
+
+  // 9. Inconsistent styling across repeated/mapped fields
+  const fieldStyleGroups = new Map<string, typeof visibleElements>();
+  for (const el of visibleElements) {
+    if (!el.fieldKey) continue;
+    const arr = fieldStyleGroups.get(el.fieldKey) || [];
+    arr.push(el);
+    fieldStyleGroups.set(el.fieldKey, arr);
+  }
+  for (const [fKey, group] of fieldStyleGroups.entries()) {
+    if (group.length < 2) continue;
+    const base = group[0];
+    const mismatch = group.find(
+      (other) =>
+        other.fontFamily !== base.fontFamily ||
+        Math.abs(other.fontSize - base.fontSize) > 1.5 ||
+        other.fontWeight !== base.fontWeight
+    );
+    if (mismatch) {
+      issues.push({
+        id: `qc-inconsistent-${fKey}`,
+        severity: 'warning',
+        category: 'inconsistent_repeated',
+        elementId: mismatch.id,
+        pageNumber: mismatch.pageNumber,
+        message: `Repeated field "${fKey}" has inconsistent typography (${mismatch.fontFamily} ${mismatch.fontSize}pt vs ${base.fontFamily} ${base.fontSize}pt).`,
+      });
     }
   }
 

@@ -229,7 +229,9 @@ export function computeSmartSnapAndGuides(
 
   const pageCenterX = options.canvasW / 2;
   const xPairs: Array<[number, number, number]> = [
-    [x, pageCenterX - w / 2, pageCenterX],
+    [x, 0, 0],
+    [x + w, options.canvasW, options.canvasW],
+    [x + w / 2, pageCenterX, pageCenterX],
   ];
 
   let bestDy = tol + 1;
@@ -238,7 +240,9 @@ export function computeSmartSnapAndGuides(
 
   const pageCenterY = options.canvasH / 2;
   const yPairs: Array<[number, number, number]> = [
-    [y, pageCenterY - h / 2, pageCenterY],
+    [y, 0, 0],
+    [y + h, options.canvasH, options.canvasH],
+    [y + h / 2, pageCenterY, pageCenterY],
   ];
 
   for (const other of otherElements) {

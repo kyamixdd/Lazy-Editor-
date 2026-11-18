@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
   AlertTriangle,
   ArrowRight,
@@ -6,6 +7,7 @@ import {
   ShieldCheck,
   Wrench,
 } from 'lucide-react';
+import { MOTION_DURATION, MOTION_EASE } from '../config/motionSystem';
 import {
   AssetFontItem,
   PDFProject,
@@ -35,6 +37,7 @@ export const PreflightView: React.FC<PreflightViewProps> = ({
   onGoToExport,
   onGoToDataManager,
 }) => {
+  const shouldReduceMotion = useReducedMotion();
   const [filter, setFilter] = useState<FilterGroup>('all');
 
   const issues = useMemo(
@@ -70,7 +73,10 @@ export const PreflightView: React.FC<PreflightViewProps> = ({
         issue.category === 'page_dimensions' ||
         issue.category === 'misaligned_block' ||
         issue.category === 'layout_drift' ||
-        issue.category === 'clipping'
+        issue.category === 'clipping' ||
+        issue.category === 'aspect_ratio' ||
+        issue.category === 'blank_region' ||
+        issue.category === 'inconsistent_repeated'
       );
     }
     if (filter === 'fonts') {
@@ -207,12 +213,12 @@ export const PreflightView: React.FC<PreflightViewProps> = ({
 
   return (
     <div className="flex-1 overflow-y-auto p-4 tablet:p-6 desktop:p-8 max-w-6xl mx-auto w-full space-y-6">
-      <div className="flex flex-col tablet:flex-row tablet:items-center justify-between gap-4 pb-5 border-b border-slate-200/80 dark:border-white/10">
+      <div className="flex flex-col tablet:flex-row tablet:items-center justify-between gap-4 pb-5 border-b border-black/10 dark:border-white/12">
         <div>
-          <h1 className="text-xl tablet:text-2xl font-display font-semibold tracking-tight text-slate-900 dark:text-slate-100">
+          <h1 className="text-xl tablet:text-2xl font-display font-semibold tracking-tight text-[#101010] dark:text-white">
             PDF Quality Inspection (Preflight)
           </h1>
-          <p className="mt-1 text-xs tablet:text-sm text-slate-600 dark:text-slate-400">
+          <p className="mt-1 text-xs tablet:text-sm text-[#555555] dark:text-[#B5B5B5]">
             Comprehensive pre-production check across geometry, typography, image DPI resolution, serial rules, and layout drift.
           </p>
         </div>
@@ -226,46 +232,46 @@ export const PreflightView: React.FC<PreflightViewProps> = ({
       {/* Summary Cards */}
       <div className="grid grid-cols-2 tablet:grid-cols-4 gap-3 text-xs tabular-nums">
         <GlassCard level={3} padding="md">
-          <div className="text-[11px] text-slate-500">Blocking Errors</div>
+          <div className="text-[11px] text-[#888888] dark:text-[#858585]">Blocking Errors</div>
           <div
             className={`mt-1 text-2xl font-semibold ${
               errorsCount > 0
                 ? 'text-red-600 dark:text-red-400'
-                : 'text-emerald-600 dark:text-emerald-400'
+                : 'text-[#101010] dark:text-white'
             }`}
           >
             {errorsCount}
           </div>
         </GlassCard>
         <GlassCard level={3} padding="md">
-          <div className="text-[11px] text-slate-500">Quality Warnings</div>
+          <div className="text-[11px] text-[#888888] dark:text-[#858585]">Quality Warnings</div>
           <div
             className={`mt-1 text-2xl font-semibold ${
               warningsCount > 0
                 ? 'text-amber-600 dark:text-amber-400'
-                : 'text-slate-900 dark:text-slate-100'
+                : 'text-[#101010] dark:text-white'
             }`}
           >
             {warningsCount}
           </div>
         </GlassCard>
         <GlassCard level={3} padding="md">
-          <div className="text-[11px] text-slate-500">Custom Fonts Active</div>
-          <div className="mt-1 text-2xl font-semibold text-slate-900 dark:text-slate-100">
+          <div className="text-[11px] text-[#888888] dark:text-[#858585]">Custom Fonts Active</div>
+          <div className="mt-1 text-2xl font-semibold text-[#101010] dark:text-white">
             {customFonts.length}
           </div>
         </GlassCard>
         <GlassCard level={3} padding="md">
-          <div className="text-[11px] text-slate-500">Data Hygiene Flags</div>
+          <div className="text-[11px] text-[#888888] dark:text-[#858585]">Data Hygiene Flags</div>
           <div className="mt-1 flex items-baseline justify-between">
-            <span className="text-2xl font-semibold text-slate-900 dark:text-slate-100">
+            <span className="text-2xl font-semibold text-[#101010] dark:text-white">
               {dataQuality.totalIssues}
             </span>
             {dataQuality.totalIssues > 0 && (
               <button
                 type="button"
                 onClick={onGoToDataManager}
-                className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline font-medium"
+                className="text-[11px] text-[#101010] dark:text-white hover:underline font-medium"
               >
                 Inspect Data
               </button>
@@ -291,111 +297,121 @@ export const PreflightView: React.FC<PreflightViewProps> = ({
 
       {/* Issues List */}
       <GlassCard level={3} padding="none" className="overflow-hidden">
-        <div className="px-5 py-3.5 border-b border-slate-200/75 dark:border-white/10 flex items-center justify-between text-xs">
-          <div className="flex items-center gap-2 font-semibold text-slate-900 dark:text-slate-100">
-            <ShieldCheck className="w-4 h-4 text-blue-500" />
+        <div className="px-5 py-3.5 border-b border-black/10 dark:border-white/12 flex items-center justify-between text-xs">
+          <div className="flex items-center gap-2 font-semibold text-[#101010] dark:text-white">
+            <ShieldCheck className="w-4 h-4 text-[#101010] dark:text-white" />
             Inspection Results
           </div>
-          <span className="text-slate-500 dark:text-slate-400 tabular-nums">
+          <span className="text-[#888888] dark:text-[#858585] tabular-nums">
             {filtered.length} item(s) displayed
           </span>
         </div>
 
-        {filtered.length === 0 ? (
-          <div className="p-10 text-center space-y-2">
-            <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto" />
-            <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-              No issues detected in this category
-            </div>
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Geometry, margins, serial numbering, fonts, and embedded assets meet preflight requirements.
-            </p>
-          </div>
-        ) : (
-          <div className="divide-y divide-slate-200 dark:divide-slate-800">
-            {filtered.map((issue) => (
-              <div
-                key={issue.id}
-                className="px-5 py-3.5 flex flex-col tablet:flex-row tablet:items-center justify-between gap-3 text-xs"
-              >
-                <div className="flex items-start gap-3 min-w-0">
-                  <AlertTriangle
-                    className={`w-4 h-4 shrink-0 mt-0.5 ${
-                      issue.severity === 'error'
-                        ? 'text-red-500'
-                        : 'text-amber-500'
-                    }`}
-                  />
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span
-                        className={`font-semibold uppercase text-[10px] ${
-                          issue.severity === 'error'
-                            ? 'text-red-500'
-                            : 'text-amber-500'
-                        }`}
-                      >
-                        {issue.severity}
-                      </span>
-                      <span className="text-slate-400">·</span>
-                      <span className="text-[11px] text-slate-500 capitalize">
-                        {issue.category.replace(/_/g, ' ')}
-                      </span>
-                      {issue.pageNumber && (
-                        <>
-                          <span className="text-slate-400">·</span>
-                          <span className="text-[11px] text-slate-500 tabular-nums">
-                            Page {issue.pageNumber}
-                          </span>
-                        </>
-                      )}
-                      {issue.effectiveDpi !== undefined && (
-                        <>
-                          <span className="text-slate-400">·</span>
-                          <span className="text-[11px] font-mono text-amber-600 dark:text-amber-400 tabular-nums">
-                            {issue.effectiveDpi} DPI
-                          </span>
-                        </>
-                      )}
-                    </div>
-                    <div className="mt-1 text-slate-800 dark:text-slate-200">
-                      {issue.message}
-                    </div>
-                    {issue.detail && (
-                      <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
-                        {issue.detail}
-                      </div>
-                    )}
-                  </div>
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={filter}
+            initial={shouldReduceMotion ? { opacity: 1 } : { opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: -3 }}
+            transition={{ duration: MOTION_DURATION.fast, ease: MOTION_EASE.liquid }}
+          >
+            {filtered.length === 0 ? (
+              <div className="p-10 text-center space-y-2">
+                <CheckCircle2 className="w-8 h-8 text-[#101010] dark:text-white mx-auto" />
+                <div className="text-sm font-semibold text-[#101010] dark:text-white">
+                  No issues detected in this category
                 </div>
-
-                <div className="flex items-center gap-2 shrink-0">
-                  {issue.autoFixLabel && (
-                    <button
-                      type="button"
-                      onClick={() => handleAutoFix(issue)}
-                      className="min-h-[36px] px-3 py-1.5 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 font-medium flex items-center gap-1.5"
-                    >
-                      <Wrench className="w-3.5 h-3.5" />
-                      {issue.autoFixLabel}
-                    </button>
-                  )}
-                  {(issue.elementId || issue.pageNumber) && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onInspectElement(issue.pageNumber || 1, issue.elementId)
-                      }
-                      className="min-h-[36px] px-3 py-1.5 rounded bg-blue-600/10 text-blue-600 dark:text-blue-400 hover:bg-blue-600/20 font-medium"
-                    >
-                      Go to Element
-                    </button>
-                  )}
-                </div>
+                <p className="text-xs text-[#555555] dark:text-[#B5B5B5]">
+                  Geometry, margins, serial numbering, fonts, and embedded assets meet preflight requirements.
+                </p>
               </div>
-            ))}
-          </div>
-        )}
+            ) : (
+              <div className="divide-y divide-black/10 dark:divide-white/10">
+                {filtered.map((issue) => (
+                  <div
+                    key={issue.id}
+                    className="px-5 py-3.5 flex flex-col tablet:flex-row tablet:items-center justify-between gap-3 text-xs"
+                  >
+                    <div className="flex items-start gap-3 min-w-0">
+                      <AlertTriangle
+                        className={`w-4 h-4 shrink-0 mt-0.5 ${
+                          issue.severity === 'error'
+                            ? 'text-red-600 dark:text-red-400'
+                            : 'text-amber-600 dark:text-amber-400'
+                        }`}
+                      />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span
+                            className={`font-semibold uppercase text-[10px] ${
+                              issue.severity === 'error'
+                                ? 'text-red-600 dark:text-red-400'
+                                : 'text-amber-600 dark:text-amber-400'
+                            }`}
+                          >
+                            {issue.severity}
+                          </span>
+                          <span className="text-[#888888] dark:text-[#858585]">·</span>
+                          <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5] capitalize">
+                            {issue.category.replace(/_/g, ' ')}
+                          </span>
+                          {issue.pageNumber && (
+                            <>
+                              <span className="text-[#888888] dark:text-[#858585]">·</span>
+                              <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5] tabular-nums">
+                                Page {issue.pageNumber}
+                              </span>
+                            </>
+                          )}
+                          {issue.effectiveDpi !== undefined && (
+                            <>
+                              <span className="text-[#888888] dark:text-[#858585]">·</span>
+                              <span className="text-[11px] font-mono text-amber-600 dark:text-amber-400 tabular-nums">
+                                {issue.effectiveDpi} DPI
+                              </span>
+                            </>
+                          )}
+                        </div>
+                        <div className="mt-1 text-[#101010] dark:text-white">
+                          {issue.message}
+                        </div>
+                        {issue.detail && (
+                          <div className="mt-0.5 text-[11px] text-[#555555] dark:text-[#B5B5B5]">
+                            {issue.detail}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      {issue.autoFixLabel && (
+                        <button
+                          type="button"
+                          onClick={() => handleAutoFix(issue)}
+                          className="min-h-[36px] px-3 py-1.5 rounded-xl border border-black/15 dark:border-white/15 hover:bg-black/[0.04] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white font-medium flex items-center gap-1.5"
+                        >
+                          <Wrench className="w-3.5 h-3.5" />
+                          {issue.autoFixLabel}
+                        </button>
+                      )}
+                      {(issue.elementId || issue.pageNumber) && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onInspectElement(issue.pageNumber || 1, issue.elementId)
+                          }
+                          className="min-h-[36px] px-3 py-1.5 rounded-xl bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] font-medium transition-colors"
+                        >
+                          Go to Element
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </motion.div>
+        </AnimatePresence>
       </GlassCard>
     </div>
   );

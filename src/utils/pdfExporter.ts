@@ -4,11 +4,14 @@ import {
   clip,
   degrees,
   endPath,
+  PDFArray,
   PDFDocument,
   PDFEmbeddedPage,
   PDFFont,
   PDFImage,
+  PDFName,
   PDFPage,
+  PDFString,
   popGraphicsState,
   pushGraphicsState,
   rectangle,
@@ -19,11 +22,15 @@ import {
   AssetFontItem,
   DocumentElement,
   PDFProject,
+  RectPt,
 } from '../types/pdfStudio';
 import { formatCellValue } from './dataFormulaEngine';
 import { computeSheetLayout, SheetLayoutPlan, SlotGeometry } from './geometryEngine';
 import { base64ToUint8Array, renderSinglePagePreview } from './pdfRenderer';
+import { renderSanitizedRedactedPagePng } from './redactionEngine';
+import { applyRestorationToDataUrl } from './restorationEngine';
 import { computeSerialValueForSlot } from './serialEngine';
+import { computeTypographyLayout } from './typographyEngine';
 
 function hexToRgb(hex: string) {
   const clean = (hex || '#000000').replace('#', '');
@@ -132,6 +139,156 @@ function mapSlotPoint(
   }
 }
 
+/**
+ * Computes exact PDF-space coordinates for a point `(localDx, localDyFromTop)` inside an element
+ * whose Konva rotation pivots around its top-left `(el.x, el.y)` clockwise by `el.rotation` deg.
+ */
+function rotateAroundKonvaTopLeft(
+  elX: number,
+  elYTop: number,
+  localDx: number,
+  localDyFromTop: number,
+  rotDegClockwise: number,
+  localHeight: number
+): { u: number; v: number } {
+  if (!rotDegClockwise) {
+    return { u: elX + localDx, v: localHeight - (elYTop + localDyFromTop) };
+  }
+  const rad = (rotDegClockwise * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const screenX = elX + localDx * cos - localDyFromTop * sin;
+  const screenY = elYTop + localDx * sin + localDyFromTop * cos;
+  return { u: screenX, v: localHeight - screenY };
+}
+
+function appendPdfAnnotationEntry(
+  pdfDoc: PDFDocument,
+  page: PDFPage,
+  opts: {
+    subtype: 'Highlight' | 'Underline' | 'StrikeOut' | 'Text' | 'Square' | 'Circle' | 'FreeText';
+    rect: [number, number, number, number];
+    contents?: string;
+    colorHex?: string;
+  }
+) {
+  try {
+    const context = pdfDoc.context;
+    const c = hexToRgb(opts.colorHex || '#111111');
+    const cObj =
+      c.type === 'RGB'
+        ? [c.red, c.green, c.blue]
+        : [0.1, 0.1, 0.1];
+    const annotDict = context.obj({
+      Type: PDFName.of('Annot'),
+      Subtype: PDFName.of(opts.subtype),
+      Rect: opts.rect,
+      Contents: PDFString.of(opts.contents || ''),
+      C: cObj,
+      F: 4, // Print flag
+    });
+    const annotRef = context.register(annotDict);
+    const existingAnnots = page.node.lookupMaybe(PDFName.of('Annots'), PDFArray);
+    if (existingAnnots) {
+      existingAnnots.push(annotRef);
+    } else {
+      page.node.set(PDFName.of('Annots'), context.obj([annotRef]));
+    }
+  } catch {
+    // Non-fatal if viewer dictionary registration fails
+  }
+}
+
+async function prepareImageBytesForExport(
+  dataUrl: string,
+  cropRect?: RectPt,
+  maskShape?: 'none' | 'rect' | 'rounded' | 'circle',
+  quality?: number
+): Promise<{ bytes: Uint8Array; isPng: boolean } | null> {
+  const needsCanvasTransform =
+    Boolean(cropRect && cropRect.width > 1 && cropRect.height > 1) ||
+    maskShape === 'circle' ||
+    maskShape === 'rounded' ||
+    (quality !== undefined && quality < 0.99);
+
+  if (!needsCanvasTransform || typeof document === 'undefined') {
+    const isPng = dataUrl.startsWith('data:image/png');
+    return {
+      bytes: base64ToUint8Array(dataUrl.replace(/^data:image\/\w+;base64,/, '')),
+      isPng,
+    };
+  }
+
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.crossOrigin = 'anonymous';
+      i.onload = () => resolve(i);
+      i.onerror = reject;
+      i.src = dataUrl;
+    });
+
+    const sx = cropRect ? Math.max(0, cropRect.x) : 0;
+    const sy = cropRect ? Math.max(0, cropRect.y) : 0;
+    const sw = cropRect
+      ? Math.max(2, Math.min(img.naturalWidth - sx, cropRect.width))
+      : img.naturalWidth;
+    const sh = cropRect
+      ? Math.max(2, Math.min(img.naturalHeight - sy, cropRect.height))
+      : img.naturalHeight;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(2, Math.round(sw));
+    canvas.height = Math.max(2, Math.round(sh));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    if (maskShape === 'circle') {
+      ctx.beginPath();
+      ctx.ellipse(
+        canvas.width / 2,
+        canvas.height / 2,
+        canvas.width / 2,
+        canvas.height / 2,
+        0,
+        0,
+        Math.PI * 2
+      );
+      ctx.clip();
+    } else if (maskShape === 'rounded') {
+      const r = Math.min(canvas.width, canvas.height) * 0.14;
+      ctx.beginPath();
+      ctx.roundRect(0, 0, canvas.width, canvas.height, r);
+      ctx.clip();
+    }
+
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+
+    const hasAlphaMask =
+      maskShape === 'circle' || maskShape === 'rounded' || dataUrl.startsWith('data:image/png');
+    const outMime = hasAlphaMask && (quality === undefined || quality >= 0.95)
+      ? 'image/png'
+      : 'image/jpeg';
+    const outUrl =
+      outMime === 'image/jpeg'
+        ? canvas.toDataURL('image/jpeg', Math.max(0.25, Math.min(1, quality ?? 0.92)))
+        : canvas.toDataURL('image/png');
+    canvas.width = 0;
+    canvas.height = 0;
+
+    return {
+      bytes: base64ToUint8Array(outUrl.replace(/^data:image\/\w+;base64,/, '')),
+      isPng: outMime === 'image/png',
+    };
+  } catch {
+    const isPng = dataUrl.startsWith('data:image/png');
+    return {
+      bytes: base64ToUint8Array(dataUrl.replace(/^data:image\/\w+;base64,/, '')),
+      isPng,
+    };
+  }
+}
+
 async function drawElementOntoPage(
   pdfDoc: PDFDocument,
   page: PDFPage,
@@ -147,6 +304,7 @@ async function drawElementOntoPage(
 
   const localHeight = slotTransform ? slotTransform.slotHeightPt : pageHeightPt;
   const x = el.x;
+  const elRot = el.rotation || 0;
   const pdfYBottom = localHeight - el.y - el.height;
 
   const toPagePt = (u: number, v: number, extraDeg = 0) => {
@@ -157,6 +315,22 @@ async function drawElementOntoPage(
       y: mapped.y,
       rotate: totalDeg !== 0 ? degrees(totalDeg) : undefined,
     };
+  };
+
+  const toElementBottomLeftPt = (
+    localDx: number,
+    localDyFromTop: number,
+    boxHeightFromTop: number
+  ) => {
+    const anchor = rotateAroundKonvaTopLeft(
+      el.x,
+      el.y,
+      localDx,
+      localDyFromTop + boxHeightFromTop,
+      elRot,
+      localHeight
+    );
+    return toPagePt(anchor.u, anchor.v, elRot ? -elRot : 0);
   };
 
   if (el.eraseOriginal && el.sourceOriginalRect) {
@@ -174,8 +348,29 @@ async function drawElementOntoPage(
 
   if (!el.visible) return;
 
-  if (el.backgroundColor && el.backgroundColor !== 'transparent') {
-    const pos = toPagePt(x, pdfYBottom, el.rotation ? -el.rotation : 0);
+  // Redaction boxes
+  if (el.type === 'redaction') {
+    const pos = toElementBottomLeftPt(0, 0, el.height);
+    page.drawRectangle({
+      x: pos.x,
+      y: pos.y,
+      width: el.width,
+      height: el.height,
+      color: rgb(0, 0, 0),
+      opacity: 1,
+      rotate: pos.rotate,
+    });
+    return;
+  }
+
+  // Background fill box (non-annotation shapes/text)
+  if (
+    el.backgroundColor &&
+    el.backgroundColor !== 'transparent' &&
+    el.type !== 'annotation' &&
+    el.type !== 'stamp'
+  ) {
+    const pos = toElementBottomLeftPt(0, 0, el.height);
     page.drawRectangle({
       x: pos.x,
       y: pos.y,
@@ -189,10 +384,305 @@ async function drawElementOntoPage(
 
   const isModifiedOrAdded = Boolean(el.isUserAdded || el.eraseOriginal);
 
+  // Freehand Draw (Ink)
+  if (el.type === 'draw' && el.points && el.points.length >= 4) {
+    const strokeCol = hexToRgb(el.color || '#111111');
+    const thickness = Math.max(0.75, el.borderWidth ?? 2);
+    for (let i = 0; i < el.points.length - 2; i += 2) {
+      const p1Local = rotateAroundKonvaTopLeft(
+        el.x,
+        el.y,
+        el.points[i],
+        el.points[i + 1],
+        elRot,
+        localHeight
+      );
+      const p2Local = rotateAroundKonvaTopLeft(
+        el.x,
+        el.y,
+        el.points[i + 2],
+        el.points[i + 3],
+        elRot,
+        localHeight
+      );
+      const p1 = toPagePt(p1Local.u, p1Local.v);
+      const p2 = toPagePt(p2Local.u, p2Local.v);
+      page.drawLine({
+        start: { x: p1.x, y: p1.y },
+        end: { x: p2.x, y: p2.y },
+        thickness,
+        color: strokeCol,
+        opacity: el.opacity ?? 1,
+      });
+    }
+    return;
+  }
+
+  // Measurement line
+  if (el.type === 'measure') {
+    const midY = el.height / 2;
+    const startL = rotateAroundKonvaTopLeft(el.x, el.y, 0, midY, elRot, localHeight);
+    const endL = rotateAroundKonvaTopLeft(el.x, el.y, el.width, midY, elRot, localHeight);
+    const p1 = toPagePt(startL.u, startL.v);
+    const p2 = toPagePt(endL.u, endL.v);
+    const col = hexToRgb(el.color || '#111111');
+    page.drawLine({
+      start: { x: p1.x, y: p1.y },
+      end: { x: p2.x, y: p2.y },
+      thickness: Math.max(0.8, el.borderWidth ?? 1.2),
+      color: col,
+    });
+    // End ticks
+    const tick1a = rotateAroundKonvaTopLeft(el.x, el.y, 0, midY - 4, elRot, localHeight);
+    const tick1b = rotateAroundKonvaTopLeft(el.x, el.y, 0, midY + 4, elRot, localHeight);
+    const tick2a = rotateAroundKonvaTopLeft(el.x, el.y, el.width, midY - 4, elRot, localHeight);
+    const tick2b = rotateAroundKonvaTopLeft(el.x, el.y, el.width, midY + 4, elRot, localHeight);
+    const t1a = toPagePt(tick1a.u, tick1a.v);
+    const t1b = toPagePt(tick1b.u, tick1b.v);
+    const t2a = toPagePt(tick2a.u, tick2a.v);
+    const t2b = toPagePt(tick2b.u, tick2b.v);
+    page.drawLine({ start: { x: t1a.x, y: t1a.y }, end: { x: t1b.x, y: t1b.y }, thickness: 1, color: col });
+    page.drawLine({ start: { x: t2a.x, y: t2a.y }, end: { x: t2b.x, y: t2b.y }, thickness: 1, color: col });
+
+    if (el.text) {
+      const labelPos = toPagePt(
+        (p1.x + p2.x) / 2 - Math.min(28, el.text.length * 2.5),
+        (p1.y + p2.y) / 2 + 5
+      );
+      page.drawText(el.text, {
+        x: labelPos.x,
+        y: labelPos.y,
+        size: 8.5,
+        font: fonts.helveticaBold,
+        color: col,
+      });
+    }
+    return;
+  }
+
+  // Callout (leader line + pointer + box + text)
+  if (el.type === 'callout') {
+    const pos = toElementBottomLeftPt(0, 0, el.height);
+    page.drawRectangle({
+      x: pos.x,
+      y: pos.y,
+      width: el.width,
+      height: el.height,
+      color: hexToRgb(el.backgroundColor === 'transparent' ? '#FFFFFF' : el.backgroundColor),
+      borderColor: hexToRgb(el.borderColor || el.color || '#111111'),
+      borderWidth: el.borderWidth ?? 1.2,
+      opacity: el.opacity ?? 1,
+      rotate: pos.rotate,
+    });
+    if (el.calloutTarget) {
+      const startPt = toPagePt(el.x + el.width / 2, localHeight - (el.y + el.height));
+      const endPt = toPagePt(el.calloutTarget.x, localHeight - el.calloutTarget.y);
+      page.drawLine({
+        start: { x: startPt.x, y: startPt.y },
+        end: { x: endPt.x, y: endPt.y },
+        thickness: 1.1,
+        color: hexToRgb(el.borderColor || el.color || '#111111'),
+      });
+      page.drawEllipse({
+        x: endPt.x,
+        y: endPt.y,
+        xScale: 2.6,
+        yScale: 2.6,
+        color: hexToRgb(el.borderColor || el.color || '#111111'),
+      });
+    }
+    if (el.text) {
+      const tPos = toElementBottomLeftPt(4, (el.fontSize || 10) + 4, 0);
+      page.drawText(el.text, {
+        x: tPos.x,
+        y: tPos.y,
+        size: Math.max(6, el.fontSize || 10),
+        font: pickFont(el, fonts),
+        color: hexToRgb(el.color || '#111111'),
+        maxWidth: Math.max(12, el.width - 8),
+        rotate: tPos.rotate,
+      });
+    }
+    appendPdfAnnotationEntry(pdfDoc, page, {
+      subtype: 'FreeText',
+      rect: [x, pdfYBottom, x + el.width, pdfYBottom + el.height],
+      contents: el.text,
+      colorHex: el.borderColor || '#111111',
+    });
+    return;
+  }
+
+  // Stamp
+  if (el.type === 'stamp') {
+    const col = hexToRgb(el.color || '#111111');
+    const outer = toElementBottomLeftPt(0, 0, el.height);
+    page.drawRectangle({
+      x: outer.x,
+      y: outer.y,
+      width: el.width,
+      height: el.height,
+      borderColor: col,
+      borderWidth: el.borderWidth ?? 2,
+      opacity: el.opacity ?? 0.9,
+      rotate: outer.rotate,
+    });
+    const inner = toElementBottomLeftPt(3, 3, Math.max(4, el.height - 6));
+    page.drawRectangle({
+      x: inner.x,
+      y: inner.y,
+      width: Math.max(4, el.width - 6),
+      height: Math.max(4, el.height - 6),
+      borderColor: col,
+      borderWidth: 0.8,
+      opacity: el.opacity ?? 0.9,
+      rotate: inner.rotate,
+    });
+    const label = el.stampText || el.text || 'APPROVED';
+    const fontSize = Math.max(8, Math.min(el.fontSize || 14, el.height * 0.55));
+    const lw = fonts.helveticaBold.widthOfTextAtSize(label, fontSize);
+    const tAnchor = rotateAroundKonvaTopLeft(
+      el.x,
+      el.y,
+      Math.max(4, (el.width - lw) / 2),
+      el.stampDate ? el.height * 0.45 : el.height * 0.58,
+      elRot,
+      localHeight
+    );
+    const tPos = toPagePt(tAnchor.u, tAnchor.v, elRot ? -elRot : 0);
+    page.drawText(label, {
+      x: tPos.x,
+      y: tPos.y,
+      size: fontSize,
+      font: fonts.helveticaBold,
+      color: col,
+      rotate: tPos.rotate,
+    });
+    if (el.stampDate) {
+      const dw = fonts.courierBold.widthOfTextAtSize(el.stampDate, 7.5);
+      const dAnchor = rotateAroundKonvaTopLeft(
+        el.x,
+        el.y,
+        Math.max(4, (el.width - dw) / 2),
+        el.height * 0.78,
+        elRot,
+        localHeight
+      );
+      const dPos = toPagePt(dAnchor.u, dAnchor.v, elRot ? -elRot : 0);
+      page.drawText(el.stampDate, {
+        x: dPos.x,
+        y: dPos.y,
+        size: 7.5,
+        font: fonts.courierBold,
+        color: col,
+        rotate: dPos.rotate,
+      });
+    }
+    return;
+  }
+
+  // Annotations
+  if (el.type === 'annotation') {
+    const kind = el.annotationKind || 'highlight';
+    const col = hexToRgb(el.color || '#111111');
+    if (kind === 'highlight') {
+      const pos = toElementBottomLeftPt(0, 0, el.height);
+      page.drawRectangle({
+        x: pos.x,
+        y: pos.y,
+        width: el.width,
+        height: el.height,
+        color: col,
+        opacity: Math.min(0.45, el.opacity ?? 0.25),
+        rotate: pos.rotate,
+      });
+      appendPdfAnnotationEntry(pdfDoc, page, {
+        subtype: 'Highlight',
+        rect: [x, pdfYBottom, x + el.width, pdfYBottom + el.height],
+        contents: el.commentText || el.text,
+        colorHex: el.color || '#111111',
+      });
+    } else if (kind === 'underline' || kind === 'strikeout') {
+      const yOff = kind === 'underline' ? el.height - 2 : el.height / 2;
+      const p1L = rotateAroundKonvaTopLeft(el.x, el.y, 0, yOff, elRot, localHeight);
+      const p2L = rotateAroundKonvaTopLeft(el.x, el.y, el.width, yOff, elRot, localHeight);
+      const p1 = toPagePt(p1L.u, p1L.v);
+      const p2 = toPagePt(p2L.u, p2L.v);
+      page.drawLine({
+        start: { x: p1.x, y: p1.y },
+        end: { x: p2.x, y: p2.y },
+        thickness: Math.max(1.2, el.borderWidth ?? 1.5),
+        color: col,
+      });
+      appendPdfAnnotationEntry(pdfDoc, page, {
+        subtype: kind === 'underline' ? 'Underline' : 'StrikeOut',
+        rect: [x, pdfYBottom, x + el.width, pdfYBottom + el.height],
+        contents: el.commentText || el.text,
+        colorHex: el.color || '#111111',
+      });
+    } else if (kind === 'note') {
+      const pos = toElementBottomLeftPt(0, 0, el.height);
+      page.drawRectangle({
+        x: pos.x,
+        y: pos.y,
+        width: el.width,
+        height: el.height,
+        color: hexToRgb('#F3F4F6'),
+        borderColor: col,
+        borderWidth: 1,
+        rotate: pos.rotate,
+      });
+      appendPdfAnnotationEntry(pdfDoc, page, {
+        subtype: 'Text',
+        rect: [x, pdfYBottom, x + el.width, pdfYBottom + el.height],
+        contents: el.commentText || el.text || 'Note',
+        colorHex: el.color || '#111111',
+      });
+    } else if (kind === 'ellipse') {
+      const cAnchor = rotateAroundKonvaTopLeft(el.x, el.y, el.width / 2, el.height / 2, elRot, localHeight);
+      const pos = toPagePt(cAnchor.u, cAnchor.v);
+      page.drawEllipse({
+        x: pos.x,
+        y: pos.y,
+        xScale: el.width / 2,
+        yScale: el.height / 2,
+        borderColor: col,
+        borderWidth: el.borderWidth ?? 1.5,
+        opacity: el.opacity ?? 0.9,
+      });
+      appendPdfAnnotationEntry(pdfDoc, page, {
+        subtype: 'Circle',
+        rect: [x, pdfYBottom, x + el.width, pdfYBottom + el.height],
+        contents: el.commentText || el.text,
+        colorHex: el.color || '#111111',
+      });
+    } else {
+      const pos = toElementBottomLeftPt(0, 0, el.height);
+      page.drawRectangle({
+        x: pos.x,
+        y: pos.y,
+        width: el.width,
+        height: el.height,
+        borderColor: col,
+        borderWidth: el.borderWidth ?? 1.5,
+        opacity: el.opacity ?? 0.9,
+        rotate: pos.rotate,
+      });
+      appendPdfAnnotationEntry(pdfDoc, page, {
+        subtype: 'Square',
+        rect: [x, pdfYBottom, x + el.width, pdfYBottom + el.height],
+        contents: el.commentText || el.text,
+        colorHex: el.color || '#111111',
+      });
+    }
+    return;
+  }
+
+  // Shapes & Borders
   if (el.type === 'shape' || el.type === 'border') {
     if (isModifiedOrAdded) {
       if (el.shapeKind === 'circle') {
-        const pos = toPagePt(x + el.width / 2, pdfYBottom + el.height / 2);
+        const cAnchor = rotateAroundKonvaTopLeft(el.x, el.y, el.width / 2, el.height / 2, elRot, localHeight);
+        const pos = toPagePt(cAnchor.u, cAnchor.v);
         const swapped =
           slotTransform && (slotTransform.rot === 90 || slotTransform.rot === 270);
         page.drawEllipse({
@@ -208,8 +698,31 @@ async function drawElementOntoPage(
               : undefined,
           opacity: el.opacity ?? 1,
         });
+      } else if (el.shapeKind === 'arrow') {
+        const midY = el.height / 2;
+        const p1L = rotateAroundKonvaTopLeft(el.x, el.y, 0, midY, elRot, localHeight);
+        const p2L = rotateAroundKonvaTopLeft(el.x, el.y, el.width, midY, elRot, localHeight);
+        const p1 = toPagePt(p1L.u, p1L.v);
+        const p2 = toPagePt(p2L.u, p2L.v);
+        const col = hexToRgb(el.borderColor || el.color || '#1E293B');
+        const thick = Math.max(1, el.borderWidth ?? 1.8);
+        page.drawLine({
+          start: { x: p1.x, y: p1.y },
+          end: { x: p2.x, y: p2.y },
+          thickness: thick,
+          color: col,
+          opacity: el.opacity ?? 1,
+        });
+        // Arrowhead wings
+        const wingLen = Math.min(10, Math.max(5, el.width * 0.14));
+        const wTopL = rotateAroundKonvaTopLeft(el.x, el.y, el.width - wingLen, midY - wingLen * 0.55, elRot, localHeight);
+        const wBotL = rotateAroundKonvaTopLeft(el.x, el.y, el.width - wingLen, midY + wingLen * 0.55, elRot, localHeight);
+        const wt = toPagePt(wTopL.u, wTopL.v);
+        const wb = toPagePt(wBotL.u, wBotL.v);
+        page.drawLine({ start: { x: p2.x, y: p2.y }, end: { x: wt.x, y: wt.y }, thickness: thick, color: col });
+        page.drawLine({ start: { x: p2.x, y: p2.y }, end: { x: wb.x, y: wb.y }, thickness: thick, color: col });
       } else {
-        const pos = toPagePt(x, pdfYBottom, el.rotation ? -el.rotation : 0);
+        const pos = toElementBottomLeftPt(0, 0, el.height);
         page.drawRectangle({
           x: pos.x,
           y: pos.y,
@@ -227,9 +740,11 @@ async function drawElementOntoPage(
 
   if (el.type === 'line') {
     if (isModifiedOrAdded) {
-      const midY = pdfYBottom + el.height / 2;
-      const p1 = toPagePt(x, midY);
-      const p2 = toPagePt(x + el.width, midY);
+      const midY = el.height / 2;
+      const p1L = rotateAroundKonvaTopLeft(el.x, el.y, 0, midY, elRot, localHeight);
+      const p2L = rotateAroundKonvaTopLeft(el.x, el.y, el.width, midY, elRot, localHeight);
+      const p1 = toPagePt(p1L.u, p1L.v);
+      const p2 = toPagePt(p2L.u, p2L.v);
       page.drawLine({
         start: { x: p1.x, y: p1.y },
         end: { x: p2.x, y: p2.y },
@@ -241,20 +756,25 @@ async function drawElementOntoPage(
     return;
   }
 
-  if (el.type === 'image' && el.imageDataUrl) {
+  // Images & Signatures
+  if ((el.type === 'image' || el.type === 'signature') && el.imageDataUrl) {
     try {
-      let embedded = imageCache.get(el.imageDataUrl);
+      const cacheKey = `${el.imageDataUrl.slice(0, 48)}:${JSON.stringify(el.imageCropRect || '')}:${el.maskShape || ''}:${el.imageCompressionQuality || ''}`;
+      let embedded = imageCache.get(cacheKey);
       if (!embedded) {
-        const isPng = el.imageDataUrl.startsWith('data:image/png');
-        const imgBytes = base64ToUint8Array(
-          el.imageDataUrl.replace(/^data:image\/\w+;base64,/, '')
+        const prepared = await prepareImageBytesForExport(
+          el.imageDataUrl,
+          el.imageCropRect,
+          el.maskShape,
+          el.imageCompressionQuality
         );
-        embedded = isPng
-          ? await pdfDoc.embedPng(imgBytes)
-          : await pdfDoc.embedJpg(imgBytes);
-        imageCache.set(el.imageDataUrl, embedded);
+        if (!prepared) return;
+        embedded = prepared.isPng
+          ? await pdfDoc.embedPng(prepared.bytes)
+          : await pdfDoc.embedJpg(prepared.bytes);
+        imageCache.set(cacheKey, embedded);
       }
-      const pos = toPagePt(x, pdfYBottom, el.rotation ? -el.rotation : 0);
+      const pos = toElementBottomLeftPt(0, 0, el.height);
       page.drawImage(embedded, {
         x: pos.x,
         y: pos.y,
@@ -269,6 +789,7 @@ async function drawElementOntoPage(
     return;
   }
 
+  // Tables
   if (el.type === 'table' && el.tableData && isModifiedOrAdded) {
     const { rows, borderColor, headerBgColor, headerRow, cellPadding } =
       el.tableData;
@@ -280,10 +801,10 @@ async function drawElementOntoPage(
     const boldFont = fonts.helveticaBold;
 
     for (let rIdx = 0; rIdx < rowCount; rIdx++) {
-      const cellY = localHeight - el.y - (rIdx + 1) * rowH;
       for (let cIdx = 0; cIdx < colCount; cIdx++) {
-        const cellX = x + cIdx * colW;
-        const rectPos = toPagePt(cellX, cellY);
+        const localDx = cIdx * colW;
+        const localDyTop = rIdx * rowH;
+        const rectPos = toElementBottomLeftPt(localDx, localDyTop, rowH);
         page.drawRectangle({
           x: rectPos.x,
           y: rectPos.y,
@@ -299,14 +820,20 @@ async function drawElementOntoPage(
         });
         const cellText = String(rows[rIdx]?.[cIdx] ?? '');
         if (cellText) {
-          const textPos = toPagePt(
-            cellX + (cellPadding || 4),
-            cellY + rowH / 2 - (el.fontSize || 9) * 0.35
+          const textSize = Math.min(el.fontSize || 9, rowH * 0.65);
+          const tAnchor = rotateAroundKonvaTopLeft(
+            el.x,
+            el.y,
+            localDx + (cellPadding || 4),
+            localDyTop + rowH / 2 + textSize * 0.35,
+            elRot,
+            localHeight
           );
+          const textPos = toPagePt(tAnchor.u, tAnchor.v, elRot ? -elRot : 0);
           page.drawText(cellText, {
             x: textPos.x,
             y: textPos.y,
-            size: Math.min(el.fontSize || 9, rowH * 0.65),
+            size: textSize,
             font: headerRow && rIdx === 0 ? boldFont : font,
             color: hexToRgb(el.color || '#111827'),
             maxWidth: Math.max(10, colW - (cellPadding || 4) * 2),
@@ -318,6 +845,7 @@ async function drawElementOntoPage(
     return;
   }
 
+  // Text elements with full Typography Studio parity
   const shouldDrawText = overrideText !== null || isModifiedOrAdded;
   if (!shouldDrawText) return;
 
@@ -338,29 +866,109 @@ async function drawElementOntoPage(
   }
 
   const font = pickFont(el, fonts);
-  const size = Math.max(5, el.fontSize || 11);
-  const lines = textToDraw.split('\n');
-  const lineHeight = size * 1.2;
+  const typo = computeTypographyLayout(el, textToDraw);
+  const size = typo.effectiveFontSize;
+  const paddingPt = Math.max(0, el.paddingPt ?? 1);
+  const letterSpacing = el.letterSpacing ?? 0;
+  const baselineOffset = el.baselineOffset ?? 0;
+  const textColor = hexToRgb(el.color || '#111827');
 
-  lines.forEach((line, idx) => {
-    const lineWidth = font.widthOfTextAtSize(line, size);
-    let drawX = x;
-    if (el.align === 'center') {
-      drawX = x + (el.width - lineWidth) / 2;
-    } else if (el.align === 'right') {
-      drawX = x + el.width - lineWidth;
+  let cursorY = typo.verticalOffsetPt;
+  typo.lines.forEach((lineObj, idx) => {
+    if (idx > 0 && lineObj.paragraphIndex !== typo.lines[idx - 1].paragraphIndex) {
+      cursorY += typo.paragraphSpacingPt;
     }
-    const drawY = localHeight - el.y - size * 0.85 - idx * lineHeight;
-    const pos = toPagePt(drawX, drawY, el.rotation ? -el.rotation : 0);
-    page.drawText(line, {
-      x: pos.x,
-      y: pos.y,
-      size,
-      font,
-      color: hexToRgb(el.color || '#111827'),
-      opacity: el.opacity ?? 1,
-      rotate: pos.rotate,
-    });
+
+    const line = lineObj.text;
+    const basePdfW = font.widthOfTextAtSize(line, size);
+    const trackingExtra = Math.max(0, line.length - 1) * letterSpacing;
+    const totalLineW = basePdfW + trackingExtra;
+
+    let localX = paddingPt;
+    if (el.align === 'center') {
+      localX = paddingPt + (typo.contentBoxWidthPt - totalLineW) / 2;
+    } else if (el.align === 'right') {
+      localX = paddingPt + typo.contentBoxWidthPt - totalLineW;
+    }
+
+    const baselineFromTop = cursorY + size * 0.85 - baselineOffset;
+
+    if (Math.abs(letterSpacing) > 0.05 && line.length > 1) {
+      let charX = localX;
+      for (const ch of line) {
+        const chAnchor = rotateAroundKonvaTopLeft(
+          el.x,
+          el.y,
+          charX,
+          baselineFromTop,
+          elRot,
+          localHeight
+        );
+        const chPos = toPagePt(chAnchor.u, chAnchor.v, elRot ? -elRot : 0);
+        page.drawText(ch, {
+          x: chPos.x,
+          y: chPos.y,
+          size,
+          font,
+          color: textColor,
+          opacity: el.opacity ?? 1,
+          rotate: chPos.rotate,
+        });
+        charX += font.widthOfTextAtSize(ch, size) + letterSpacing;
+      }
+    } else {
+      const anchor = rotateAroundKonvaTopLeft(
+        el.x,
+        el.y,
+        localX,
+        baselineFromTop,
+        elRot,
+        localHeight
+      );
+      const pos = toPagePt(anchor.u, anchor.v, elRot ? -elRot : 0);
+      page.drawText(line, {
+        x: pos.x,
+        y: pos.y,
+        size,
+        font,
+        color: textColor,
+        opacity: el.opacity ?? 1,
+        rotate: pos.rotate,
+      });
+    }
+
+    // Underline & Strikethrough decoration lines
+    if (el.underline && line.trim().length > 0) {
+      const uY = baselineFromTop + Math.max(1, size * 0.12);
+      const u1L = rotateAroundKonvaTopLeft(el.x, el.y, localX, uY, elRot, localHeight);
+      const u2L = rotateAroundKonvaTopLeft(el.x, el.y, localX + totalLineW, uY, elRot, localHeight);
+      const u1 = toPagePt(u1L.u, u1L.v);
+      const u2 = toPagePt(u2L.u, u2L.v);
+      page.drawLine({
+        start: { x: u1.x, y: u1.y },
+        end: { x: u2.x, y: u2.y },
+        thickness: Math.max(0.6, size * 0.07),
+        color: textColor,
+        opacity: el.opacity ?? 1,
+      });
+    }
+
+    if (el.strikethrough && line.trim().length > 0) {
+      const sY = baselineFromTop - size * 0.3;
+      const s1L = rotateAroundKonvaTopLeft(el.x, el.y, localX, sY, elRot, localHeight);
+      const s2L = rotateAroundKonvaTopLeft(el.x, el.y, localX + totalLineW, sY, elRot, localHeight);
+      const s1 = toPagePt(s1L.u, s1L.v);
+      const s2 = toPagePt(s2L.u, s2L.v);
+      page.drawLine({
+        start: { x: s1.x, y: s1.y },
+        end: { x: s2.x, y: s2.y },
+        thickness: Math.max(0.6, size * 0.07),
+        color: textColor,
+        opacity: el.opacity ?? 1,
+      });
+    }
+
+    cursorY += typo.lineHeightPt;
   });
 }
 
@@ -516,6 +1124,7 @@ async function renderSlotOntoPage(
   outPage: PDFPage,
   srcDoc: PDFDocument | null,
   embeddedPageCache: Map<string, PDFEmbeddedPage>,
+  sanitizedBitmapCache: Map<string, PDFImage>,
   project: PDFProject,
   layout: SheetLayoutPlan,
   slot: SlotGeometry,
@@ -575,10 +1184,55 @@ async function renderSlotOntoPage(
     );
   }
 
-  if (srcDoc) {
-    const pageMeta = project.originalPages.find(
-      (p) => p.pageNumber === templatePageNum
-    );
+  const pageMeta = project.originalPages.find(
+    (p) => p.pageNumber === templatePageNum
+  );
+  const hasAppliedRedactions = Boolean(pageMeta?.appliedRedactions?.length);
+  const hasActiveRestoration = Boolean(pageMeta?.restoration?.enabled);
+  const isInsertedBlank = Boolean(pageMeta?.isBlankInserted);
+
+  // If page has true applied redactions or active non-destructive restoration, bake sanitized raster background
+  // so underlying PDF glyphs inside redacted rectangles are 100% destroyed and unextractable.
+  if (!isInsertedBlank && (hasAppliedRedactions || hasActiveRestoration)) {
+    const key = `sanitized-p${templatePageNum}-${hasAppliedRedactions ? pageMeta!.appliedRedactions!.length : 0}-${JSON.stringify(pageMeta?.restoration || '')}`;
+    let sanitizedImg = sanitizedBitmapCache.get(key);
+    if (!sanitizedImg && pageMeta) {
+      let baseDataUrl = pageMeta.previewImageDataUrl;
+      if (!baseDataUrl && project.sourcePdfBase64) {
+        baseDataUrl =
+          (await renderSinglePagePreview(
+            project.sourcePdfBase64,
+            pageMeta.sourcePdfPageNumber || templatePageNum,
+            Math.min(3, Math.max(2, project.exportConfig.dpi / 72))
+          )) || undefined;
+      }
+      if (baseDataUrl && hasActiveRestoration && pageMeta.restoration) {
+        baseDataUrl = await applyRestorationToDataUrl(baseDataUrl, pageMeta.restoration);
+      }
+      const pngBytes = await renderSanitizedRedactedPagePng({
+        pdfBase64: baseDataUrl ? undefined : project.sourcePdfBase64,
+        pageImageDataUrl: baseDataUrl,
+        pageNumber: pageMeta.sourcePdfPageNumber || templatePageNum,
+        pageWidthPt: pageMeta.widthPt,
+        pageHeightPt: pageMeta.heightPt,
+        redactions: pageMeta.appliedRedactions || [],
+        scale: Math.min(3, Math.max(2, project.exportConfig.dpi / 72)),
+      });
+      if (pngBytes) {
+        sanitizedImg = await outDoc.embedPng(pngBytes);
+        sanitizedBitmapCache.set(key, sanitizedImg);
+      }
+    }
+    if (sanitizedImg) {
+      outPage.drawImage(sanitizedImg, {
+        x: anchorX,
+        y: anchorY,
+        width: copyW,
+        height: copyH,
+        rotate: rot ? degrees(-rot) : undefined,
+      });
+    }
+  } else if (srcDoc && !isInsertedBlank) {
     const origPdfPageNum = pageMeta?.sourcePdfPageNumber || templatePageNum;
     const srcIdx = Math.max(
       0,
@@ -641,6 +1295,13 @@ async function renderSlotOntoPage(
       width: el.width * scale,
       height: el.height * scale,
       fontSize: Math.max(4, el.fontSize * scale),
+      points: el.points ? el.points.map((pt) => pt * scale) : undefined,
+      calloutTarget: el.calloutTarget
+        ? {
+            x: (rot ? 0 : drawX) + (el.calloutTarget.x - sourceBox.x) * scale,
+            y: (rot ? 0 : drawTop) + (el.calloutTarget.y - sourceBox.y) * scale,
+          }
+        : undefined,
       sourceOriginalRect: el.sourceOriginalRect
         ? {
             x: (rot ? 0 : drawX) + (el.sourceOriginalRect.x - sourceBox.x) * scale,
@@ -701,6 +1362,7 @@ async function buildSingleModifiedTemplatePage(
   );
   const imageCache = new Map<string, PDFImage>();
   const embeddedPageCache = new Map<string, PDFEmbeddedPage>();
+  const sanitizedBitmapCache = new Map<string, PDFImage>();
   const layout = computeSheetLayout(project, sourcePageNumber);
   const bleed = Math.max(0, project.exportConfig.bleedPt || project.pageConfig.bleedPt || 0);
   const baseOutW = layout.outputSheetWidthPt;
@@ -741,6 +1403,7 @@ async function buildSingleModifiedTemplatePage(
       page,
       srcDoc,
       embeddedPageCache,
+      sanitizedBitmapCache,
       project,
       layout,
       slot,
@@ -761,8 +1424,10 @@ async function buildSingleModifiedTemplatePage(
     });
   }
 
-  if (project.pageConfig.rotation) {
-    page.setRotation(degrees(project.pageConfig.rotation));
+  const pageMeta = project.originalPages.find((p) => p.pageNumber === sourcePageNumber);
+  const effectiveRotation = pageMeta?.rotation ?? project.pageConfig.rotation;
+  if (effectiveRotation) {
+    page.setRotation(degrees(effectiveRotation));
   }
 
   return doc.save();
@@ -910,6 +1575,7 @@ export async function generateExportBytes(
   );
   const imageCache = new Map<string, PDFImage>();
   const embeddedPageCache = new Map<string, PDFEmbeddedPage>();
+  const sanitizedBitmapCache = new Map<string, PDFImage>();
 
   let srcDoc: PDFDocument | null = null;
   if (project.sourcePdfBase64) {
@@ -961,27 +1627,31 @@ export async function generateExportBytes(
       onProgress?.('Building PDF pages', pageZero + 1, totalPages);
     }
 
-    const outPage = outDoc.addPage([outW, outH]);
-    outPage.setMediaBox(0, 0, outW, outH);
-    if (bleed > 0) {
-      outPage.setBleedBox(0, 0, outW, outH);
-      outPage.setTrimBox(bleed, bleed, baseOutW, baseOutH);
-    }
-    if (pageConfig.backgroundColor && pageConfig.backgroundColor !== '#FFFFFF') {
-      outPage.drawRectangle({
-        x: 0,
-        y: 0,
-        width: outW,
-        height: outH,
-        color: hexToRgb(pageConfig.backgroundColor),
-      });
-    }
-
     const templatePageNum =
       copiesConfig.enabled || isBulkOrImposition
         ? 1
         : Math.min(pageZero + 1, project.pageCount || 1);
     const layout = getLayoutForPage(templatePageNum);
+    const pageW = exportConfig.customWidthPt || layout.outputSheetWidthPt;
+    const pageH = exportConfig.customHeightPt || layout.outputSheetHeightPt;
+    const sheetW = pageW + bleed * 2;
+    const sheetH = pageH + bleed * 2;
+
+    const outPage = outDoc.addPage([sheetW, sheetH]);
+    outPage.setMediaBox(0, 0, sheetW, sheetH);
+    if (bleed > 0) {
+      outPage.setBleedBox(0, 0, sheetW, sheetH);
+      outPage.setTrimBox(bleed, bleed, pageW, pageH);
+    }
+    if (pageConfig.backgroundColor && pageConfig.backgroundColor !== '#FFFFFF') {
+      outPage.drawRectangle({
+        x: 0,
+        y: 0,
+        width: sheetW,
+        height: sheetH,
+        color: hexToRgb(pageConfig.backgroundColor),
+      });
+    }
 
     for (const slot of layout.slots) {
       const overrides =
@@ -999,16 +1669,49 @@ export async function generateExportBytes(
         outPage,
         srcDoc,
         embeddedPageCache,
+        sanitizedBitmapCache,
         effectiveProject,
         layout,
         slot,
         templatePageNum,
         bleed,
-        outH,
+        sheetH,
         fonts,
         imageCache,
         overrides
       );
+    }
+
+    const pageMeta = project.originalPages.find((p) => p.pageNumber === templatePageNum);
+    const headerTxt = pageMeta?.headerText ?? pageConfig.headerText;
+    const footerTxt = pageMeta?.footerText ?? pageConfig.footerText;
+
+    if (headerTxt?.trim()) {
+      const hLabel = headerTxt
+        .replace(/\{page\}/g, String(humanPageNum))
+        .replace(/\{total\}/g, String(totalPages));
+      const hw = fonts.helvetica.widthOfTextAtSize(hLabel, 9);
+      outPage.drawText(hLabel, {
+        x: (sheetW - hw) / 2,
+        y: sheetH - bleed - 16,
+        size: 9,
+        font: fonts.helvetica,
+        color: rgb(0.35, 0.4, 0.48),
+      });
+    }
+
+    if (footerTxt?.trim()) {
+      const fLabel = footerTxt
+        .replace(/\{page\}/g, String(humanPageNum))
+        .replace(/\{total\}/g, String(totalPages));
+      const fw = fonts.helvetica.widthOfTextAtSize(fLabel, 9);
+      outPage.drawText(fLabel, {
+        x: (sheetW - fw) / 2,
+        y: bleed + 20,
+        size: 9,
+        font: fonts.helvetica,
+        color: rgb(0.35, 0.4, 0.48),
+      });
     }
 
     if (exportConfig.addPageNumbers) {
@@ -1017,7 +1720,7 @@ export async function generateExportBytes(
         .replace(/\{total\}/g, String(totalPages));
       const w = fonts.helvetica.widthOfTextAtSize(label, 9);
       outPage.drawText(label, {
-        x: (outW - w) / 2,
+        x: (sheetW - w) / 2,
         y: bleed + 10,
         size: 9,
         font: fonts.helvetica,
@@ -1027,11 +1730,11 @@ export async function generateExportBytes(
 
     if (exportConfig.watermarkText.trim()) {
       const wmText = exportConfig.watermarkText.trim();
-      const wmSize = Math.min(64, outW * 0.08);
+      const wmSize = Math.min(64, sheetW * 0.08);
       const wmW = fonts.helveticaBold.widthOfTextAtSize(wmText, wmSize);
       outPage.drawText(wmText, {
-        x: (outW - wmW * 0.7) / 2,
-        y: outH * 0.42,
+        x: (sheetW - wmW * 0.7) / 2,
+        y: sheetH * 0.42,
         size: wmSize,
         font: fonts.helveticaBold,
         color: rgb(0.45, 0.48, 0.54),
@@ -1045,14 +1748,15 @@ export async function generateExportBytes(
         outPage,
         bleed,
         bleed,
-        baseOutW,
-        baseOutH,
+        pageW,
+        pageH,
         { cropMarks: true, cuttingGuides: false, showBorders: false }
       );
     }
 
-    if (pageConfig.rotation) {
-      outPage.setRotation(degrees(pageConfig.rotation));
+    const effectiveRot = pageMeta?.rotation ?? pageConfig.rotation;
+    if (effectiveRot) {
+      outPage.setRotation(degrees(effectiveRot));
     }
 
     if (pageZero % 8 === 0) {

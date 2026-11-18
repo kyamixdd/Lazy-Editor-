@@ -1,4 +1,5 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useId, useMemo, useRef, useState } from 'react';
+import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'motion/react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -15,6 +16,11 @@ import {
   Upload,
   X,
 } from 'lucide-react';
+import {
+  bannerVariants,
+  MOTION_SPRING,
+  popoverVariants,
+} from '../config/motionSystem';
 import {
   ConditionalFieldRule,
   DataColumn,
@@ -42,6 +48,9 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
   project,
   onUpdateProject,
 }) => {
+  const shouldReduceMotion = useReducedMotion();
+  const filterGroupId = useId();
+  const mobileSwitchId = useId();
   const viewport = useViewport();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [newColName, setNewColName] = useState('');
@@ -269,12 +278,12 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
   return (
     <div className="flex-1 overflow-y-auto p-4 tablet:p-6 desktop:p-8 max-w-7xl mx-auto w-full space-y-5 tablet:space-y-6">
       {/* Header */}
-      <div className="flex flex-col tablet:flex-row tablet:items-center tablet:justify-between gap-4 pb-5 border-b border-slate-200/80 dark:border-white/10">
+      <div className="flex flex-col tablet:flex-row tablet:items-center tablet:justify-between gap-4 pb-5 border-b border-black/10 dark:border-white/12">
         <div>
-          <h1 className="text-xl tablet:text-2xl font-display font-semibold tracking-tight text-slate-900 dark:text-slate-100">
+          <h1 className="text-xl tablet:text-2xl font-display font-semibold tracking-tight text-[#101010] dark:text-white">
             Data Manager
           </h1>
-          <p className="mt-1 text-xs tablet:text-sm text-slate-600 dark:text-slate-400">
+          <p className="mt-1 text-xs tablet:text-sm text-[#555555] dark:text-[#B5B5B5]">
             Manage thousands of merge records, import Excel/CSV sheets, configure formulas & conditional fields, detect duplicates/missing values, and map columns to PDF elements.
           </p>
         </div>
@@ -333,104 +342,131 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
         </div>
       </div>
 
-      {importError && (
-        <div className="p-3 rounded-xl border border-red-500/40 bg-red-500/10 text-xs text-red-600 dark:text-red-300">
-          {importError}
-        </div>
-      )}
+      <AnimatePresence>
+        {importError && (
+          <motion.div
+            key="data-import-error"
+            variants={bannerVariants}
+            initial={shouldReduceMotion ? false : 'initial'}
+            animate="animate"
+            exit="exit"
+            className="p-3 rounded-xl border border-red-500/40 bg-red-500/10 text-xs text-red-700 dark:text-red-300"
+          >
+            {importError}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Field Mapping Matrix Drawer (Connect any data column to any editable PDF field) */}
-      {showMappingPanel && (
-        <GlassCard level={3} padding="md" className="border-blue-500/40 space-y-3 text-xs">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                PDF Template Field Mapping Matrix
-              </h2>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                Connect any column in your dataset to any editable PDF template element. Values update dynamically during bulk generation & preview.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowMappingPanel(false)}
-              className="p-1 text-slate-400 hover:text-slate-900 dark:hover:text-slate-100"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-          {mappableElements.length === 0 ? (
-            <p className="text-slate-500">
-              No editable text/field elements detected on this template yet. Add text blocks in PDF Editor.
-            </p>
-          ) : (
-            <div className="grid grid-cols-1 tablet:grid-cols-2 desktop:grid-cols-3 gap-2.5 max-h-64 overflow-y-auto">
-              {mappableElements.map((el) => {
-                const matchedCol = dataColumns.find((c) => c.name === el.fieldKey);
-                const sampleRow = dataRows[0];
-                const samplePreview =
-                  matchedCol && sampleRow
-                    ? formatCellValue(
-                        sampleRow[matchedCol.name],
-                        matchedCol,
-                        sampleRow,
-                        dataColumns
-                      )
-                    : null;
-                return (
-                  <div
-                    key={el.id}
-                    className="p-2.5 rounded border border-slate-200 dark:border-slate-800 space-y-1.5"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium text-slate-900 dark:text-slate-100 truncate">
-                        {el.text || el.type}
-                      </span>
-                      <span className="text-[10px] text-slate-400 shrink-0 tabular-nums">
-                        P{el.pageNumber} · {el.type}
-                      </span>
-                    </div>
-                    <select
-                      value={el.fieldKey || ''}
-                      onChange={(e) => handleMapElementField(el, e.target.value)}
-                      className="w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0E131D] text-xs"
-                    >
-                      <option value="">-- Unmapped (Static) --</option>
-                      {dataColumns.map((col) => (
-                        <option key={col.id} value={col.name}>
-                          {col.name} ({col.type})
-                        </option>
-                      ))}
-                    </select>
-                    {samplePreview !== null && (
-                      <div className="text-[10px] text-emerald-600 dark:text-emerald-400 truncate font-mono">
-                        Row 1 preview: {samplePreview || '(empty)'}
+      <AnimatePresence>
+        {showMappingPanel && (
+          <motion.div
+            key="mapping-panel"
+            variants={popoverVariants}
+            initial={shouldReduceMotion ? false : 'initial'}
+            animate="animate"
+            exit="exit"
+          >
+            <GlassCard level={3} padding="md" className="border-black/20 dark:border-white/20 space-y-3 text-xs">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-sm font-semibold text-[#101010] dark:text-white">
+                    PDF Template Field Mapping Matrix
+                  </h2>
+                  <p className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
+                    Connect any column in your dataset to any editable PDF template element. Values update dynamically during bulk generation & preview.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowMappingPanel(false)}
+                  className="p-1 text-[#888888] hover:text-[#101010] dark:hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              {mappableElements.length === 0 ? (
+                <p className="text-[#555555] dark:text-[#B5B5B5]">
+                  No editable text/field elements detected on this template yet. Add text blocks in PDF Editor.
+                </p>
+              ) : (
+                <div className="grid grid-cols-1 tablet:grid-cols-2 desktop:grid-cols-3 gap-2.5 max-h-64 overflow-y-auto">
+                  {mappableElements.map((el) => {
+                    const matchedCol = dataColumns.find((c) => c.name === el.fieldKey);
+                    const sampleRow = dataRows[0];
+                    const samplePreview =
+                      matchedCol && sampleRow
+                        ? formatCellValue(
+                            sampleRow[matchedCol.name],
+                            matchedCol,
+                            sampleRow,
+                            dataColumns
+                          )
+                        : null;
+                    return (
+                      <div
+                        key={el.id}
+                        className="p-2.5 rounded-xl border border-black/10 dark:border-white/12 glass-level-2 space-y-1.5"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-medium text-[#101010] dark:text-white truncate">
+                            {el.text || el.type}
+                          </span>
+                          <span className="text-[10px] text-[#888888] dark:text-[#858585] shrink-0 tabular-nums">
+                            P{el.pageNumber} · {el.type}
+                          </span>
+                        </div>
+                        <select
+                          value={el.fieldKey || ''}
+                          onChange={(e) => handleMapElementField(el, e.target.value)}
+                          className="w-full px-2 py-1 rounded-lg studio-select text-xs"
+                        >
+                          <option value="">-- Unmapped (Static) --</option>
+                          {dataColumns.map((col) => (
+                            <option key={col.id} value={col.name}>
+                              {col.name} ({col.type})
+                            </option>
+                          ))}
+                        </select>
+                        {samplePreview !== null && (
+                          <div className="text-[10px] text-[#101010] dark:text-white truncate font-mono font-medium">
+                            Row 1 preview: {samplePreview || '(empty)'}
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </GlassCard>
-      )}
+                    );
+                  })}
+                </div>
+              )}
+            </GlassCard>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Column Rules, Formatting & Conditional Field Drawer */}
-      {editingColumn && (
-        <GlassCard level={3} padding="md" className="space-y-4 text-xs">
-          <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-2.5">
+      <AnimatePresence>
+        {editingColumn && (
+          <motion.div
+            key={`col-rules-${editingColumn.id}`}
+            variants={popoverVariants}
+            initial={shouldReduceMotion ? false : 'initial'}
+            animate="animate"
+            exit="exit"
+          >
+            <GlassCard level={3} padding="md" className="space-y-4 text-xs">
+          <div className="flex items-center justify-between border-b border-black/10 dark:border-white/10 pb-2.5">
             <div>
-              <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              <h2 className="text-sm font-semibold text-[#101010] dark:text-white">
                 Column Rules & Conditional Formatting · {editingColumn.name}
               </h2>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              <p className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                 Configure number decimals, currency symbols, date formatting, formulas (=IF, =SUM, =CONCAT), required checks, and conditional field overrides.
               </p>
             </div>
             <button
               type="button"
               onClick={() => setEditingColId(null)}
-              className="p-1 text-slate-400 hover:text-slate-900 dark:hover:text-slate-100"
+              className="p-1 text-[#888888] hover:text-[#101010] dark:hover:text-white"
             >
               <X className="w-4 h-4" />
             </button>
@@ -438,7 +474,7 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
 
           <div className="grid grid-cols-1 tablet:grid-cols-4 gap-3">
             <label className="block">
-              <span className="text-[11px] text-slate-500">Column Type</span>
+              <span className="text-[11px] text-[#888888] dark:text-[#858585]">Column Type</span>
               <select
                 value={editingColumn.type}
                 onChange={(e) =>
@@ -446,7 +482,7 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
                     type: e.target.value as DataColumn['type'],
                   })
                 }
-                className="mt-1 w-full px-2 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0E131D]"
+                className="mt-1 w-full px-2 py-1.5 rounded-xl studio-select"
               >
                 <option value="text">Text</option>
                 <option value="number">Number</option>
@@ -458,7 +494,7 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
 
             {editingColumn.type === 'currency' && (
               <label className="block">
-                <span className="text-[11px] text-slate-500">Currency Symbol</span>
+                <span className="text-[11px] text-[#888888] dark:text-[#858585]">Currency Symbol</span>
                 <input
                   type="text"
                   value={editingColumn.currencySymbol || '$'}
@@ -467,14 +503,14 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
                       currencySymbol: e.target.value,
                     })
                   }
-                  className="mt-1 w-full px-2 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent"
+                  className="mt-1 w-full px-2 py-1.5 rounded-xl studio-input"
                 />
               </label>
             )}
 
             {editingColumn.type === 'number' && (
               <label className="block">
-                <span className="text-[11px] text-slate-500">Decimal Places</span>
+                <span className="text-[11px] text-[#888888] dark:text-[#858585]">Decimal Places</span>
                 <input
                   type="number"
                   min={0}
@@ -485,14 +521,14 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
                       numberDecimals: Math.max(0, Math.min(6, Number(e.target.value) || 0)),
                     })
                   }
-                  className="mt-1 w-full px-2 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                  className="mt-1 w-full px-2 py-1.5 rounded-xl studio-input tabular-nums"
                 />
               </label>
             )}
 
             {editingColumn.type === 'date' && (
               <label className="block">
-                <span className="text-[11px] text-slate-500">Date Format</span>
+                <span className="text-[11px] text-[#888888] dark:text-[#858585]">Date Format</span>
                 <select
                   value={editingColumn.dateFormat || 'YYYY-MM-DD'}
                   onChange={(e) =>
@@ -500,7 +536,7 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
                       dateFormat: e.target.value as DataColumn['dateFormat'],
                     })
                   }
-                  className="mt-1 w-full px-2 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0E131D]"
+                  className="mt-1 w-full px-2 py-1.5 rounded-xl studio-select"
                 >
                   <option value="YYYY-MM-DD">YYYY-MM-DD</option>
                   <option value="MM/DD/YYYY">MM/DD/YYYY</option>
@@ -512,7 +548,7 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
 
             {editingColumn.type === 'formula' && (
               <label className="tablet:col-span-2 block">
-                <span className="text-[11px] text-slate-500">
+                <span className="text-[11px] text-[#888888] dark:text-[#858585]">
                   Formula Expression (=IF(amount &gt; 500, &quot;VIP&quot;, &quot;Standard&quot;) or =qty * price)
                 </span>
                 <input
@@ -523,12 +559,12 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
                       formula: e.target.value,
                     })
                   }
-                  className="mt-1 w-full px-2 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent font-mono"
+                  className="mt-1 w-full px-2 py-1.5 rounded-xl studio-input font-mono"
                 />
               </label>
             )}
 
-            <label className="flex items-center gap-2 pt-4 cursor-pointer">
+            <label className="flex items-center gap-2 pt-4 cursor-pointer text-[#101010] dark:text-white">
               <input
                 type="checkbox"
                 checked={Boolean(editingColumn.required)}
@@ -537,16 +573,16 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
                     required: e.target.checked,
                   })
                 }
-                className="rounded border-slate-400 text-blue-600"
+                className="rounded border-black/30 dark:border-white/30 accent-[#101010] dark:accent-white"
               />
               <span>Required (flag empty cells)</span>
             </label>
           </div>
 
           {/* Conditional Rules */}
-          <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
+          <div className="pt-3 border-t border-black/10 dark:border-white/10 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="font-semibold text-slate-700 dark:text-slate-300">
+              <span className="font-semibold text-[#555555] dark:text-[#B5B5B5]">
                 Conditional Output Rules ({editingColumn.conditionRules?.length || 0})
               </span>
               <button
@@ -567,7 +603,7 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
                     ],
                   });
                 }}
-                className="px-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 font-medium flex items-center gap-1"
+                className="px-2.5 py-1 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.04] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white font-medium flex items-center gap-1"
               >
                 <Plus className="w-3 h-3" />
                 Add Condition Rule
@@ -576,7 +612,7 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
             {(editingColumn.conditionRules || []).map((rule, rIdx) => (
               <div
                 key={rule.id}
-                className="grid grid-cols-1 tablet:grid-cols-6 gap-2 items-center p-2 rounded border border-slate-200 dark:border-slate-800"
+                className="grid grid-cols-1 tablet:grid-cols-6 gap-2 items-center p-2 rounded-xl border border-black/10 dark:border-white/10"
               >
                 <select
                   value={rule.whenColumn}
@@ -585,7 +621,7 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
                     next[rIdx] = { ...rule, whenColumn: e.target.value };
                     handleUpdateColumn(editingColumn.id, { conditionRules: next });
                   }}
-                  className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0E131D]"
+                  className="px-2 py-1 rounded-lg studio-select"
                 >
                   {dataColumns.map((c) => (
                     <option key={c.id} value={c.name}>
@@ -603,7 +639,7 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
                     };
                     handleUpdateColumn(editingColumn.id, { conditionRules: next });
                   }}
-                  className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0E131D]"
+                  className="px-2 py-1 rounded-lg studio-select"
                 >
                   <option value="is_empty">is empty</option>
                   <option value="not_empty">not empty</option>
@@ -622,7 +658,7 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
                     next[rIdx] = { ...rule, compareValue: e.target.value };
                     handleUpdateColumn(editingColumn.id, { conditionRules: next });
                   }}
-                  className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent"
+                  className="px-2 py-1 rounded-lg studio-input"
                 />
                 <input
                   type="text"
@@ -633,7 +669,7 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
                     next[rIdx] = { ...rule, thenValue: e.target.value };
                     handleUpdateColumn(editingColumn.id, { conditionRules: next });
                   }}
-                  className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent"
+                  className="px-2 py-1 rounded-lg studio-input"
                 />
                 <input
                   type="text"
@@ -644,7 +680,7 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
                     next[rIdx] = { ...rule, elseValue: e.target.value };
                     handleUpdateColumn(editingColumn.id, { conditionRules: next });
                   }}
-                  className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent"
+                  className="px-2 py-1 rounded-lg studio-input"
                 />
                 <button
                   type="button"
@@ -654,21 +690,23 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
                     );
                     handleUpdateColumn(editingColumn.id, { conditionRules: next });
                   }}
-                  className="p-1 text-red-500 hover:bg-red-500/10 rounded justify-self-end"
+                  className="p-1 text-[#888888] hover:text-[#101010] dark:hover:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08] rounded-lg justify-self-end"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>
             ))}
           </div>
-        </GlassCard>
-      )}
+            </GlassCard>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Data Quality Banner: Duplicate Record & Missing Value Detection */}
       <GlassCard level={3} padding="sm" className="flex flex-col desktop:flex-row desktop:items-center justify-between gap-3 text-xs">
         <div className="flex flex-wrap items-center gap-3">
           {qualityReport.totalIssues === 0 ? (
-            <span className="text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1.5">
+            <span className="text-[#101010] dark:text-white font-medium flex items-center gap-1.5">
               <CheckCircle2 className="w-4 h-4" />
               Data hygiene clean ({dataRows.length.toLocaleString()} rows checked)
             </span>
@@ -680,14 +718,14 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
             </span>
           )}
 
-          <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+          <div className="flex items-center gap-1.5 text-[11px] text-[#888888] dark:text-[#858585]">
             <span>Dup key:</span>
             <select
               value={duplicateKeyCols[0] || ''}
               onChange={(e) =>
                 setDuplicateKeyCols(e.target.value ? [e.target.value] : [])
               }
-              className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0E131D] text-xs"
+              className="px-2 py-1 rounded-lg studio-select text-xs"
             >
               <option value="">None</option>
               {dataColumns.map((c) => (
@@ -700,31 +738,43 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex rounded border border-slate-300 dark:border-slate-700 overflow-hidden">
-            {(
-              [
-                ['all', `All (${dataRows.length})`],
-                ['duplicates', `Duplicates (${duplicateRowIdSet.size})`],
-                ['missing', `Missing (${missingRowIdSet.size})`],
-              ] as const
-            ).map(([k, lbl]) => (
-              <button
-                key={k}
-                type="button"
-                onClick={() => {
-                  setQualityFilter(k);
-                  setCurrentPage(1);
-                }}
-                className={`px-2.5 py-1 font-medium tabular-nums ${
-                  qualityFilter === k
-                    ? 'bg-blue-600 text-white'
-                    : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                }`}
-              >
-                {lbl}
-              </button>
-            ))}
-          </div>
+          <LayoutGroup id={`data-filter-${filterGroupId}`}>
+            <div className="inline-flex rounded-xl border border-black/15 dark:border-white/15 overflow-hidden p-0.5 glass-level-2">
+              {(
+                [
+                  ['all', `All (${dataRows.length})`],
+                  ['duplicates', `Duplicates (${duplicateRowIdSet.size})`],
+                  ['missing', `Missing (${missingRowIdSet.size})`],
+                ] as const
+              ).map(([k, lbl]) => {
+                const active = qualityFilter === k;
+                return (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => {
+                      setQualityFilter(k);
+                      setCurrentPage(1);
+                    }}
+                    className={`relative px-2.5 py-1 rounded-lg font-medium tabular-nums transition-colors ${
+                      active
+                        ? 'text-white dark:text-[#050505]'
+                        : 'text-[#555555] dark:text-[#B5B5B5] hover:text-[#101010] dark:hover:text-white'
+                    }`}
+                  >
+                    {active && (
+                      <motion.span
+                        layoutId={`data-filter-pill-${filterGroupId}`}
+                        transition={shouldReduceMotion ? { duration: 0.08 } : MOTION_SPRING.nav}
+                        className="absolute inset-0 rounded-lg bg-[#101010] dark:bg-white shadow-sm"
+                      />
+                    )}
+                    <span className="relative z-10">{lbl}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </LayoutGroup>
 
           <input
             type="text"
@@ -734,7 +784,7 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
               setRowSearch(e.target.value);
               setCurrentPage(1);
             }}
-            className="w-40 px-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent"
+            className="w-40 px-2.5 py-1 rounded-xl studio-input"
           />
         </div>
       </GlassCard>
@@ -743,26 +793,26 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
       <div className="grid grid-cols-1 desktop:grid-cols-2 gap-4">
         <form
           onSubmit={handleAddColumn}
-          className="p-4 rounded-2xl border glass-level-3 flex flex-wrap items-end gap-2.5 text-xs"
+          className="p-4 rounded-2xl border border-black/10 dark:border-white/12 glass-level-3 flex flex-wrap items-end gap-2.5 text-xs"
         >
           <label className="flex-1 min-w-[140px]">
-            <span className="text-[11px] text-slate-500">New Column Key</span>
+            <span className="text-[11px] text-[#888888] dark:text-[#858585]">New Column Key</span>
             <input
               type="text"
               placeholder="e.g. customer_name"
               value={newColName}
               onChange={(e) => setNewColName(e.target.value)}
-              className="mt-1 w-full min-h-[42px] tablet:min-h-0 px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent"
+              className="mt-1 w-full min-h-[42px] tablet:min-h-0 px-2.5 py-1.5 rounded-xl studio-input"
             />
           </label>
           <label className="w-32">
-            <span className="text-[11px] text-slate-500">Format</span>
+            <span className="text-[11px] text-[#888888] dark:text-[#858585]">Format</span>
             <select
               value={newColType}
               onChange={(e) =>
                 setNewColType(e.target.value as DataColumn['type'])
               }
-              className="mt-1 w-full min-h-[42px] tablet:min-h-0 px-2 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0E131D]"
+              className="mt-1 w-full min-h-[42px] tablet:min-h-0 px-2 py-1.5 rounded-xl studio-select"
             >
               <option value="text">Text</option>
               <option value="number">Number</option>
@@ -773,48 +823,48 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
           </label>
           {newColType === 'formula' && (
             <label className="w-full tablet:w-44">
-              <span className="text-[11px] text-slate-500">Formula</span>
+              <span className="text-[11px] text-[#888888] dark:text-[#858585]">Formula</span>
               <input
                 type="text"
                 value={newColFormula}
                 onChange={(e) => setNewColFormula(e.target.value)}
-                className="mt-1 w-full min-h-[42px] tablet:min-h-0 px-2 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent font-mono"
+                className="mt-1 w-full min-h-[42px] tablet:min-h-0 px-2 py-1.5 rounded-xl studio-input font-mono"
               />
             </label>
           )}
           <button
             type="submit"
-            className="min-h-[42px] tablet:min-h-0 px-3.5 py-1.5 rounded bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-medium hover:opacity-90 whitespace-nowrap touch-manipulation"
+            className="min-h-[42px] tablet:min-h-0 px-3.5 py-1.5 rounded-xl bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] font-medium whitespace-nowrap touch-manipulation transition-colors"
           >
             Add Field
           </button>
         </form>
 
-        <div className="p-4 rounded-2xl border glass-level-3 flex flex-wrap items-end gap-2.5 text-xs">
+        <div className="p-4 rounded-2xl border border-black/10 dark:border-white/12 glass-level-3 flex flex-wrap items-end gap-2.5 text-xs">
           <label className="flex-1 min-w-[120px]">
-            <span className="text-[11px] text-slate-500">Bulk Find</span>
+            <span className="text-[11px] text-[#888888] dark:text-[#858585]">Bulk Find</span>
             <input
               type="text"
               placeholder="Search value..."
               value={findText}
               onChange={(e) => setFindText(e.target.value)}
-              className="mt-1 w-full min-h-[42px] tablet:min-h-0 px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent"
+              className="mt-1 w-full min-h-[42px] tablet:min-h-0 px-2.5 py-1.5 rounded-xl studio-input"
             />
           </label>
           <label className="flex-1 min-w-[120px]">
-            <span className="text-[11px] text-slate-500">Replace With</span>
+            <span className="text-[11px] text-[#888888] dark:text-[#858585]">Replace With</span>
             <input
               type="text"
               placeholder="Replacement..."
               value={replaceText}
               onChange={(e) => setReplaceText(e.target.value)}
-              className="mt-1 w-full min-h-[42px] tablet:min-h-0 px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent"
+              className="mt-1 w-full min-h-[42px] tablet:min-h-0 px-2.5 py-1.5 rounded-xl studio-input"
             />
           </label>
           <button
             type="button"
             onClick={handleFindReplace}
-            className="min-h-[42px] tablet:min-h-0 px-3.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 font-medium flex items-center gap-1.5 whitespace-nowrap touch-manipulation"
+            className="min-h-[42px] tablet:min-h-0 px-3.5 py-1.5 rounded-xl border border-black/15 dark:border-white/15 hover:bg-black/[0.04] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white font-medium flex items-center gap-1.5 whitespace-nowrap touch-manipulation"
           >
             <Search className="w-3.5 h-3.5" />
             Replace All
@@ -825,35 +875,51 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
       {/* Mobile Cards / Table Switcher */}
       {viewport.isMobile && (
         <div className="flex items-center justify-between text-xs">
-          <span className="text-slate-500 dark:text-slate-400 tabular-nums">
+          <span className="text-[#555555] dark:text-[#B5B5B5] tabular-nums">
             {filteredIndexedRows.length} records · {dataColumns.length} fields
           </span>
-          <div className="inline-flex rounded-md border border-slate-300 dark:border-slate-700 overflow-hidden">
-            <button
-              type="button"
-              onClick={() => setMobileViewMode('cards')}
-              className={`min-h-[36px] px-2.5 py-1 flex items-center gap-1 font-medium ${
-                mobileViewMode === 'cards'
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-white dark:bg-[#111827] text-slate-600 dark:text-slate-300'
-              }`}
-            >
-              <LayoutGrid className="w-3.5 h-3.5" />
-              Cards
-            </button>
-            <button
-              type="button"
-              onClick={() => setMobileViewMode('table')}
-              className={`min-h-[36px] px-2.5 py-1 flex items-center gap-1 font-medium ${
-                mobileViewMode === 'table'
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-white dark:bg-[#111827] text-slate-600 dark:text-slate-300'
-              }`}
-            >
-              <Table className="w-3.5 h-3.5" />
-              Sheet
-            </button>
-          </div>
+          <LayoutGroup id={`data-mobile-mode-${mobileSwitchId}`}>
+            <div className="inline-flex rounded-xl border border-black/15 dark:border-white/15 overflow-hidden p-0.5 glass-level-2">
+              <button
+                type="button"
+                onClick={() => setMobileViewMode('cards')}
+                className={`relative min-h-[36px] px-2.5 py-1 rounded-lg flex items-center gap-1 font-medium transition-colors ${
+                  mobileViewMode === 'cards'
+                    ? 'text-white dark:text-[#050505]'
+                    : 'text-[#555555] dark:text-[#B5B5B5]'
+                }`}
+              >
+                {mobileViewMode === 'cards' && (
+                  <motion.span
+                    layoutId={`data-mobile-pill-${mobileSwitchId}`}
+                    transition={shouldReduceMotion ? { duration: 0.08 } : MOTION_SPRING.nav}
+                    className="absolute inset-0 rounded-lg bg-[#101010] dark:bg-white"
+                  />
+                )}
+                <LayoutGrid className="relative z-10 w-3.5 h-3.5" />
+                <span className="relative z-10">Cards</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setMobileViewMode('table')}
+                className={`relative min-h-[36px] px-2.5 py-1 rounded-lg flex items-center gap-1 font-medium transition-colors ${
+                  mobileViewMode === 'table'
+                    ? 'text-white dark:text-[#050505]'
+                    : 'text-[#555555] dark:text-[#B5B5B5]'
+                }`}
+              >
+                {mobileViewMode === 'table' && (
+                  <motion.span
+                    layoutId={`data-mobile-pill-${mobileSwitchId}`}
+                    transition={shouldReduceMotion ? { duration: 0.08 } : MOTION_SPRING.nav}
+                    className="absolute inset-0 rounded-lg bg-[#101010] dark:bg-white"
+                  />
+                )}
+                <Table className="relative z-10 w-3.5 h-3.5" />
+                <span className="relative z-10">Sheet</span>
+              </button>
+            </div>
+          </LayoutGroup>
         </div>
       )}
 
@@ -865,14 +931,14 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
             return (
               <div
                 key={row._rowId}
-                className={`p-4 rounded-lg border bg-white dark:bg-[#111827] space-y-3 text-xs ${
+                className={`p-4 rounded-2xl border glass-level-3 space-y-3 text-xs ${
                   isDup
                     ? 'border-amber-500/60'
-                    : 'border-slate-200 dark:border-slate-800'
+                    : 'border-black/10 dark:border-white/12'
                 }`}
               >
-                <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-slate-800">
-                  <span className="font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
+                <div className="flex items-center justify-between pb-2 border-b border-black/10 dark:border-white/10">
+                  <span className="font-semibold text-[#101010] dark:text-white tabular-nums">
                     Record #{originalIndex + 1}
                     {isDup ? ' · Duplicate Key' : ''}
                   </span>
@@ -884,7 +950,7 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
                         dataRows.filter((r) => r._rowId !== row._rowId)
                       )
                     }
-                    className="min-h-[36px] px-2.5 py-1 rounded text-red-500 hover:bg-red-500/10 flex items-center gap-1"
+                    className="min-h-[36px] px-2.5 py-1 rounded-lg text-[#555555] hover:text-[#101010] dark:text-[#B5B5B5] dark:hover:text-white hover:bg-black/[0.04] dark:hover:bg-white/[0.08] flex items-center gap-1"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                     Delete
@@ -902,7 +968,7 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
                       : String(row[col.name] ?? '');
                     return (
                       <label key={col.id} className="block">
-                        <span className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center justify-between">
+                        <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5] flex items-center justify-between">
                           <span>{col.name}</span>
                           <span className="text-[10px]">
                             {col.type}
@@ -911,7 +977,7 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
                           </span>
                         </span>
                         {isFormula ? (
-                          <div className="mt-1 px-3 py-2.5 rounded border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#0E131D] font-mono tabular-nums">
+                          <div className="mt-1 px-3 py-2.5 rounded-xl border border-black/10 dark:border-white/10 bg-[#F7F7F7] dark:bg-[#0B0B0B] font-mono tabular-nums text-[#101010] dark:text-white">
                             {displayVal}
                           </div>
                         ) : (
@@ -926,10 +992,8 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
                               );
                               commitData(dataColumns, next);
                             }}
-                            className={`mt-1 w-full min-h-[44px] px-3 py-2 rounded border bg-transparent ${
-                              isMissing
-                                ? 'border-red-500/60'
-                                : 'border-slate-300 dark:border-slate-700'
+                            className={`mt-1 w-full min-h-[44px] px-3 py-2 rounded-xl studio-input ${
+                              isMissing ? '!border-red-500/60' : ''
                             }`}
                           />
                         )}
@@ -942,12 +1006,12 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
           })}
         </div>
       ) : (
-        <div className="rounded-2xl border glass-level-3 overflow-hidden">
+        <div className="rounded-2xl border border-black/10 dark:border-white/12 glass-level-3 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
-                <tr className="border-b border-slate-200/75 dark:border-white/10 glass-level-2">
-                  <th className="py-2.5 px-3 w-12 text-center text-slate-500 tabular-nums">
+                <tr className="border-b border-black/10 dark:border-white/12 glass-level-2">
+                  <th className="py-2.5 px-3 w-12 text-center text-[#888888] dark:text-[#858585] tabular-nums">
                     #
                   </th>
                   {dataColumns.map((col) => {
@@ -956,10 +1020,10 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
                       <th key={col.id} className="py-2.5 px-3 min-w-[170px]">
                         <div className="flex items-center justify-between gap-2">
                           <div className="min-w-0">
-                            <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">
+                            <div className="font-semibold text-[#101010] dark:text-white truncate">
                               {col.name}
                             </div>
-                            <div className="text-[10px] font-normal text-slate-500 truncate">
+                            <div className="text-[10px] font-normal text-[#888888] dark:text-[#858585] truncate">
                               {col.type}
                               {col.required ? ' · Req' : ''}
                               {isMapped ? ' · Mapped' : ''}
@@ -977,10 +1041,10 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
                                   editingColId === col.id ? null : col.id
                                 )
                               }
-                              className={`p-1 rounded ${
+                              className={`p-1 rounded-lg transition-colors ${
                                 editingColId === col.id
-                                  ? 'text-blue-600 bg-blue-500/10'
-                                  : 'text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+                                  ? 'bg-[#101010] text-white dark:bg-white dark:text-[#050505]'
+                                  : 'text-[#888888] hover:text-[#101010] dark:hover:text-white'
                               }`}
                             >
                               <SlidersHorizontal className="w-3 h-3" />
@@ -994,7 +1058,7 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
                                   dataRows
                                 )
                               }
-                              className="p-1 text-slate-400 hover:text-red-500"
+                              className="p-1 text-[#888888] hover:text-[#101010] dark:hover:text-white"
                             >
                               <Trash2 className="w-3 h-3" />
                             </button>
@@ -1006,22 +1070,22 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
                   <th className="py-2.5 px-3 w-12" />
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-200 dark:divide-slate-800/80">
+              <tbody className="divide-y divide-black/10 dark:divide-white/10">
                 {pagedRows.map(({ row, originalIndex }) => {
                   const isDup = duplicateRowIdSet.has(row._rowId);
                   return (
                     <tr
                       key={row._rowId}
-                      className={`hover:bg-slate-50 dark:hover:bg-slate-800/30 ${
+                      className={`hover:bg-black/[0.03] dark:hover:bg-white/[0.04] ${
                         isDup ? 'bg-amber-500/5' : ''
                       }`}
                     >
-                      <td className="py-1.5 px-3 text-center text-slate-400 tabular-nums">
+                      <td className="py-1.5 px-3 text-center text-[#888888] dark:text-[#858585] tabular-nums">
                         {originalIndex + 1}
                         {isDup && (
                           <span
                             title="Duplicate key record"
-                            className="ml-1 text-amber-500"
+                            className="ml-1 text-amber-600 dark:text-amber-400"
                           >
                             !
                           </span>
@@ -1042,12 +1106,12 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
                         return (
                           <td
                             key={col.id}
-                            className={`p-0 border-r border-slate-100 dark:border-slate-800/50 ${
+                            className={`p-0 border-r border-black/5 dark:border-white/5 ${
                               isMissing ? 'bg-red-500/10' : ''
                             }`}
                           >
                             {isFormula ? (
-                              <div className="px-3 py-2 font-mono text-slate-600 dark:text-slate-300 tabular-nums">
+                              <div className="px-3 py-2 font-mono text-[#555555] dark:text-[#B5B5B5] tabular-nums">
                                 {displayVal}
                               </div>
                             ) : (
@@ -1063,7 +1127,7 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
                                   commitData(dataColumns, next);
                                 }}
                                 placeholder={isMissing ? 'Missing required' : undefined}
-                                className={`w-full px-3 py-2 bg-transparent focus:outline-none focus:bg-blue-500/10 ${
+                                className={`w-full px-3 py-2 bg-transparent text-[#101010] dark:text-white focus:outline-none focus:bg-black/[0.04] dark:focus:bg-white/[0.06] ${
                                   col.type === 'number' || col.type === 'currency'
                                     ? 'text-right tabular-nums'
                                     : ''
@@ -1082,7 +1146,7 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
                               dataRows.filter((r) => r._rowId !== row._rowId)
                             )
                           }
-                          className="p-1 text-slate-400 hover:text-red-500"
+                          className="p-1 text-[#888888] hover:text-[#101010] dark:hover:text-white"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -1097,7 +1161,7 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
       )}
 
       {/* Pagination Bar (handles thousands of rows smoothly) */}
-      <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600 dark:text-slate-400 tabular-nums">
+      <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-[#555555] dark:text-[#B5B5B5] tabular-nums">
         <span>
           Showing {filteredIndexedRows.length === 0 ? 0 : (safePage - 1) * PAGE_SIZE + 1}–
           {Math.min(safePage * PAGE_SIZE, filteredIndexedRows.length)} of{' '}
@@ -1108,19 +1172,19 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
             type="button"
             disabled={safePage <= 1}
             onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-            className="min-h-[34px] px-2.5 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-35 flex items-center gap-1"
+            className="min-h-[34px] px-2.5 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.04] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white disabled:opacity-35 flex items-center gap-1"
           >
             <ChevronLeft className="w-3.5 h-3.5" />
             Prev
           </button>
-          <span className="px-2 font-medium text-slate-800 dark:text-slate-200">
+          <span className="px-2 font-medium text-[#101010] dark:text-white">
             Page {safePage} / {totalPages}
           </span>
           <button
             type="button"
             disabled={safePage >= totalPages}
             onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-            className="min-h-[34px] px-2.5 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-35 flex items-center gap-1"
+            className="min-h-[34px] px-2.5 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.04] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white disabled:opacity-35 flex items-center gap-1"
           >
             Next
             <ChevronRight className="w-3.5 h-3.5" />

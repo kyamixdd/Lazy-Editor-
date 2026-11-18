@@ -1,15 +1,13 @@
 import React, { useRef, useState } from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
   AlertTriangle,
   CheckCircle2,
   FolderPlus,
-  Image as ImageIcon,
-  Palette,
-  Shapes,
   Trash2,
-  Type,
   Upload,
 } from 'lucide-react';
+import { MOTION_DURATION, MOTION_EASE } from '../config/motionSystem';
 import {
   AssetFontItem,
   AssetImageItem,
@@ -42,6 +40,7 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
   onInsertImageIntoProject,
   onInsertShapeIntoProject,
 }) => {
+  const shouldReduceMotion = useReducedMotion();
   const [tab, setTab] = useState<AssetTab>('fonts');
   const fontInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -138,12 +137,12 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
 
   return (
     <div className="flex-1 overflow-y-auto p-4 tablet:p-6 desktop:p-8 max-w-6xl mx-auto w-full space-y-6">
-      <div className="flex flex-col tablet:flex-row tablet:items-center justify-between gap-4 pb-5 border-b border-slate-200/80 dark:border-white/10">
+      <div className="flex flex-col tablet:flex-row tablet:items-center justify-between gap-4 pb-5 border-b border-black/10 dark:border-white/12">
         <div>
-          <h1 className="text-xl tablet:text-2xl font-display font-semibold tracking-tight text-slate-900 dark:text-slate-100">
+          <h1 className="text-xl tablet:text-2xl font-display font-semibold tracking-tight text-[#101010] dark:text-white">
             Asset & Font Library
           </h1>
-          <p className="mt-1 text-xs tablet:text-sm text-slate-600 dark:text-slate-400">
+          <p className="mt-1 text-xs tablet:text-sm text-[#555555] dark:text-[#B5B5B5]">
             Store custom TTF/OTF/WOFF fonts (with PDF embedding license inspection), company logos, reusable shapes, text styles, and color palettes locally across projects.
           </p>
         </div>
@@ -162,15 +161,23 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
         ]}
       />
 
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div
+          key={tab}
+          initial={shouldReduceMotion ? { opacity: 1 } : { opacity: 0, y: 5 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: -4 }}
+          transition={{ duration: MOTION_DURATION.fast, ease: MOTION_EASE.liquid }}
+        >
       {/* CUSTOM FONTS TAB */}
       {tab === 'fonts' && (
         <div className="space-y-4 text-xs">
           <GlassCard level={3} padding="md" className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="font-semibold text-slate-900 dark:text-slate-100">
+              <div className="font-semibold text-[#101010] dark:text-white">
                 Upload Custom Fonts (.ttf, .otf, .woff)
               </div>
-              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+              <div className="text-[11px] text-[#555555] dark:text-[#B5B5B5] mt-0.5">
                 Reads OpenType OS/2 fsType licensing bits automatically before PDF embedding.
               </div>
             </div>
@@ -185,16 +192,16 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
             <button
               type="button"
               onClick={() => fontInputRef.current?.click()}
-              className="min-h-[40px] px-4 py-2 rounded-md bg-blue-600 text-white font-medium hover:bg-blue-700 flex items-center gap-1.5"
+              className="min-h-[40px] px-4 py-2 rounded-xl bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] font-medium flex items-center gap-1.5"
             >
               <Upload className="w-3.5 h-3.5" />
               Import Font Files
             </button>
           </GlassCard>
 
-          <GlassCard level={3} padding="none" className="divide-y divide-slate-200/75 dark:divide-white/10 overflow-hidden">
+          <GlassCard level={3} padding="none" className="divide-y divide-black/10 dark:divide-white/10 overflow-hidden">
             {fonts.length === 0 ? (
-              <div className="p-8 text-center text-slate-500">
+              <div className="p-8 text-center text-[#888888] dark:text-[#858585]">
                 No custom fonts imported yet. Uploaded TTF/OTF fonts appear in the Editor Inspector and embed directly into exported PDFs when permitted by font license flags.
               </div>
             ) : (
@@ -207,18 +214,18 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
                     <div className="flex items-center gap-2 flex-wrap">
                       <span
                         style={{ fontFamily: font.fontFamily }}
-                        className="text-sm font-semibold text-slate-900 dark:text-slate-100"
+                        className="text-sm font-semibold text-[#101010] dark:text-white"
                       >
                         {font.fontFamily}
                       </span>
-                      <span className="text-[11px] text-slate-400 font-mono uppercase">
+                      <span className="text-[11px] text-[#888888] dark:text-[#858585] font-mono uppercase">
                         · {font.format}
                       </span>
                       <span
                         className={`text-[11px] font-medium flex items-center gap-1 ${
                           font.canEmbedInPdf
-                            ? 'text-emerald-600 dark:text-emerald-400'
-                            : 'text-amber-600 dark:text-amber-400'
+                            ? 'text-[#101010] dark:text-white'
+                            : 'text-amber-700 dark:text-amber-400'
                         }`}
                       >
                         {font.canEmbedInPdf ? (
@@ -229,14 +236,14 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
                         {font.embeddingPermission.replace('_', ' ')}
                       </span>
                     </div>
-                    <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                    <div className="text-[11px] text-[#555555] dark:text-[#B5B5B5] mt-0.5">
                       {font.name} · {font.licenseNote}
                     </div>
                   </div>
                   <button
                     type="button"
                     onClick={() => onDeleteAsset(font.id)}
-                    className="p-1.5 text-slate-400 hover:text-red-500 self-end tablet:self-auto"
+                    className="p-1.5 rounded-lg text-[#888888] hover:text-[#101010] dark:text-[#858585] dark:hover:text-white hover:bg-black/[0.04] dark:hover:bg-white/[0.08] self-end tablet:self-auto"
                     title="Delete font"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -253,10 +260,10 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
         <div className="space-y-4 text-xs">
           <GlassCard level={3} padding="md" className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="font-semibold text-slate-900 dark:text-slate-100">
+              <div className="font-semibold text-[#101010] dark:text-white">
                 Logos & Reusable Brand Graphics
               </div>
-              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+              <div className="text-[11px] text-[#555555] dark:text-[#B5B5B5] mt-0.5">
                 Normalized to lossless PNG with full pixel dimensions recorded for Preflight DPI checks.
               </div>
             </div>
@@ -271,7 +278,7 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
             <button
               type="button"
               onClick={() => imageInputRef.current?.click()}
-              className="min-h-[40px] px-4 py-2 rounded-md bg-blue-600 text-white font-medium hover:bg-blue-700 flex items-center gap-1.5"
+              className="min-h-[40px] px-4 py-2 rounded-xl bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] font-medium flex items-center gap-1.5"
             >
               <Upload className="w-3.5 h-3.5" />
               Import Logos / Images
@@ -286,7 +293,7 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
                 padding="none"
                 className="overflow-hidden flex flex-col"
               >
-                <div className="h-32 bg-slate-100 dark:bg-slate-900 flex items-center justify-center p-3 border-b border-slate-200 dark:border-slate-800">
+                <div className="h-32 bg-[#F7F7F7] dark:bg-[#0B0B0B] flex items-center justify-center p-3 border-b border-black/10 dark:border-white/12">
                   <img
                     src={img.dataUrl}
                     alt={img.name}
@@ -295,10 +302,10 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
                 </div>
                 <div className="p-3.5 flex items-center justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">
+                    <div className="font-semibold text-[#101010] dark:text-white truncate">
                       {img.name}
                     </div>
-                    <div className="text-[11px] text-slate-500 tabular-nums">
+                    <div className="text-[11px] text-[#888888] dark:text-[#858585] tabular-nums">
                       {img.naturalWidth} × {img.naturalHeight} px
                     </div>
                   </div>
@@ -307,7 +314,7 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
                       <button
                         type="button"
                         onClick={() => onInsertImageIntoProject(img)}
-                        className="px-2.5 py-1.5 rounded bg-blue-600 text-white font-medium hover:bg-blue-700 flex items-center gap-1"
+                        className="px-2.5 py-1.5 rounded-lg bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] font-medium flex items-center gap-1"
                       >
                         <FolderPlus className="w-3.5 h-3.5" />
                         Insert
@@ -316,7 +323,7 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
                     <button
                       type="button"
                       onClick={() => onDeleteAsset(img.id)}
-                      className="p-1.5 text-slate-400 hover:text-red-500"
+                      className="p-1.5 rounded-lg text-[#888888] hover:text-[#101010] dark:text-[#858585] dark:hover:text-white"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -352,22 +359,22 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
             className="p-4 rounded-2xl border glass-level-3 flex flex-wrap items-end gap-3"
           >
             <label className="flex-1 min-w-[160px]">
-              <span className="text-[11px] text-slate-500">Shape Preset Name</span>
+              <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">Shape Preset Name</span>
               <input
                 type="text"
                 value={shapeName}
                 onChange={(e) => setShapeName(e.target.value)}
-                className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent"
+                className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input"
               />
             </label>
             <label className="w-28">
-              <span className="text-[11px] text-slate-500">Kind</span>
+              <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">Kind</span>
               <select
                 value={shapeKind}
                 onChange={(e) =>
                   setShapeKind(e.target.value as 'rect' | 'circle' | 'line')
                 }
-                className="mt-1 w-full px-2 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0E131D]"
+                className="mt-1 w-full px-2 py-1.5 rounded-lg border studio-select"
               >
                 <option value="rect">Rectangle</option>
                 <option value="circle">Ellipse</option>
@@ -375,26 +382,26 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
               </select>
             </label>
             <label>
-              <span className="text-[11px] text-slate-500 block">Fill</span>
+              <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5] block">Fill</span>
               <input
                 type="color"
                 value={shapeFill}
                 onChange={(e) => setShapeFill(e.target.value)}
-                className="mt-1 w-9 h-8 rounded border border-slate-300 dark:border-slate-700 cursor-pointer"
+                className="mt-1 w-9 h-8 rounded border border-black/15 dark:border-white/15 cursor-pointer"
               />
             </label>
             <label>
-              <span className="text-[11px] text-slate-500 block">Stroke</span>
+              <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5] block">Stroke</span>
               <input
                 type="color"
                 value={shapeStroke}
                 onChange={(e) => setShapeStroke(e.target.value)}
-                className="mt-1 w-9 h-8 rounded border border-slate-300 dark:border-slate-700 cursor-pointer"
+                className="mt-1 w-9 h-8 rounded border border-black/15 dark:border-white/15 cursor-pointer"
               />
             </label>
             <button
               type="submit"
-              className="px-4 py-2 rounded bg-blue-600 text-white font-medium hover:bg-blue-700"
+              className="px-4 py-2 rounded-xl bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] font-medium"
             >
               Save Shape Preset
             </button>
@@ -407,10 +414,10 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
                 className="p-3.5 rounded-2xl border glass-level-3 flex items-center justify-between gap-2"
               >
                 <div className="min-w-0">
-                  <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">
+                  <div className="font-semibold text-[#101010] dark:text-white truncate">
                     {s.name}
                   </div>
-                  <div className="text-[11px] text-slate-500 capitalize">
+                  <div className="text-[11px] text-[#888888] dark:text-[#858585] capitalize">
                     {s.shapeKind} · {s.width}×{s.height}pt
                   </div>
                 </div>
@@ -419,7 +426,7 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
                     <button
                       type="button"
                       onClick={() => onInsertShapeIntoProject(s)}
-                      className="px-2.5 py-1 rounded bg-blue-600 text-white font-medium"
+                      className="px-2.5 py-1 rounded-lg bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] font-medium"
                     >
                       Insert
                     </button>
@@ -427,7 +434,7 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
                   <button
                     type="button"
                     onClick={() => onDeleteAsset(s.id)}
-                    className="p-1 text-slate-400 hover:text-red-500"
+                    className="p-1 rounded-lg text-[#888888] hover:text-[#101010] dark:text-[#858585] dark:hover:text-white"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
@@ -462,20 +469,20 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
             className="p-4 rounded-2xl border glass-level-3 flex flex-wrap items-end gap-3"
           >
             <label className="flex-1 min-w-[140px]">
-              <span className="text-[11px] text-slate-500">Style Name</span>
+              <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">Style Name</span>
               <input
                 type="text"
                 value={styleName}
                 onChange={(e) => setStyleName(e.target.value)}
-                className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent"
+                className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input"
               />
             </label>
             <label className="w-40">
-              <span className="text-[11px] text-slate-500">Font Family</span>
+              <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">Font Family</span>
               <select
                 value={styleFont}
                 onChange={(e) => setStyleFont(e.target.value)}
-                className="mt-1 w-full px-2 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0E131D]"
+                className="mt-1 w-full px-2 py-1.5 rounded-lg border studio-select"
               >
                 <option value="Helvetica">Helvetica</option>
                 <option value="Times-Roman">Times-Roman</option>
@@ -488,41 +495,41 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
               </select>
             </label>
             <label className="w-20">
-              <span className="text-[11px] text-slate-500">Size (pt)</span>
+              <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">Size (pt)</span>
               <input
                 type="number"
                 min="6"
                 max="72"
                 value={styleSize}
                 onChange={(e) => setStyleSize(Number(e.target.value) || 12)}
-                className="mt-1 w-full px-2 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                className="mt-1 w-full px-2 py-1.5 rounded-lg border studio-input tabular-nums"
               />
             </label>
             <label className="w-24">
-              <span className="text-[11px] text-slate-500">Weight</span>
+              <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">Weight</span>
               <select
                 value={styleWeight}
                 onChange={(e) =>
                   setStyleWeight(e.target.value as 'normal' | 'bold')
                 }
-                className="mt-1 w-full px-2 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0E131D]"
+                className="mt-1 w-full px-2 py-1.5 rounded-lg border studio-select"
               >
                 <option value="normal">Regular</option>
                 <option value="bold">Bold</option>
               </select>
             </label>
             <label>
-              <span className="text-[11px] text-slate-500 block">Color</span>
+              <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5] block">Color</span>
               <input
                 type="color"
                 value={styleColor}
                 onChange={(e) => setStyleColor(e.target.value)}
-                className="mt-1 w-9 h-8 rounded border border-slate-300 dark:border-slate-700 cursor-pointer"
+                className="mt-1 w-9 h-8 rounded border border-black/15 dark:border-white/15 cursor-pointer"
               />
             </label>
             <button
               type="submit"
-              className="px-4 py-2 rounded bg-blue-600 text-white font-medium hover:bg-blue-700"
+              className="px-4 py-2 rounded-xl bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] font-medium"
             >
               Save Text Style
             </button>
@@ -545,14 +552,14 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
                   >
                     {st.name}
                   </div>
-                  <div className="mt-1 text-[11px] text-slate-500 tabular-nums">
+                  <div className="mt-1 text-[11px] text-[#888888] dark:text-[#858585] tabular-nums">
                     {st.fontFamily} · {st.fontSize}pt · {st.fontWeight}
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => onDeleteAsset(st.id)}
-                  className="p-1.5 text-slate-400 hover:text-red-500 shrink-0"
+                  className="p-1.5 rounded-lg text-[#888888] hover:text-[#101010] dark:text-[#858585] dark:hover:text-white shrink-0"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
@@ -584,28 +591,28 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
             className="p-4 rounded-2xl border glass-level-3 flex flex-wrap items-end gap-3"
           >
             <label className="w-52">
-              <span className="text-[11px] text-slate-500">Palette Name</span>
+              <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">Palette Name</span>
               <input
                 type="text"
                 value={paletteName}
                 onChange={(e) => setPaletteName(e.target.value)}
-                className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent"
+                className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input"
               />
             </label>
             <label className="flex-1 min-w-[220px]">
-              <span className="text-[11px] text-slate-500">
+              <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                 Hex Colors (comma separated)
               </span>
               <input
                 type="text"
                 value={paletteColors}
                 onChange={(e) => setPaletteColors(e.target.value)}
-                className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent font-mono"
+                className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input font-mono"
               />
             </label>
             <button
               type="submit"
-              className="px-4 py-2 rounded bg-blue-600 text-white font-medium hover:bg-blue-700"
+              className="px-4 py-2 rounded-xl bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] font-medium"
             >
               Save Palette
             </button>
@@ -618,7 +625,7 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
                 className="p-4 rounded-2xl border glass-level-3 flex items-center justify-between gap-3"
               >
                 <div>
-                  <div className="font-semibold text-slate-900 dark:text-slate-100">
+                  <div className="font-semibold text-[#101010] dark:text-white">
                     {pal.name}
                   </div>
                   <div className="mt-2 flex items-center gap-1.5">
@@ -627,7 +634,7 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
                         key={hex}
                         title={hex}
                         style={{ backgroundColor: hex }}
-                        className="w-7 h-7 rounded border border-slate-300 dark:border-slate-700"
+                        className="w-7 h-7 rounded border border-black/15 dark:border-white/15"
                       />
                     ))}
                   </div>
@@ -635,7 +642,7 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
                 <button
                   type="button"
                   onClick={() => onDeleteAsset(pal.id)}
-                  className="p-1.5 text-slate-400 hover:text-red-500"
+                  className="p-1.5 rounded-lg text-[#888888] hover:text-[#101010] dark:text-[#858585] dark:hover:text-white"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -644,6 +651,8 @@ export const AssetLibraryView: React.FC<AssetLibraryViewProps> = ({
           </div>
         </div>
       )}
+        </motion.div>
+      </AnimatePresence>
     </div>
   );
 };

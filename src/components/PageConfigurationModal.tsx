@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useId, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Check,
@@ -12,6 +12,18 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import {
+  AnimatePresence,
+  LayoutGroup,
+  motion,
+  useReducedMotion,
+} from 'motion/react';
+import {
+  MOTION_DURATION,
+  MOTION_SPRING,
+  modalBackdropVariants,
+  modalPanelVariants,
+} from '../config/motionSystem';
 import {
   CopiesPerPageConfig,
   CustomPaperPreset,
@@ -76,6 +88,8 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
   onApplyConfig,
 }) => {
   const viewport = useViewport();
+  const prefersReduced = useReducedMotion();
+  const tabGroupId = useId();
   const [mobileTab, setMobileTab] = useState<'paper' | 'copies' | 'preview'>(
     'paper'
   );
@@ -238,8 +252,6 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
     }
     return null;
   }, [dimValidation.valid, draftPage, previewLayout, project.elements]);
-
-  if (!isOpen) return null;
 
   const syncInputsFromPt = (wPt: number, hPt: number, unit: MeasurementUnit) => {
     setWidthText(String(ptToUnit(wPt, unit)));
@@ -496,62 +508,108 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
     : 1;
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/45 dark:bg-black/65 backdrop-blur-sm flex items-center justify-center p-0 tablet:p-4">
-      <div className="w-full h-[100dvh] tablet:h-auto tablet:max-w-5xl tablet:max-h-[92dvh] rounded-none tablet:rounded-2xl border-0 tablet:border glass-level-4 flex flex-col overflow-hidden">
-        {/* Header */}
-        <div className="px-4 tablet:px-5 py-3 border-b border-slate-200/80 dark:border-white/10 flex items-center justify-between gap-3 shrink-0 pt-safe">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <Maximize2 className="w-4 h-4 text-blue-500 shrink-0" />
-            <div className="min-w-0">
-              <h2 className="text-sm font-display font-semibold text-slate-900 dark:text-slate-100 truncate">
-                Page Setup & Imposition
-              </h2>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                Physical PDF MediaBox (1 in = 72 pt) · Copies, Margins & Scaling
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="min-w-[44px] min-h-[44px] -mr-2 flex items-center justify-center rounded-xl text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 hover:bg-slate-200/60 dark:hover:bg-white/10 transition-colors"
-            aria-label="Close page setup"
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          key="page-cfg-backdrop"
+          variants={modalBackdropVariants}
+          initial="initial"
+          animate="animate"
+          exit="exit"
+          onClick={onClose}
+          className="fixed inset-0 z-50 bg-black/45 dark:bg-black/70 backdrop-blur-sm flex items-center justify-center p-0 tablet:p-4"
+        >
+          <motion.div
+            key="page-cfg-panel"
+            role="dialog"
+            aria-modal="true"
+            variants={
+              prefersReduced
+                ? {
+                    initial: { opacity: 0 },
+                    animate: { opacity: 1, transition: { duration: 0.14 } },
+                    exit: { opacity: 0, pointerEvents: 'none', transition: { duration: 0.12 } },
+                  }
+                : modalPanelVariants
+            }
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            onClick={(e) => e.stopPropagation()}
+            className="w-full h-[100dvh] tablet:h-auto tablet:max-w-5xl tablet:max-h-[92dvh] rounded-none tablet:rounded-2xl border-0 tablet:border glass-level-4 flex flex-col overflow-hidden"
           >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Mobile Tab Switcher */}
-        {viewport.isMobile && (
-          <div className="grid grid-cols-3 border-b border-slate-200/75 dark:border-white/10 text-xs font-medium shrink-0 glass-level-2">
-            {(
-              [
-                ['paper', 'Paper & Size'],
-                ['copies', 'Copies & Grid'],
-                ['preview', 'Live Preview'],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
+            {/* Header */}
+            <div className="px-4 tablet:px-5 py-3 border-b border-black/10 dark:border-white/12 flex items-center justify-between gap-3 shrink-0 pt-safe">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <Maximize2 className="w-4 h-4 text-[#101010] dark:text-white shrink-0" />
+                <div className="min-w-0">
+                  <h2 className="text-sm font-display font-semibold text-[#101010] dark:text-white truncate">
+                    Page Setup & Imposition
+                  </h2>
+                  <p className="text-[11px] text-[#555555] dark:text-[#B5B5B5] truncate">
+                    Physical PDF MediaBox (1 in = 72 pt) · Copies, Margins & Scaling
+                  </p>
+                </div>
+              </div>
+              <motion.button
                 type="button"
-                onClick={() => setMobileTab(id)}
-                className={`min-h-[44px] border-b-2 transition-colors whitespace-nowrap ${
-                  mobileTab === id
-                    ? 'border-blue-500 text-blue-600 dark:text-blue-400 bg-white/60 dark:bg-white/8'
-                    : 'border-transparent text-slate-500 dark:text-slate-400'
-                }`}
+                whileTap={!prefersReduced ? { scale: 0.92 } : undefined}
+                onClick={onClose}
+                className="min-w-[44px] min-h-[44px] -mr-2 flex items-center justify-center rounded-xl text-[#888888] hover:text-[#101010] dark:text-[#858585] dark:hover:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
+                aria-label="Close page setup"
               >
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
+                <X className="w-4 h-4" />
+              </motion.button>
+            </div>
+
+            {/* Mobile Tab Switcher */}
+            {viewport.isMobile && (
+              <LayoutGroup id={`page-cfg-${tabGroupId}`}>
+                <div className="grid grid-cols-3 border-b border-black/10 dark:border-white/12 text-xs font-medium shrink-0 glass-level-2">
+                  {(
+                    [
+                      ['paper', 'Paper & Size'],
+                      ['copies', 'Copies & Grid'],
+                      ['preview', 'Live Preview'],
+                    ] as const
+                  ).map(([id, label]) => {
+                    const active = mobileTab === id;
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => setMobileTab(id)}
+                        className={`relative min-h-[44px] transition-colors whitespace-nowrap ${
+                          active
+                            ? 'text-[#101010] dark:text-white font-semibold'
+                            : 'text-[#888888] dark:text-[#858585]'
+                        }`}
+                      >
+                        <span className="relative z-10">{label}</span>
+                        {active && (
+                          <motion.span
+                            layoutId={`page-cfg-tab-${tabGroupId}`}
+                            transition={
+                              prefersReduced
+                                ? { duration: MOTION_DURATION.instant }
+                                : MOTION_SPRING.nav
+                            }
+                            className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-[#101010] dark:bg-white"
+                            aria-hidden="true"
+                          />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </LayoutGroup>
+            )}
 
         {/* Two-column Body (tabbed on mobile) */}
         <div className="flex-1 overflow-hidden flex flex-col tablet:flex-row">
           {/* Left Configuration Controls */}
           <div
-            className={`w-full tablet:w-[400px] desktop:w-[520px] shrink-0 overflow-y-auto p-4 tablet:p-5 border-b tablet:border-b-0 tablet:border-r border-slate-200 dark:border-slate-800 space-y-5 text-xs ${
+            className={`w-full tablet:w-[400px] desktop:w-[520px] shrink-0 overflow-y-auto p-4 tablet:p-5 border-b tablet:border-b-0 tablet:border-r border-black/10 dark:border-white/12 space-y-5 text-xs ${
               !showPaperSection && !showCopiesSection ? 'hidden' : ''
             }`}
           >
@@ -559,7 +617,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
               <>
             {/* Standard Paper Sizes */}
             <div>
-              <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-2">
+              <div className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5] mb-2">
                 Standard Paper Sizes
               </div>
               <div className="grid grid-cols-4 gap-1.5">
@@ -568,10 +626,10 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                     key={preset}
                     type="button"
                     onClick={() => handleSelectStandardPreset(preset)}
-                    className={`py-1.5 px-2 rounded border text-[11px] font-medium truncate ${
+                    className={`py-1.5 px-2 rounded-lg border text-[11px] font-medium truncate transition-colors ${
                       draftPage.sizePreset === preset
-                        ? 'border-blue-600 bg-blue-600/15 text-blue-600 dark:text-blue-400'
-                        : 'border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60'
+                        ? 'studio-active-surface font-semibold'
+                        : 'border-black/15 dark:border-white/15 text-[#555555] dark:text-[#B5B5B5] hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
                     }`}
                   >
                     {preset}
@@ -580,10 +638,10 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                 <button
                   type="button"
                   onClick={() => handleSelectStandardPreset('Custom')}
-                  className={`py-1.5 px-2 rounded border text-[11px] font-medium truncate ${
+                  className={`py-1.5 px-2 rounded-lg border text-[11px] font-medium truncate transition-colors ${
                     draftPage.sizePreset === 'Custom'
-                      ? 'border-emerald-600 bg-emerald-600/15 text-emerald-700 dark:text-emerald-400'
-                      : 'border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60'
+                      ? 'studio-active-surface font-semibold'
+                      : 'border-black/15 dark:border-white/15 text-[#555555] dark:text-[#B5B5B5] hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
                   }`}
                 >
                   Custom
@@ -592,16 +650,16 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
             </div>
 
             {/* Units & Custom Dimensions */}
-            <div className="space-y-3 pt-3 border-t border-slate-200 dark:border-slate-800">
+            <div className="space-y-3 pt-3 border-t border-black/10 dark:border-white/10">
               <div className="grid grid-cols-3 gap-3">
                 <label className="block">
-                  <span className="text-[11px] text-slate-500">Unit</span>
+                  <span className="text-[11px] text-[#888888] dark:text-[#858585]">Unit</span>
                   <select
                     value={unit}
                     onChange={(e) =>
                       handleUnitChange(e.target.value as MeasurementUnit)
                     }
-                    className="mt-1 w-full px-2 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#111827]"
+                    className="mt-1 w-full px-2 py-1.5 rounded-xl studio-select"
                   >
                     {UNIT_OPTIONS.map((u) => (
                       <option key={u.id} value={u.id}>
@@ -612,7 +670,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                 </label>
 
                 <label className="block">
-                  <span className="text-[11px] text-slate-500">
+                  <span className="text-[11px] text-[#888888] dark:text-[#858585]">
                     Width ({unit})
                   </span>
                   <input
@@ -620,18 +678,18 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                     step="any"
                     value={widthText}
                     onChange={(e) => handleWidthTextChange(e.target.value)}
-                    className={`mt-1 w-full px-2.5 py-1.5 rounded border bg-transparent tabular-nums ${
+                    className={`mt-1 w-full px-2.5 py-1.5 rounded-xl studio-input tabular-nums ${
                       !Number.isFinite(rawWidthPt) ||
                       rawWidthPt < MIN_PAGE_DIM_PT ||
                       rawWidthPt > MAX_PAGE_DIM_PT
-                        ? 'border-red-500'
-                        : 'border-slate-300 dark:border-slate-700'
+                        ? '!border-red-500'
+                        : ''
                     }`}
                   />
                 </label>
 
                 <label className="block">
-                  <span className="text-[11px] text-slate-500">
+                  <span className="text-[11px] text-[#888888] dark:text-[#858585]">
                     Height ({unit})
                   </span>
                   <input
@@ -639,21 +697,21 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                     step="any"
                     value={heightText}
                     onChange={(e) => handleHeightTextChange(e.target.value)}
-                    className={`mt-1 w-full px-2.5 py-1.5 rounded border bg-transparent tabular-nums ${
+                    className={`mt-1 w-full px-2.5 py-1.5 rounded-xl studio-input tabular-nums ${
                       !Number.isFinite(rawHeightPt) ||
                       rawHeightPt < MIN_PAGE_DIM_PT ||
                       rawHeightPt > MAX_PAGE_DIM_PT
-                        ? 'border-red-500'
-                        : 'border-slate-300 dark:border-slate-700'
+                        ? '!border-red-500'
+                        : ''
                     }`}
                   />
                 </label>
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-2 px-2.5 py-1.5 rounded bg-slate-50 dark:bg-[#111827] border border-slate-200 dark:border-slate-800 text-[11px] tabular-nums text-slate-600 dark:text-slate-400">
+              <div className="flex flex-wrap items-center justify-between gap-2 px-2.5 py-1.5 rounded-xl bg-[#F7F7F7] dark:bg-[#0B0B0B] border border-black/10 dark:border-white/10 text-[11px] tabular-nums text-[#555555] dark:text-[#B5B5B5]">
                 <span>
                   PDF Points:{' '}
-                  <strong className="text-slate-900 dark:text-slate-100">
+                  <strong className="text-[#101010] dark:text-white">
                     {Number.isFinite(rawWidthPt) ? rawWidthPt.toFixed(2) : '—'} ×{' '}
                     {Number.isFinite(rawHeightPt) ? rawHeightPt.toFixed(2) : '—'} pt
                   </strong>
@@ -674,7 +732,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
 
             {/* Orientation */}
             <div>
-              <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-1.5">
+              <div className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5] mb-1.5">
                 Orientation (swaps width/height while preserving custom dimensions)
               </div>
               <div className="grid grid-cols-3 gap-2">
@@ -689,10 +747,10 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                     key={ori}
                     type="button"
                     onClick={() => handleOrientationChange(ori)}
-                    className={`py-1.5 rounded border font-medium ${
+                    className={`py-1.5 rounded-lg border font-medium transition-colors ${
                       draftPage.orientation === ori
-                        ? 'border-blue-600 bg-blue-600/12 text-blue-600 dark:text-blue-400'
-                        : 'border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300'
+                        ? 'studio-active-surface'
+                        : 'border-black/15 dark:border-white/15 text-[#555555] dark:text-[#B5B5B5] hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
                     }`}
                   >
                     {label}
@@ -702,9 +760,9 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
             </div>
 
             {/* Margins */}
-            <div className="pt-3 border-t border-slate-200 dark:border-slate-800">
+            <div className="pt-3 border-t border-black/10 dark:border-white/10">
               <div className="flex items-center justify-between mb-1.5">
-                <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                <span className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5]">
                   Page Margins ({unit})
                 </span>
                 <button
@@ -717,7 +775,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                       marginLeftPt: prev.marginTopPt,
                     }))
                   }
-                  className="text-[10px] text-blue-600 dark:text-blue-400 hover:underline"
+                  className="text-[10px] text-[#101010] dark:text-white hover:underline font-medium"
                 >
                   Apply Top Margin to All
                 </button>
@@ -732,7 +790,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                   ] as const
                 ).map(([label, key]) => (
                   <label key={key} className="block">
-                    <span className="text-[10px] text-slate-400">{label}</span>
+                    <span className="text-[10px] text-[#888888] dark:text-[#858585]">{label}</span>
                     <input
                       type="number"
                       min="0"
@@ -747,7 +805,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                           ),
                         }))
                       }
-                      className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                      className="mt-0.5 w-full px-2 py-1 rounded-lg studio-input tabular-nums"
                     />
                   </label>
                 ))}
@@ -755,10 +813,10 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
             </div>
 
             {/* Spacing, Bleed, Crop Marks, Background & Rotation */}
-            <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
+            <div className="pt-3 border-t border-black/10 dark:border-white/10 space-y-3">
               <div className="grid grid-cols-3 gap-2">
                 <label className="block">
-                  <span className="text-[10px] text-slate-400">
+                  <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                     Horiz. Spacing ({unit})
                   </span>
                   <input
@@ -771,11 +829,11 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                         Math.max(0, unitToPt(Number(e.target.value) || 0, unit))
                       )
                     }
-                    className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                    className="mt-0.5 w-full px-2 py-1 rounded-lg studio-input tabular-nums"
                   />
                 </label>
                 <label className="block">
-                  <span className="text-[10px] text-slate-400">
+                  <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                     Vert. Spacing ({unit})
                   </span>
                   <input
@@ -788,11 +846,11 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                         Math.max(0, unitToPt(Number(e.target.value) || 0, unit))
                       )
                     }
-                    className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                    className="mt-0.5 w-full px-2 py-1 rounded-lg studio-input tabular-nums"
                   />
                 </label>
                 <label className="block">
-                  <span className="text-[10px] text-slate-400">
+                  <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                     Bleed ({unit})
                   </span>
                   <input
@@ -809,14 +867,14 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                         ),
                       }))
                     }
-                    className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                    className="mt-0.5 w-full px-2 py-1 rounded-lg studio-input tabular-nums"
                   />
                 </label>
               </div>
 
               <div className="grid grid-cols-3 gap-2 items-end">
                 <label className="block">
-                  <span className="text-[10px] text-slate-400">Background</span>
+                  <span className="text-[10px] text-[#888888] dark:text-[#858585]">Background</span>
                   <div className="mt-0.5 flex items-center gap-1.5">
                     <input
                       type="color"
@@ -827,9 +885,9 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                           backgroundColor: e.target.value,
                         }))
                       }
-                      className="w-7 h-7 rounded border border-slate-300 dark:border-slate-700 cursor-pointer"
+                      className="w-7 h-7 rounded-lg border border-black/15 dark:border-white/15 cursor-pointer"
                     />
-                    <span className="font-mono text-[10px]">
+                    <span className="font-mono text-[10px] text-[#555555] dark:text-[#B5B5B5]">
                       {draftPage.backgroundColor}
                     </span>
                     {draftPage.backgroundColor !== '#FFFFFF' && (
@@ -842,7 +900,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                             backgroundColor: '#FFFFFF',
                           }))
                         }
-                        className="text-slate-400 hover:text-slate-900 dark:hover:text-slate-100"
+                        className="text-[#888888] hover:text-[#101010] dark:hover:text-white"
                       >
                         <RotateCcw className="w-3 h-3" />
                       </button>
@@ -851,7 +909,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                 </label>
 
                 <label className="block">
-                  <span className="text-[10px] text-slate-400">Page Rotation</span>
+                  <span className="text-[10px] text-[#888888] dark:text-[#858585]">Page Rotation</span>
                   <select
                     value={draftPage.rotation}
                     onChange={(e) =>
@@ -860,7 +918,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                         rotation: Number(e.target.value) as 0 | 90 | 180 | 270,
                       }))
                     }
-                    className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#111827]"
+                    className="mt-0.5 w-full px-2 py-1 rounded-lg studio-select"
                   >
                     <option value={0}>0°</option>
                     <option value={90}>90° CW</option>
@@ -879,9 +937,9 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                         cropMarks: e.target.checked,
                       }))
                     }
-                    className="rounded border-slate-400 text-blue-600"
+                    className="rounded border-black/30 dark:border-white/30 accent-[#101010] dark:accent-white"
                   />
-                  <span className="text-slate-700 dark:text-slate-300">
+                  <span className="text-[#101010] dark:text-white">
                     Crop Marks
                   </span>
                 </label>
@@ -889,8 +947,8 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
             </div>
 
             {/* Custom Paper Presets Manager */}
-            <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2.5">
-              <div className="font-semibold text-slate-900 dark:text-slate-100">
+            <div className="pt-3 border-t border-black/10 dark:border-white/10 space-y-2.5">
+              <div className="font-semibold text-[#101010] dark:text-white">
                 Saved Custom Paper Presets
               </div>
               <div className="flex gap-2">
@@ -899,13 +957,13 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                   placeholder="Preset name (e.g. 80mm Receipt Roll, Business Card)"
                   value={newPresetName}
                   onChange={(e) => setNewPresetName(e.target.value)}
-                  className="flex-1 px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent"
+                  className="flex-1 px-2.5 py-1.5 rounded-xl studio-input"
                 />
                 <button
                   type="button"
                   disabled={!dimValidation.valid}
                   onClick={handleSaveCustomPreset}
-                  className="px-3 py-1.5 rounded bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-45 flex items-center gap-1 whitespace-nowrap"
+                  className="px-3 py-1.5 rounded-xl bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] font-medium disabled:opacity-45 flex items-center gap-1 whitespace-nowrap transition-colors"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   Save Preset
@@ -913,7 +971,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
               </div>
 
               {presets.length === 0 ? (
-                <div className="p-3 rounded border border-dashed border-slate-300 dark:border-slate-700 text-[11px] text-slate-500 text-center">
+                <div className="p-3 rounded-xl border border-dashed border-black/15 dark:border-white/15 text-[11px] text-[#888888] dark:text-[#858585] text-center">
                   No custom paper presets saved yet. Enter custom dimensions above and click Save Preset.
                 </div>
               ) : (
@@ -924,10 +982,10 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                     return (
                       <div
                         key={preset.id}
-                        className={`px-2.5 py-2 rounded border flex items-center justify-between gap-2 ${
+                        className={`px-2.5 py-2 rounded-xl border flex items-center justify-between gap-2 transition-colors ${
                           isActive
-                            ? 'border-emerald-600 bg-emerald-600/10'
-                            : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                            ? 'studio-active-surface'
+                            : 'border-black/10 dark:border-white/12 hover:bg-black/[0.03] dark:hover:bg-white/[0.04]'
                         }`}
                       >
                         {isEditing ? (
@@ -948,7 +1006,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                                   setEditingPresetId(null);
                                 }
                               }}
-                              className="flex-1 px-2 py-0.5 rounded border border-blue-500 bg-transparent text-xs"
+                              className="flex-1 px-2 py-0.5 rounded-lg border border-black/30 dark:border-white/30 bg-transparent text-xs text-[#101010] dark:text-white"
                             />
                             <button
                               type="button"
@@ -961,7 +1019,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                                 );
                                 setEditingPresetId(null);
                               }}
-                              className="p-1 text-emerald-600 hover:bg-emerald-500/10 rounded"
+                              className="p-1 text-[#101010] dark:text-white hover:bg-black/[0.06] dark:hover:bg-white/[0.08] rounded-lg"
                             >
                               <Check className="w-3.5 h-3.5" />
                             </button>
@@ -972,10 +1030,10 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                             onClick={() => handleApplySavedPreset(preset)}
                             className="flex-1 text-left min-w-0"
                           >
-                            <div className="font-medium text-slate-900 dark:text-slate-100 truncate">
+                            <div className="font-medium text-[#101010] dark:text-white truncate">
                               {preset.name}
                             </div>
-                            <div className="text-[10px] text-slate-500 tabular-nums">
+                            <div className="text-[10px] text-[#888888] dark:text-[#858585] tabular-nums">
                               {ptToUnit(preset.widthPt, preset.unit)} ×{' '}
                               {ptToUnit(preset.heightPt, preset.unit)} {preset.unit}{' '}
                               ({preset.widthPt.toFixed(1)}×{preset.heightPt.toFixed(1)} pt ·{' '}
@@ -993,7 +1051,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                                 setEditingPresetId(preset.id);
                                 setEditingPresetName(preset.name);
                               }}
-                              className="p-1 text-slate-400 hover:text-slate-900 dark:hover:text-slate-100"
+                              className="p-1 text-[#888888] hover:text-[#101010] dark:hover:text-white"
                             >
                               <Pencil className="w-3.5 h-3.5" />
                             </button>
@@ -1003,7 +1061,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                               onClick={() =>
                                 setPresets(duplicateCustomPaperPreset(preset.id))
                               }
-                              className="p-1 text-slate-400 hover:text-slate-900 dark:hover:text-slate-100"
+                              className="p-1 text-[#888888] hover:text-[#101010] dark:hover:text-white"
                             >
                               <Copy className="w-3.5 h-3.5" />
                             </button>
@@ -1013,7 +1071,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                               onClick={() =>
                                 setPresets(deleteCustomPaperPreset(preset.id))
                               }
-                              className="p-1 text-slate-400 hover:text-red-500"
+                              className="p-1 text-[#888888] hover:text-[#101010] dark:hover:text-white"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
@@ -1030,7 +1088,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
 
             {showCopiesSection && (
               <div className="space-y-4">
-                <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                <div className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5]">
                   Copies per Page & Grid Layout
                 </div>
                 <div className="grid grid-cols-4 gap-1.5">
@@ -1039,10 +1097,10 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                       key={cnt}
                       type="button"
                       onClick={() => handleSelectCopiesPreset(cnt)}
-                      className={`min-h-[40px] px-2 rounded border text-xs font-medium tabular-nums ${
+                      className={`min-h-[40px] px-2 rounded-lg border text-xs font-medium tabular-nums transition-colors ${
                         draftCopiesCount === cnt
-                          ? 'border-blue-600 bg-blue-600/15 text-blue-600 dark:text-blue-400'
-                          : 'border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300'
+                          ? 'studio-active-surface font-semibold'
+                          : 'border-black/15 dark:border-white/15 text-[#555555] dark:text-[#B5B5B5] hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
                       }`}
                     >
                       {cnt}×
@@ -1052,7 +1110,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
 
                 <div className="grid grid-cols-2 tablet:grid-cols-3 gap-2">
                   <label className="block">
-                    <span className="text-[10px] text-slate-400">Columns</span>
+                    <span className="text-[10px] text-[#888888] dark:text-[#858585]">Columns</span>
                     <input
                       type="number"
                       min="1"
@@ -1067,11 +1125,11 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                           copiesPreset: 'custom',
                         }));
                       }}
-                      className="mt-0.5 w-full min-h-[40px] px-2 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                      className="mt-0.5 w-full min-h-[40px] px-2 rounded-lg studio-input tabular-nums"
                     />
                   </label>
                   <label className="block">
-                    <span className="text-[10px] text-slate-400">Rows</span>
+                    <span className="text-[10px] text-[#888888] dark:text-[#858585]">Rows</span>
                     <input
                       type="number"
                       min="1"
@@ -1086,11 +1144,11 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                           copiesPreset: 'custom',
                         }));
                       }}
-                      className="mt-0.5 w-full min-h-[40px] px-2 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                      className="mt-0.5 w-full min-h-[40px] px-2 rounded-lg studio-input tabular-nums"
                     />
                   </label>
                   <label className="col-span-2 tablet:col-span-1 block">
-                    <span className="text-[10px] text-slate-400">Scaling</span>
+                    <span className="text-[10px] text-[#888888] dark:text-[#858585]">Scaling</span>
                     <select
                       value={draftFit.scalingMode}
                       onChange={(e) =>
@@ -1099,7 +1157,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                           scalingMode: e.target.value as ScalingMode,
                         }))
                       }
-                      className="mt-0.5 w-full min-h-[40px] px-2 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#111827]"
+                      className="mt-0.5 w-full min-h-[40px] px-2 rounded-lg studio-select"
                     >
                       <option value="auto_fit_aspect">Auto-Fit</option>
                       <option value="fit_to_cell">Fit Cell</option>
@@ -1113,7 +1171,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
 
                 {draftFit.scalingMode === 'custom_percent' && (
                   <label className="block">
-                    <span className="text-[10px] text-slate-400">Custom Scale (%)</span>
+                    <span className="text-[10px] text-[#888888] dark:text-[#858585]">Custom Scale (%)</span>
                     <input
                       type="number"
                       min="10"
@@ -1125,15 +1183,15 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                           customPercent: Math.max(10, Number(e.target.value) || 100),
                         }))
                       }
-                      className="mt-0.5 w-full min-h-[40px] px-2 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                      className="mt-0.5 w-full min-h-[40px] px-2 rounded-lg studio-input tabular-nums"
                     />
                   </label>
                 )}
 
                 {viewport.isMobile && (
-                  <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
+                  <div className="grid grid-cols-2 gap-2 pt-2 border-t border-black/10 dark:border-white/10">
                     <label className="block">
-                      <span className="text-[10px] text-slate-400">Horiz. Spacing ({unit})</span>
+                      <span className="text-[10px] text-[#888888] dark:text-[#858585]">Horiz. Spacing ({unit})</span>
                       <input
                         type="number"
                         min="0"
@@ -1142,11 +1200,11 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                         onChange={(e) =>
                           setHSpacingPt(Math.max(0, unitToPt(Number(e.target.value) || 0, unit)))
                         }
-                        className="mt-0.5 w-full min-h-[40px] px-2 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                        className="mt-0.5 w-full min-h-[40px] px-2 rounded-lg studio-input tabular-nums"
                       />
                     </label>
                     <label className="block">
-                      <span className="text-[10px] text-slate-400">Vert. Spacing ({unit})</span>
+                      <span className="text-[10px] text-[#888888] dark:text-[#858585]">Vert. Spacing ({unit})</span>
                       <input
                         type="number"
                         min="0"
@@ -1155,7 +1213,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                         onChange={(e) =>
                           setVSpacingPt(Math.max(0, unitToPt(Number(e.target.value) || 0, unit)))
                         }
-                        className="mt-0.5 w-full min-h-[40px] px-2 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                        className="mt-0.5 w-full min-h-[40px] px-2 rounded-lg studio-input tabular-nums"
                       />
                     </label>
                   </div>
@@ -1166,15 +1224,15 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
 
           {/* Right Live Scaled Page Preview & Validation */}
           <div
-            className={`flex-1 glass-level-1 p-4 tablet:p-6 flex flex-col items-center justify-between overflow-y-auto ${
+            className={`flex-1 bg-[#EFEFEF] dark:bg-[#0B0B0B] p-4 tablet:p-6 flex flex-col items-center justify-between overflow-y-auto ${
               !showPreviewSection ? 'hidden' : ''
             }`}
           >
             <div className="w-full flex flex-wrap items-center justify-between gap-2 text-xs">
-              <div className="font-semibold text-slate-900 dark:text-slate-100">
+              <div className="font-semibold text-[#101010] dark:text-white">
                 Live Scaled Page Preview ({draftCopies.columns}×{draftCopies.rows} · {draftCopiesCount} copies)
               </div>
-              <div className="font-mono text-[11px] text-slate-500 dark:text-slate-400 tabular-nums">
+              <div className="font-mono text-[11px] text-[#555555] dark:text-[#B5B5B5] tabular-nums">
                 MediaBox: [0, 0, {totalW.toFixed(2)}, {totalH.toFixed(2)}] pt
               </div>
             </div>
@@ -1182,7 +1240,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
             {/* Scaled Page Canvas Container */}
             <div className="my-4 flex flex-col items-center justify-center flex-1">
               {/* Top width dimension label */}
-              <div className="mb-1.5 text-[11px] font-mono text-slate-600 dark:text-slate-300 tabular-nums">
+              <div className="mb-1.5 text-[11px] font-mono text-[#555555] dark:text-[#B5B5B5] tabular-nums">
                 {ptToUnit(trimW, unit)} {unit} ({trimW.toFixed(1)} pt)
                 {bleedPt > 0 ? ` + ${ptToUnit(bleedPt * 2, unit)} bleed` : ''}
               </div>
@@ -1191,7 +1249,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                 {/* Left height dimension label */}
                 <div
                   style={{ writingMode: 'vertical-rl' }}
-                  className="mr-1.5 rotate-180 text-[11px] font-mono text-slate-600 dark:text-slate-300 tabular-nums"
+                  className="mr-1.5 rotate-180 text-[11px] font-mono text-[#555555] dark:text-[#B5B5B5] tabular-nums"
                 >
                   {ptToUnit(trimH, unit)} {unit} ({trimH.toFixed(1)} pt)
                 </div>
@@ -1203,7 +1261,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                     height: Math.max(24, totalH * previewScale),
                     backgroundColor: draftPage.backgroundColor || '#FFFFFF',
                   }}
-                  className="relative shadow-2xl border border-slate-400 dark:border-slate-600 overflow-hidden"
+                  className="relative shadow-2xl border border-black/25 dark:border-white/25 overflow-hidden"
                 >
                   {/* Bleed zone indicator */}
                   {bleedPt > 0 && (
@@ -1214,7 +1272,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                         width: trimW * previewScale,
                         height: trimH * previewScale,
                       }}
-                      className="pointer-events-none absolute border border-amber-500/80"
+                      className="pointer-events-none absolute border border-dashed border-[#858585]/80"
                     />
                   )}
 
@@ -1229,10 +1287,10 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                       }}
                       className="pointer-events-none absolute"
                     >
-                      <span className="absolute top-0 left-0 w-3 h-3 border-t-2 border-l-2 border-slate-900" />
-                      <span className="absolute top-0 right-0 w-3 h-3 border-t-2 border-r-2 border-slate-900" />
-                      <span className="absolute bottom-0 left-0 w-3 h-3 border-b-2 border-l-2 border-slate-900" />
-                      <span className="absolute bottom-0 right-0 w-3 h-3 border-b-2 border-r-2 border-slate-900" />
+                      <span className="absolute top-0 left-0 w-3 h-3 border-t-2 border-l-2 border-[#101010]" />
+                      <span className="absolute top-0 right-0 w-3 h-3 border-t-2 border-r-2 border-[#101010]" />
+                      <span className="absolute bottom-0 left-0 w-3 h-3 border-b-2 border-l-2 border-[#101010]" />
+                      <span className="absolute bottom-0 right-0 w-3 h-3 border-b-2 border-r-2 border-[#101010]" />
                     </div>
                   )}
 
@@ -1253,7 +1311,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                             previewScale
                         ),
                       }}
-                      className="pointer-events-none absolute border border-dashed border-blue-500/70 bg-blue-500/[0.03]"
+                      className="pointer-events-none absolute border border-dashed border-[#101010]/60 bg-black/[0.02]"
                     />
                   )}
 
@@ -1270,7 +1328,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                       className={`pointer-events-none absolute overflow-hidden border ${
                         slot.clipsSheet
                           ? 'border-red-500 bg-red-500/10'
-                          : 'border-emerald-500/70 bg-emerald-500/[0.06]'
+                          : 'border-[#101010]/65 bg-black/[0.04]'
                       }`}
                     >
                       {thumbUrl && (
@@ -1307,17 +1365,17 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
                 </div>
               </div>
 
-              <div className="mt-2 flex flex-wrap items-center justify-center gap-3 text-[10px] text-slate-500">
+              <div className="mt-2 flex flex-wrap items-center justify-center gap-3 text-[10px] text-[#555555] dark:text-[#B5B5B5]">
                 <span className="flex items-center gap-1">
-                  <span className="w-2.5 h-0.5 bg-blue-500 inline-block" /> Printable Area
+                  <span className="w-2.5 h-0.5 bg-[#101010]/70 dark:bg-white/70 inline-block" /> Printable Area
                 </span>
                 {bleedPt > 0 && (
                   <span className="flex items-center gap-1">
-                    <span className="w-2.5 h-0.5 bg-amber-500 inline-block" /> Trim / Bleed Box
+                    <span className="w-2.5 h-0.5 bg-[#858585] inline-block" /> Trim / Bleed Box
                   </span>
                 )}
                 <span className="flex items-center gap-1">
-                  <span className="w-2.5 h-0.5 bg-emerald-500 inline-block" /> Placed Content
+                  <span className="w-2.5 h-0.5 bg-[#101010] dark:bg-white inline-block" /> Placed Content
                 </span>
               </div>
             </div>
@@ -1325,7 +1383,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
             {/* Live Validation & Printable Area Status */}
             <div className="w-full space-y-2 text-xs">
               {!dimValidation.valid && (
-                <div className="p-2.5 rounded border border-red-500/50 bg-red-500/10 text-red-600 dark:text-red-300 flex items-start gap-2">
+                <div className="p-2.5 rounded-xl border border-red-500/50 bg-red-500/10 text-red-700 dark:text-red-300 flex items-start gap-2">
                   <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                   <div>{dimValidation.errors.join(' ')}</div>
                 </div>
@@ -1333,14 +1391,14 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
               {dimValidation.warnings.map((w, i) => (
                 <div
                   key={i}
-                  className="p-2.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 flex items-start gap-2"
+                  className="p-2.5 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 flex items-start gap-2"
                 >
                   <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                   <div>{w}</div>
                 </div>
               ))}
               {printableAreaWarning && (
-                <div className="p-2.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 flex items-start gap-2">
+                <div className="p-2.5 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 flex items-start gap-2">
                   <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
                   <div>{printableAreaWarning}</div>
                 </div>
@@ -1348,7 +1406,7 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
               {dimValidation.valid &&
                 dimValidation.warnings.length === 0 &&
                 !printableAreaWarning && (
-                  <div className="p-2.5 rounded border border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 flex items-center gap-2">
+                  <div className="p-2.5 rounded-xl border border-black/15 dark:border-white/15 glass-level-2 text-[#101010] dark:text-white flex items-center gap-2">
                     <CheckCircle2 className="w-4 h-4 shrink-0" />
                     <span>
                       Valid custom MediaBox ({trimW.toFixed(1)} × {trimH.toFixed(1)} pt) · Content fits inside printable area
@@ -1360,8 +1418,8 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="px-4 tablet:px-5 py-3 border-t border-slate-200/80 dark:border-white/10 flex flex-col tablet:flex-row tablet:items-center justify-between gap-2.5 shrink-0 glass-level-2 text-xs pb-safe">
-          <div className="text-slate-500 dark:text-slate-400 tabular-nums truncate">
+        <div className="px-4 tablet:px-5 py-3 border-t border-black/10 dark:border-white/12 flex flex-col tablet:flex-row tablet:items-center justify-between gap-2.5 shrink-0 glass-level-2 text-xs pb-safe">
+          <div className="text-[#555555] dark:text-[#B5B5B5] tabular-nums truncate">
             {draftPage.customPresetName
               ? `Preset: ${draftPage.customPresetName}`
               : `Size: ${draftPage.sizePreset}`}
@@ -1372,22 +1430,24 @@ export const PageConfigurationModal: React.FC<PageConfigurationModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 tablet:flex-none min-h-[44px] tablet:min-h-[38px] px-3.5 py-2 rounded-xl border border-slate-300/80 dark:border-white/15 hover:bg-slate-100/70 dark:hover:bg-white/10 font-medium whitespace-nowrap"
+              className="flex-1 tablet:flex-none min-h-[44px] tablet:min-h-[38px] px-3.5 py-2 rounded-xl border border-black/15 dark:border-white/15 hover:bg-black/[0.04] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white font-medium whitespace-nowrap transition-colors"
             >
               Cancel
             </button>
-            <button
-              type="button"
-              disabled={!dimValidation.valid}
-              onClick={handleApplyAndClose}
-              className="flex-1 tablet:flex-none min-h-[44px] tablet:min-h-[38px] px-4 py-2 rounded-xl bg-gradient-to-b from-blue-500 to-blue-600 text-white font-medium hover:to-blue-700 shadow-sm disabled:opacity-45 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 whitespace-nowrap"
-            >
-              <Save className="w-3.5 h-3.5" />
-              Apply Configuration
-            </button>
+              <button
+                type="button"
+                disabled={!dimValidation.valid}
+                onClick={handleApplyAndClose}
+                className="flex-1 tablet:flex-none min-h-[44px] tablet:min-h-[38px] px-4 py-2 rounded-xl bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] font-medium shadow-sm disabled:opacity-45 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 whitespace-nowrap transition-colors active:scale-[0.98]"
+              >
+                <Save className="w-3.5 h-3.5" />
+                Apply Configuration
+              </button>
+            </div>
           </div>
-        </div>
-      </div>
-    </div>
+        </motion.div>
+      </motion.div>
+      )}
+    </AnimatePresence>
   );
 };

@@ -60,6 +60,7 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameText, setRenameText] = useState('');
   const [historyProjectId, setHistoryProjectId] = useState<string | null>(null);
+  const lastHistoryProjectRef = useRef<PDFProject | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
 
   const filtered = projects.filter((p) => {
@@ -195,15 +196,19 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
 
   const historyProject =
     projects.find((p) => p.id === historyProjectId) || null;
+  if (historyProject) {
+    lastHistoryProjectRef.current = historyProject;
+  }
+  const modalHistoryProject = historyProject || lastHistoryProjectRef.current;
 
   return (
     <div className="flex-1 overflow-y-auto p-4 tablet:p-6 desktop:p-8 max-w-6xl mx-auto w-full">
-      <div className="flex flex-col tablet:flex-row tablet:items-center tablet:justify-between gap-4 pb-6 border-b border-slate-200/80 dark:border-white/10">
+      <div className="flex flex-col tablet:flex-row tablet:items-center tablet:justify-between gap-4 pb-6 border-b border-black/10 dark:border-white/12">
         <div>
-          <h1 className="text-xl tablet:text-2xl font-display font-semibold tracking-tight text-slate-900 dark:text-slate-100">
+          <h1 className="text-xl tablet:text-2xl font-display font-semibold tracking-tight text-[#101010] dark:text-white">
             My Templates & Automation Profiles
           </h1>
-          <p className="mt-1 text-xs tablet:text-sm text-slate-600 dark:text-slate-400">
+          <p className="mt-1 text-xs tablet:text-sm text-[#555555] dark:text-[#B5B5B5]">
             Save analyzed PDFs as reusable templates or end-to-end automation profiles (imposition, serial rules, field mappings, and export presets).
           </p>
         </div>
@@ -229,7 +234,7 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
               variant="glass"
               size="md"
               onClick={handleSaveCurrentAsAutomationProfile}
-              className="border-blue-500/40 text-blue-600 dark:text-blue-400"
+              className="border-black/25 dark:border-white/25 text-[#101010] dark:text-white"
             >
               <Wand2 className="w-3.5 h-3.5" />
               Save Automation Profile
@@ -269,7 +274,7 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
             },
           ]}
         />
-        <span className="text-xs text-slate-500 dark:text-slate-400 tabular-nums shrink-0">
+        <span className="text-xs text-[#888888] dark:text-[#858585] tabular-nums shrink-0">
           {filter === 'profiles' ? automationProfiles.length : filtered.length}{' '}
           items
         </span>
@@ -279,11 +284,11 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
       {filter === 'profiles' ? (
         automationProfiles.length === 0 ? (
           <GlassCard level={3} padding="lg" className="mt-8 text-center">
-            <Wand2 className="w-8 h-8 text-slate-400 mx-auto mb-3" />
-            <div className="text-sm font-medium text-slate-800 dark:text-slate-200">
+            <Wand2 className="w-8 h-8 text-[#888888] dark:text-[#858585] mx-auto mb-3" />
+            <div className="text-sm font-medium text-[#101010] dark:text-white">
               No Automation Profiles saved yet
             </div>
-            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
+            <p className="mt-1 text-xs text-[#555555] dark:text-[#B5B5B5] max-w-md mx-auto">
               Configure a project (blocks, page dimensions, imposition grid, serial numbering, data field mappings, export presets) and click &quot;Save Automation Profile&quot; to reuse the complete setup with one click.
             </p>
           </GlassCard>
@@ -298,27 +303,27 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
                   padding="none"
                   className="overflow-hidden flex flex-col"
                 >
-                  <div className="h-32 bg-slate-100 dark:bg-slate-900/70 border-b border-slate-200 dark:border-slate-800 flex items-center justify-center overflow-hidden p-3">
+                  <div className="h-32 bg-[#F7F7F7] dark:bg-[#0B0B0B] border-b border-black/10 dark:border-white/12 flex items-center justify-center overflow-hidden p-3">
                     {thumb ? (
                       <img
                         src={thumb}
                         alt={prof.name}
                         referrerPolicy="no-referrer"
-                        className="max-h-full max-w-full object-contain rounded shadow-xs border border-slate-300 dark:border-slate-700"
+                        className="max-h-full max-w-full object-contain rounded shadow-xs border border-black/15 dark:border-white/15"
                       />
                     ) : (
-                      <Wand2 className="w-8 h-8 text-slate-400" />
+                      <Wand2 className="w-8 h-8 text-[#888888] dark:text-[#858585]" />
                     )}
                   </div>
                   <div className="p-4 flex-1 flex flex-col justify-between space-y-3 text-xs">
                     <div>
-                      <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">
+                      <h3 className="text-sm font-semibold text-[#101010] dark:text-white truncate">
                         {prof.name}
                       </h3>
-                      <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400 line-clamp-2">
+                      <p className="mt-0.5 text-[11px] text-[#555555] dark:text-[#B5B5B5] line-clamp-2">
                         {prof.description}
                       </p>
-                      <div className="mt-2 space-y-0.5 text-[11px] text-slate-500 dark:text-slate-400 tabular-nums">
+                      <div className="mt-2 space-y-0.5 text-[11px] text-[#888888] dark:text-[#858585] tabular-nums">
                         <div>
                           {prof.pageConfig.sizePreset} · {prof.pageConfig.orientation} ·{' '}
                           {prof.copiesConfig.enabled
@@ -336,12 +341,12 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
                       </div>
                     </div>
 
-                    <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                    <div className="pt-3 border-t border-black/10 dark:border-white/12 flex flex-wrap items-center justify-between gap-2">
                       {onRunProfile && (
                         <button
                           type="button"
                           onClick={() => onRunProfile(prof, 'bulk-generator')}
-                          className="min-h-[38px] desktop:min-h-0 px-3 py-1.5 rounded text-xs font-medium bg-blue-600 text-white hover:bg-blue-700 flex items-center gap-1.5"
+                          className="min-h-[38px] desktop:min-h-0 px-3 py-1.5 rounded-lg text-xs font-medium bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] flex items-center gap-1.5"
                         >
                           <Play className="w-3.5 h-3.5" />
                           Run Profile
@@ -352,7 +357,7 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
                           <button
                             type="button"
                             onClick={() => onApplyProfileToActive(prof)}
-                            className="px-2 py-1.5 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium"
+                            className="px-2.5 py-1.5 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.04] dark:hover:bg-white/[0.08] text-[11px] font-medium text-[#101010] dark:text-white"
                           >
                             Apply to Active
                           </button>
@@ -361,7 +366,7 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
                           type="button"
                           title="Export Profile JSON"
                           onClick={() => handleExportProfileJson(prof)}
-                          className="p-1.5 rounded text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800"
+                          className="p-1.5 rounded-lg text-[#555555] hover:text-[#101010] dark:text-[#B5B5B5] dark:hover:text-white hover:bg-black/[0.04] dark:hover:bg-white/[0.08]"
                         >
                           <Download className="w-3.5 h-3.5" />
                         </button>
@@ -370,7 +375,7 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
                             type="button"
                             title="Delete Profile"
                             onClick={() => onDeleteProfile(prof.id)}
-                            className="p-1.5 rounded text-slate-500 hover:text-red-500 hover:bg-red-500/10"
+                            className="p-1.5 rounded-lg text-[#888888] hover:text-[#101010] dark:text-[#858585] dark:hover:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08]"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -385,11 +390,11 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
         )
       ) : filtered.length === 0 ? (
         <GlassCard level={3} padding="lg" className="mt-8 text-center">
-          <Layers className="w-8 h-8 text-slate-400 mx-auto mb-3" />
-          <div className="text-sm font-medium text-slate-800 dark:text-slate-200">
+          <Layers className="w-8 h-8 text-[#888888] dark:text-[#858585] mx-auto mb-3" />
+          <div className="text-sm font-medium text-[#101010] dark:text-white">
             No matching templates or projects
           </div>
-          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+          <p className="mt-1 text-xs text-[#555555] dark:text-[#B5B5B5]">
             Upload a PDF in New PDF Project or import a template configuration file.
           </p>
         </GlassCard>
@@ -404,19 +409,19 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
                 level={3}
                 padding="none"
                 className={`overflow-hidden flex flex-col ${
-                  isActive ? 'border-blue-500/80 ring-1 ring-blue-500/30' : ''
+                  isActive ? 'border-[#101010]/70 ring-1 ring-black/20 dark:border-white/75 dark:ring-white/25' : ''
                 }`}
               >
-                <div className="relative h-36 bg-slate-100/80 dark:bg-slate-900/60 border-b border-slate-200/75 dark:border-white/10 flex items-center justify-center overflow-hidden p-3">
+                <div className="relative h-36 bg-[#F7F7F7] dark:bg-[#0B0B0B] border-b border-black/10 dark:border-white/12 flex items-center justify-center overflow-hidden p-3">
                   {thumb ? (
                     <img
                       src={thumb}
                       alt={proj.name}
                       referrerPolicy="no-referrer"
-                      className="max-h-full max-w-full object-contain rounded shadow-xs border border-slate-300 dark:border-slate-700"
+                      className="max-h-full max-w-full object-contain rounded shadow-xs border border-black/15 dark:border-white/15"
                     />
                   ) : (
-                    <Layers className="w-8 h-8 text-slate-400" />
+                    <Layers className="w-8 h-8 text-[#888888] dark:text-[#858585]" />
                   )}
                   <button
                     type="button"
@@ -429,11 +434,11 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
                     }
                     className={`absolute top-2 right-2 min-w-[36px] min-h-[36px] rounded-xl glass-level-4 border flex items-center justify-center transition-colors ${
                       proj.isFavorite
-                        ? 'text-amber-500'
-                        : 'text-slate-400 hover:text-amber-500'
+                        ? 'text-[#101010] dark:text-white border-black/30 dark:border-white/30'
+                        : 'text-[#888888] dark:text-[#858585] hover:text-[#101010] dark:hover:text-white'
                     }`}
                   >
-                    <Star className={`w-3.5 h-3.5 ${proj.isFavorite ? 'fill-amber-400' : ''}`} />
+                    <Star className={`w-3.5 h-3.5 ${proj.isFavorite ? 'fill-current' : ''}`} />
                   </button>
                 </div>
 
@@ -459,22 +464,22 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
                           value={renameText}
                           onChange={(e) => setRenameText(e.target.value)}
                           autoFocus
-                          className="flex-1 px-2 py-1 text-xs rounded border border-blue-500 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100"
+                          className="flex-1 px-2.5 py-1 text-xs rounded-lg border studio-input"
                         />
                         <button
                           type="submit"
-                          className="px-2 py-1 text-xs rounded bg-blue-600 text-white"
+                          className="px-2.5 py-1 text-xs rounded-lg bg-[#101010] text-white dark:bg-white dark:text-[#050505] font-medium"
                         >
                           Save
                         </button>
                       </form>
                     ) : (
-                      <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">
+                      <h3 className="text-sm font-semibold text-[#101010] dark:text-white truncate">
                         {proj.name}
                       </h3>
                     )}
 
-                    <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 tabular-nums">
+                    <div className="mt-1 text-[11px] text-[#888888] dark:text-[#858585] tabular-nums">
                       <span>{proj.isTemplate ? 'Template' : 'Project'}</span>
                       <span> · </span>
                       <span>v{proj.version}</span>
@@ -483,14 +488,14 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
                     </div>
                   </div>
 
-                  <div className="mt-4 pt-3 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                  <div className="mt-4 pt-3 border-t border-black/10 dark:border-white/12 flex flex-wrap items-center justify-between gap-2">
                     <button
                       type="button"
                       onClick={() => {
                         onOpenProject(proj);
                         onNavigate('editor');
                       }}
-                      className="min-h-[40px] desktop:min-h-0 px-3 py-1.5 rounded text-xs font-medium bg-blue-600 text-white hover:bg-blue-700 flex items-center gap-1.5 whitespace-nowrap touch-manipulation"
+                      className="min-h-[40px] desktop:min-h-0 px-3 py-1.5 rounded-lg text-xs font-medium bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] flex items-center gap-1.5 whitespace-nowrap touch-manipulation"
                     >
                       <FolderOpen className="w-3.5 h-3.5" />
                       Edit
@@ -504,7 +509,7 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
                           setRenamingId(proj.id);
                           setRenameText(proj.name);
                         }}
-                        className="min-h-[38px] min-w-[38px] desktop:min-h-0 desktop:min-w-0 flex items-center justify-center p-1.5 rounded text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 touch-manipulation"
+                        className="min-h-[38px] min-w-[38px] desktop:min-h-0 desktop:min-w-0 flex items-center justify-center p-1.5 rounded-lg text-[#555555] hover:text-[#101010] dark:text-[#B5B5B5] dark:hover:text-white hover:bg-black/[0.04] dark:hover:bg-white/[0.08] touch-manipulation"
                       >
                         <Edit3 className="w-3.5 h-3.5" />
                       </button>
@@ -512,7 +517,7 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
                         type="button"
                         title="Duplicate"
                         onClick={() => handleDuplicate(proj)}
-                        className="min-h-[38px] min-w-[38px] desktop:min-h-0 desktop:min-w-0 flex items-center justify-center p-1.5 rounded text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 touch-manipulation"
+                        className="min-h-[38px] min-w-[38px] desktop:min-h-0 desktop:min-w-0 flex items-center justify-center p-1.5 rounded-lg text-[#555555] hover:text-[#101010] dark:text-[#B5B5B5] dark:hover:text-white hover:bg-black/[0.04] dark:hover:bg-white/[0.08] touch-manipulation"
                       >
                         <Copy className="w-3.5 h-3.5" />
                       </button>
@@ -520,7 +525,7 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
                         type="button"
                         title="Version history & comparison"
                         onClick={() => setHistoryProjectId(proj.id)}
-                        className="min-h-[38px] min-w-[38px] desktop:min-h-0 desktop:min-w-0 flex items-center justify-center p-1.5 rounded text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 touch-manipulation"
+                        className="min-h-[38px] min-w-[38px] desktop:min-h-0 desktop:min-w-0 flex items-center justify-center p-1.5 rounded-lg text-[#555555] hover:text-[#101010] dark:text-[#B5B5B5] dark:hover:text-white hover:bg-black/[0.04] dark:hover:bg-white/[0.08] touch-manipulation"
                       >
                         <History className="w-3.5 h-3.5" />
                       </button>
@@ -528,7 +533,7 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
                         type="button"
                         title="Export template JSON"
                         onClick={() => handleExportTemplateJson(proj)}
-                        className="min-h-[38px] min-w-[38px] desktop:min-h-0 desktop:min-w-0 flex items-center justify-center p-1.5 rounded text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 touch-manipulation"
+                        className="min-h-[38px] min-w-[38px] desktop:min-h-0 desktop:min-w-0 flex items-center justify-center p-1.5 rounded-lg text-[#555555] hover:text-[#101010] dark:text-[#B5B5B5] dark:hover:text-white hover:bg-black/[0.04] dark:hover:bg-white/[0.08] touch-manipulation"
                       >
                         <Download className="w-3.5 h-3.5" />
                       </button>
@@ -536,7 +541,7 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
                         type="button"
                         title="Delete"
                         onClick={() => onDeleteProject(proj.id)}
-                        className="min-h-[38px] min-w-[38px] desktop:min-h-0 desktop:min-w-0 flex items-center justify-center p-1.5 rounded text-slate-500 hover:text-red-500 hover:bg-red-500/10 touch-manipulation"
+                        className="min-h-[38px] min-w-[38px] desktop:min-h-0 desktop:min-w-0 flex items-center justify-center p-1.5 rounded-lg text-[#888888] hover:text-[#101010] dark:text-[#858585] dark:hover:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08] touch-manipulation"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -549,54 +554,54 @@ export const TemplatesView: React.FC<TemplatesViewProps> = ({
         </div>
       )}
 
-      {historyProject && (
+      {modalHistoryProject && (
         <VersionHistoryModal
           isOpen={Boolean(historyProject)}
-          project={historyProject}
+          project={modalHistoryProject}
           onClose={() => setHistoryProjectId(null)}
           onSaveNamedVersion={(note) => {
             if (onSaveSnapshot) {
-              onSaveSnapshot(historyProject, note);
+              onSaveSnapshot(modalHistoryProject, note);
             } else {
               const now = new Date().toISOString();
               onSaveProject({
-                ...historyProject,
-                version: historyProject.version + 1,
+                ...modalHistoryProject,
+                version: modalHistoryProject.version + 1,
                 updatedAt: now,
                 versions: [
                   {
-                    version: historyProject.version,
+                    version: modalHistoryProject.version,
                     savedAt: now,
                     note,
-                    elementsSnapshot: structuredClone(historyProject.elements),
-                    pageConfigSnapshot: structuredClone(historyProject.pageConfig),
-                    fitConfigSnapshot: historyProject.fitConfig
-                      ? structuredClone(historyProject.fitConfig)
+                    elementsSnapshot: structuredClone(modalHistoryProject.elements),
+                    pageConfigSnapshot: structuredClone(modalHistoryProject.pageConfig),
+                    fitConfigSnapshot: modalHistoryProject.fitConfig
+                      ? structuredClone(modalHistoryProject.fitConfig)
                       : undefined,
                     copiesConfigSnapshot: structuredClone(
-                      historyProject.copiesConfig
+                      modalHistoryProject.copiesConfig
                     ),
                   },
-                  ...(historyProject.versions || []),
+                  ...(modalHistoryProject.versions || []),
                 ],
               });
             }
           }}
           onRestoreVersion={(ver) => {
             if (onRestoreVersion) {
-              onRestoreVersion(historyProject, ver);
+              onRestoreVersion(modalHistoryProject, ver);
             } else {
               const restored: PDFProject = {
-                ...historyProject,
+                ...modalHistoryProject,
                 elements: structuredClone(ver.elementsSnapshot),
                 pageConfig: structuredClone(ver.pageConfigSnapshot),
                 fitConfig: ver.fitConfigSnapshot
                   ? structuredClone(ver.fitConfigSnapshot)
-                  : historyProject.fitConfig,
+                  : modalHistoryProject.fitConfig,
                 copiesConfig: ver.copiesConfigSnapshot
                   ? structuredClone(ver.copiesConfigSnapshot)
-                  : historyProject.copiesConfig,
-                version: historyProject.version + 1,
+                  : modalHistoryProject.copiesConfig,
+                version: modalHistoryProject.version + 1,
                 updatedAt: new Date().toISOString(),
               };
               onSaveProject(restored);

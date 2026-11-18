@@ -42,7 +42,14 @@ export type ElementType =
   | 'line'
   | 'border'
   | 'form_field'
-  | 'repeated_block';
+  | 'repeated_block'
+  | 'annotation'
+  | 'draw'
+  | 'measure'
+  | 'callout'
+  | 'stamp'
+  | 'signature'
+  | 'redaction';
 
 export interface TableElementData {
   rows: string[][];
@@ -86,10 +93,47 @@ export interface DocumentElement {
   imageDataUrl?: string;
   imageNaturalWidth?: number;
   imageNaturalHeight?: number;
-  shapeKind?: 'rect' | 'circle' | 'line';
+  shapeKind?: 'rect' | 'circle' | 'line' | 'arrow' | 'triangle' | 'star' | 'polygon';
   tableData?: TableElementData;
   relationshipNote?: string;
   isUserAdded?: boolean;
+  // Typography Studio (2.0)
+  underline?: boolean;
+  strikethrough?: boolean;
+  letterSpacing?: number;
+  lineHeight?: number;
+  paragraphSpacing?: number;
+  verticalAlign?: 'top' | 'middle' | 'bottom';
+  baselineOffset?: number;
+  paddingPt?: number;
+  textWrap?: boolean;
+  autofit?: boolean;
+  // Layout & Provenance (2.0)
+  lockAspectRatio?: boolean;
+  sourceOrigin?: 'original_pdf' | 'scanned_ocr' | 'user_overlay' | 'annotation' | 'redaction';
+  // Annotations, Draw, Callout, Measure, Stamp, Images, Redaction (2.0)
+  annotationKind?:
+    | 'highlight'
+    | 'underline'
+    | 'strikeout'
+    | 'note'
+    | 'rect'
+    | 'ellipse'
+    | 'arrow'
+    | 'free_text';
+  commentText?: string;
+  points?: number[];
+  calloutTarget?: { x: number; y: number };
+  measureUnit?: MeasurementUnit;
+  measureScaleFactor?: number;
+  stampText?: string;
+  stampDate?: string;
+  imageCropRect?: RectPt;
+  maskShape?: 'none' | 'rect' | 'rounded' | 'circle';
+  imageCompressionQuality?: number;
+  redactionMode?: 'visual_mask' | 'true_redaction';
+  redactionApplied?: boolean;
+  redactionReason?: string;
 }
 
 export interface RectPt {
@@ -182,6 +226,8 @@ export interface PageConfig {
   rotation: 0 | 90 | 180 | 270;
   customPresetId?: string;
   customPresetName?: string;
+  headerText?: string;
+  footerText?: string;
 }
 
 export interface CopiesPerPageConfig {
@@ -335,13 +381,26 @@ export interface ValidationIssue {
     | 'missing_font'
     | 'font_license'
     | 'layout_drift'
-    | 'clipping';
+    | 'clipping'
+    | 'aspect_ratio'
+    | 'blank_region'
+    | 'inconsistent_repeated';
   message: string;
   detail?: string;
   elementId?: string;
   pageNumber?: number;
   effectiveDpi?: number;
   autoFixLabel?: string;
+}
+
+export interface PageRestorationConfig {
+  enabled: boolean;
+  deskewDeg: number;
+  brightness: number;
+  contrast: number;
+  denoise: number;
+  backgroundCleanup: number;
+  whiteNormalize: boolean;
 }
 
 export interface OriginalPageMeta {
@@ -351,8 +410,15 @@ export interface OriginalPageMeta {
   heightPt: number;
   orientation: 'portrait' | 'landscape';
   previewImageDataUrl?: string;
+  restoredPreviewDataUrl?: string;
   contentBBox?: RectPt;
   detectedBounds?: DetectedPageBounds;
+  restoration?: PageRestorationConfig;
+  appliedRedactions?: RectPt[];
+  rotation?: 0 | 90 | 180 | 270;
+  isBlankInserted?: boolean;
+  headerText?: string;
+  footerText?: string;
 }
 
 export interface ProjectVersionSnapshot {
@@ -563,8 +629,64 @@ export interface StudioSettings {
   inspectorWidthPx?: number;
   hiddenEditorTools?: string[];
   recentTools?: string[];
+  recentFonts?: string[];
+  favoriteFonts?: string[];
   shortcuts?: Record<ShortcutActionId, string>;
   autoSnapshotIntervalSec?: number;
+}
+
+export type EditorToolCategory =
+  | 'select'
+  | 'text'
+  | 'images'
+  | 'shapes'
+  | 'draw'
+  | 'annotate'
+  | 'arrange'
+  | 'pages'
+  | 'measure'
+  | 'inspect';
+
+export type ActiveEditorTool =
+  | 'select'
+  | 'marquee'
+  | 'text'
+  | 'image'
+  | 'rect'
+  | 'circle'
+  | 'line'
+  | 'arrow'
+  | 'table'
+  | 'draw'
+  | 'highlight'
+  | 'underline_annot'
+  | 'strikeout_annot'
+  | 'note'
+  | 'callout'
+  | 'stamp'
+  | 'signature'
+  | 'measure'
+  | 'redact'
+  | 'inspect'
+  | 'style_painter';
+
+export interface StylePainterState {
+  active: boolean;
+  mode: 'appearance' | 'appearance_and_geometry';
+  sourceElementId?: string;
+  sourceStyle?: Partial<DocumentElement>;
+}
+
+export interface HistoryEntry {
+  id: string;
+  label: string;
+  actionType: string;
+  timestamp: string;
+  elements: DocumentElement[];
+  originalPages: OriginalPageMeta[];
+  pageConfig: PageConfig;
+  pageCount: number;
+  coalesceKey?: string;
 }
 
 export interface AiEditOperation {

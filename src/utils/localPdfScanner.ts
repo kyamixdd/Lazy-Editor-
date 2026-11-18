@@ -402,6 +402,7 @@ function detectTableRegionsOnPage(
       relationshipNote: `Detected ${band.length} rows × ${maxCols} columns`,
       isUserAdded: false,
       eraseOriginal: false,
+      sourceOrigin: 'original_pdf',
       sourceOriginalRect: {
         x: Number(minX.toFixed(2)),
         y: Number(minY.toFixed(2)),
@@ -600,6 +601,7 @@ export function analyzeRenderedPagesLocally(rendered: {
         relationshipNote: `Repeated document block (${b.blockId})`,
         isUserAdded: false,
         eraseOriginal: false,
+        sourceOrigin: 'original_pdf',
         sourceOriginalRect: { ...b.rect },
       });
     });
@@ -657,6 +659,7 @@ export function analyzeRenderedPagesLocally(rendered: {
             : 'Vector shape/border',
         isUserAdded: false,
         eraseOriginal: false,
+        sourceOrigin: 'original_pdf',
         sourceOriginalRect: {
           x: prim.x,
           y: prim.y,
@@ -725,6 +728,7 @@ export function analyzeRenderedPagesLocally(rendered: {
         relationshipNote: noteParts.length > 0 ? noteParts.join(' · ') : undefined,
         isUserAdded: false,
         eraseOriginal: false,
+        sourceOrigin: isOcr ? 'scanned_ocr' : 'original_pdf',
         sourceOriginalRect: {
           x: item.x,
           y: item.y,

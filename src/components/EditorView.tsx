@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlignCenter,
   AlignLeft,
@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
+  ArrowUpRight,
   Bold,
   BookOpen,
   BoxSelect,
@@ -21,10 +22,12 @@ import {
   Edit3,
   Eye,
   EyeOff,
+  FileCog,
   FolderPlus,
   GitCompare,
   Grid,
   Group,
+  Highlighter,
   History,
   Image as ImageIcon,
   Layers,
@@ -32,29 +35,56 @@ import {
   Magnet,
   Maximize2,
   Menu,
+  MessageSquare,
+  MessageSquarePlus,
   Minimize2,
   Minus,
+  MousePointer2,
+  Paintbrush,
   PanelRight,
+  PenTool,
+  Pencil,
   Plus,
   Redo2,
+  Replace,
   Ruler,
   Save,
+  ScanLine,
   Search,
+  ShieldAlert,
   ShieldCheck,
   Sliders,
   Sparkles,
   Square,
+  Stamp,
+  Strikethrough,
   Table2,
   Trash2,
   Type as TypeIcon,
+  Underline,
   Undo2,
   Ungroup,
   Unlock,
+  Wand2,
   X,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
+  FAB_TAP,
+  MOTION_DURATION,
+  MOTION_SPRING,
+  bannerVariants,
+  drawerLeftVariants,
+  drawerRightVariants,
+  floatingToolbarVariants,
+  modalBackdropVariants,
+  popoverVariants,
+  toastVariants,
+} from '../config/motionSystem';
+import {
+  ActiveEditorTool,
   AiEditPlan,
   AssetFontItem,
   AssetImageItem,
@@ -63,13 +93,18 @@ import {
   AssetShapeItem,
   AssetTextStyleItem,
   DocumentElement,
+  EditorToolCategory,
+  HistoryEntry,
+  MeasurementUnit,
   NavSection,
   PageConfig,
+  PageRestorationConfig,
   PDFProject,
   ProjectVersionSnapshot,
   RectPt,
   SourceFitConfig,
   StudioSettings,
+  StylePainterState,
   UnsavedDraftRecord,
 } from '../types/pdfStudio';
 import { useViewport } from '../hooks/useViewport';
@@ -92,10 +127,17 @@ import {
   renderSinglePagePreview,
 } from '../utils/pdfRenderer';
 import { appendOperationLog, DEFAULT_SHORTCUTS } from '../utils/projectStorage';
+import { extractStylePainterPatch } from '../utils/typographyEngine';
+import { BatchStyleModal } from './BatchStyleModal';
 import { GlassBottomSheet, SheetSnapState } from './glass';
 import { PageConfigurationModal } from './PageConfigurationModal';
+import { PageEngineeringModal } from './PageEngineeringModal';
 import { PdfCanvasStage } from './PdfCanvasStage';
 import { PropertiesInspector } from './PropertiesInspector';
+import { RedactionConfirmModal } from './RedactionConfirmModal';
+import { RestorationStudioModal } from './RestorationStudioModal';
+import { SignatureStampModal } from './SignatureStampModal';
+import { SmartReplaceModal } from './SmartReplaceModal';
 import { VersionHistoryModal } from './VersionHistoryModal';
 
 interface EditorViewProps {
@@ -132,6 +174,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
   onOpenMobileNav,
 }) => {
   const viewport = useViewport();
+  const prefersReduced = useReducedMotion();
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [zoom, setZoom] = useState(1);
@@ -142,7 +185,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
   const [snapToGrid, setSnapToGrid] = useState(true);
   const [showGuides, setShowGuides] = useState(true);
   const [showLayersPanel, setShowLayersPanel] = useState(
-    settings.workspaceLayout !== 'wide-canvas'
+    () => viewport.isDesktop && settings.workspaceLayout !== 'wide-canvas'
   );
   const [showDesktopInspector, setShowDesktopInspector] = useState(true);
   const [layersWidthPx, setLayersWidthPx] = useState(
@@ -172,8 +215,29 @@ export const EditorView: React.FC<EditorViewProps> = ({
   } | null>(null);
   const [inspectorTab, setInspectorTab] = useState<'element' | 'page' | 'ai'>('element');
   const [clipboard, setClipboard] = useState<DocumentElement[]>([]);
-  const [undoStack, setUndoStack] = useState<DocumentElement[][]>([]);
-  const [redoStack, setRedoStack] = useState<DocumentElement[][]>([]);
+  const [undoStack, setUndoStack] = useState<HistoryEntry[]>([]);
+  const [redoStack, setRedoStack] = useState<HistoryEntry[]>([]);
+  const [activeCategory, setActiveCategory] = useState<EditorToolCategory>('select');
+  const [activeTool, setActiveTool] = useState<ActiveEditorTool>('select');
+  const [toolbarExpanded, setToolbarExpanded] = useState(true);
+  const [measureUnit, setMeasureUnit] = useState<MeasurementUnit>(
+    project.pageConfig.unit === 'px' ? 'mm' : project.pageConfig.unit
+  );
+  const [stylePainter, setStylePainter] = useState<StylePainterState>({
+    active: false,
+    mode: 'appearance',
+  });
+  const [copiedFormatting, setCopiedFormatting] =
+    useState<Partial<DocumentElement> | null>(null);
+  const [smartReplaceOpen, setSmartReplaceOpen] = useState(false);
+  const [batchStyleOpen, setBatchStyleOpen] = useState(false);
+  const [restorationOpen, setRestorationOpen] = useState(false);
+  const [pageEngineeringOpen, setPageEngineeringOpen] = useState(false);
+  const [signatureStampOpen, setSignatureStampOpen] = useState(false);
+  const [signatureModalInitialTab, setSignatureModalInitialTab] = useState<
+    'signature' | 'stamp'
+  >('signature');
+  const [redactionConfirmOpen, setRedactionConfirmOpen] = useState(false);
   const [showSearchBar, setShowSearchBar] = useState(false);
   const [findQuery, setFindQuery] = useState('');
   const [replaceQuery, setReplaceQuery] = useState('');
@@ -328,15 +392,71 @@ export const EditorView: React.FC<EditorViewProps> = ({
     }
   }, [currentPage, project.id, project.originalPages, project.sourcePdfBase64]);
 
+  const makeHistorySnapshot = (
+    label: string,
+    actionType: string,
+    targetProj: PDFProject = project,
+    coalesceKey?: string
+  ): HistoryEntry => ({
+    id: `hist-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    label,
+    actionType,
+    timestamp: new Date().toISOString(),
+    elements: structuredClone(targetProj.elements),
+    originalPages: structuredClone(targetProj.originalPages),
+    pageConfig: structuredClone(targetProj.pageConfig),
+    pageCount: targetProj.pageCount,
+    coalesceKey,
+  });
+
+  const pushHistoryEntry = (
+    label: string,
+    actionType: string,
+    coalesceKey?: string
+  ) => {
+    const snap = makeHistorySnapshot(label, actionType, project, coalesceKey);
+    setUndoStack((prev) => {
+      if (coalesceKey && prev.length > 0) {
+        const last = prev[prev.length - 1];
+        const ageMs = Date.now() - Date.parse(last.timestamp);
+        if (last.coalesceKey === coalesceKey && ageMs < 1200) {
+          return [...prev.slice(0, -1), { ...last, timestamp: snap.timestamp, label }];
+        }
+      }
+      return [...prev.slice(-45), snap];
+    });
+    setRedoStack([]);
+  };
+
+  const commitProjectChange = (
+    nextProject: PDFProject,
+    label: string,
+    actionType = 'edit',
+    opLogAction?: string,
+    opLogDetail?: string,
+    coalesceKey?: string
+  ) => {
+    pushHistoryEntry(label, actionType, coalesceKey);
+    const stamped = {
+      ...nextProject,
+      updatedAt: new Date().toISOString(),
+    };
+    onUpdateProject(
+      opLogAction
+        ? appendOperationLog(stamped, opLogAction, opLogDetail || label, currentPage)
+        : stamped
+    );
+  };
+
   const commitElements = (
     nextElements: DocumentElement[],
     recordHistory = true,
     opAction?: string,
-    opDetail?: string
+    opDetail?: string,
+    coalesceKey?: string
   ) => {
     if (recordHistory) {
-      setUndoStack((prev) => [...prev.slice(-40), project.elements]);
-      setRedoStack([]);
+      pushHistoryEntry(opAction || 'Edit Element', 'elements', coalesceKey);
     }
     const baseUpdated: PDFProject = {
       ...project,
@@ -358,30 +478,149 @@ export const EditorView: React.FC<EditorViewProps> = ({
   const handleUndo = () => {
     if (undoStack.length === 0) return;
     const prev = undoStack[undoStack.length - 1];
-    setRedoStack((r) => [...r, project.elements]);
+    const currSnap = makeHistorySnapshot(prev.label, 'redo_anchor', project);
+    setRedoStack((r) => [...r, currSnap]);
     setUndoStack((u) => u.slice(0, -1));
     onUpdateProject({
       ...project,
-      elements: prev,
+      elements: structuredClone(prev.elements),
+      originalPages: structuredClone(prev.originalPages),
+      pageConfig: structuredClone(prev.pageConfig),
+      pageCount: prev.pageCount,
       updatedAt: new Date().toISOString(),
     });
+    setCurrentPage((cp) => Math.max(1, Math.min(cp, Math.max(1, prev.pageCount))));
   };
 
   const handleRedo = () => {
     if (redoStack.length === 0) return;
     const next = redoStack[redoStack.length - 1];
-    setUndoStack((u) => [...u, project.elements]);
+    const currSnap = makeHistorySnapshot(next.label, 'undo_anchor', project);
+    setUndoStack((u) => [...u, currSnap]);
     setRedoStack((r) => r.slice(0, -1));
     onUpdateProject({
       ...project,
-      elements: next,
+      elements: structuredClone(next.elements),
+      originalPages: structuredClone(next.originalPages),
+      pageConfig: structuredClone(next.pageConfig),
+      pageCount: next.pageCount,
       updatedAt: new Date().toISOString(),
     });
+    setCurrentPage((cp) => Math.max(1, Math.min(cp, Math.max(1, next.pageCount))));
+  };
+
+  const handleRevertToHistoryEntry = (entryId: string) => {
+    const idx = undoStack.findIndex((e) => e.id === entryId);
+    if (idx === -1) return;
+    const target = undoStack[idx];
+    const currSnap = makeHistorySnapshot('Before timeline rollback', 'rollback', project);
+    setRedoStack((r) => [...r, currSnap]);
+    setUndoStack((u) => u.slice(0, idx));
+    onUpdateProject(
+      appendOperationLog(
+        {
+          ...project,
+          elements: structuredClone(target.elements),
+          originalPages: structuredClone(target.originalPages),
+          pageConfig: structuredClone(target.pageConfig),
+          pageCount: target.pageCount,
+          updatedAt: new Date().toISOString(),
+        },
+        'Rollback History',
+        `Rolled back to "${target.label}"`,
+        currentPage
+      )
+    );
+    setCurrentPage((cp) => Math.max(1, Math.min(cp, Math.max(1, target.pageCount))));
+  };
+
+  const handleRevertIndividualOperation = (
+    entryId: string
+  ): { ok: boolean; message: string } => {
+    const idx = undoStack.findIndex((e) => e.id === entryId);
+    if (idx === -1) {
+      return { ok: false, message: 'History entry not found.' };
+    }
+    const beforeEntry = undoStack[idx];
+    const afterElements =
+      idx + 1 < undoStack.length ? undoStack[idx + 1].elements : project.elements;
+
+    if (
+      beforeEntry.pageCount !==
+      (idx + 1 < undoStack.length ? undoStack[idx + 1].pageCount : project.pageCount)
+    ) {
+      return {
+        ok: false,
+        message:
+          'Page-structure mutations affect subsequent page indices — use "Roll Back to Here" instead.',
+      };
+    }
+
+    const beforeMap = new Map(beforeEntry.elements.map((e) => [e.id, e]));
+    const afterMap = new Map(afterElements.map((e) => [e.id, e]));
+    const touchedIds = new Set<string>();
+    for (const [id, el] of beforeMap.entries()) {
+      const a = afterMap.get(id);
+      if (!a || JSON.stringify(el) !== JSON.stringify(a)) touchedIds.add(id);
+    }
+    for (const id of afterMap.keys()) {
+      if (!beforeMap.has(id)) touchedIds.add(id);
+    }
+
+    // Check if any later operations modified those same elements
+    for (let j = idx + 1; j < undoStack.length; j++) {
+      const laterBefore = new Map(undoStack[j].elements.map((e) => [e.id, e]));
+      const laterAfter = new Map(
+        (j + 1 < undoStack.length ? undoStack[j + 1].elements : project.elements).map(
+          (e) => [e.id, e]
+        )
+      );
+      for (const tid of touchedIds) {
+        const lb = laterBefore.get(tid);
+        const la = laterAfter.get(tid);
+        if (JSON.stringify(lb) !== JSON.stringify(la)) {
+          return {
+            ok: false,
+            message:
+              'Later edits depend on the same element(s) — use "Roll Back to Here" to avoid conflicts.',
+          };
+        }
+      }
+    }
+
+    let nextEls = [...project.elements];
+    for (const tid of touchedIds) {
+      const orig = beforeMap.get(tid);
+      if (!orig) {
+        nextEls = nextEls.filter((e) => e.id !== tid);
+      } else if (nextEls.some((e) => e.id === tid)) {
+        nextEls = nextEls.map((e) => (e.id === tid ? structuredClone(orig) : e));
+      } else {
+        nextEls.push(structuredClone(orig));
+      }
+    }
+
+    commitElements(
+      nextEls,
+      true,
+      'Revert Single Edit',
+      `Reverted "${beforeEntry.label}"`
+    );
+    return {
+      ok: true,
+      message: `Reverted "${beforeEntry.label}" (${touchedIds.size} element(s) restored).`,
+    };
   };
 
   const handleUpdateElement = (id: string, patch: Partial<DocumentElement>) => {
+    const isTextOnly =
+      Object.keys(patch).length === 1 && patch.text !== undefined;
     commitElements(
-      project.elements.map((el) => (el.id === id ? { ...el, ...patch } : el))
+      project.elements.map((el) => (el.id === id ? { ...el, ...patch } : el)),
+      true,
+      undefined,
+      undefined,
+      isTextOnly ? `text-${id}` : undefined
     );
   };
 
@@ -878,9 +1117,9 @@ export const EditorView: React.FC<EditorViewProps> = ({
         fontSize: 10,
         fontWeight: 'normal',
         fontStyle: 'normal',
-        color: '#2563EB',
+        color: '#404040',
         backgroundColor: 'transparent',
-        borderColor: '#2563EB',
+        borderColor: '#404040',
         borderWidth: 1,
         align: 'left',
         opacity: 1,
@@ -915,9 +1154,9 @@ export const EditorView: React.FC<EditorViewProps> = ({
         fontSize: 10,
         fontWeight: 'normal',
         fontStyle: 'normal',
-        color: '#2563EB',
+        color: '#404040',
         backgroundColor: 'transparent',
-        borderColor: '#2563EB',
+        borderColor: '#404040',
         borderWidth: 1,
         align: 'left',
         opacity: 1,
@@ -1188,9 +1427,12 @@ export const EditorView: React.FC<EditorViewProps> = ({
       return;
     }
 
-    setUndoStack((prev) => [...prev.slice(-40), project.elements]);
-    setRedoStack([]);
-    onUpdateProject(result.updatedProject);
+    commitElements(
+      result.updatedProject.elements,
+      true,
+      'AI Enhanced Analysis',
+      result.message
+    );
     setAiEnhanceNotice({
       kind: 'info',
       message: result.message,
@@ -1261,6 +1503,77 @@ export const EditorView: React.FC<EditorViewProps> = ({
       } else if (matchesShortcutCombo(e, shortcuts.saveSnapshot)) {
         e.preventDefault();
         onSaveSnapshot(projectRef.current, `Snapshot via shortcut (Page ${currentPage})`);
+      } else if (e.key === 'Escape') {
+        if (stylePainter.active) {
+          setStylePainter({ active: false, mode: 'appearance' });
+        } else if (activeTool !== 'select') {
+          setActiveTool('select');
+          setActiveCategory('select');
+        }
+      } else if (!e.metaKey && !e.ctrlKey && !e.altKey) {
+        const lk = e.key.toLowerCase();
+        if (lk === 'v') {
+          setActiveCategory('select');
+          setActiveTool('select');
+        } else if (lk === 't') {
+          setActiveCategory('text');
+          setActiveTool('text');
+          setToolbarExpanded(true);
+        } else if (lk === 'i') {
+          setActiveCategory('images');
+          setToolbarExpanded(true);
+        } else if (lk === 's') {
+          setActiveCategory('shapes');
+          setActiveTool('rect');
+          setToolbarExpanded(true);
+        } else if (lk === 'p') {
+          setActiveCategory('draw');
+          setActiveTool('draw');
+          setToolbarExpanded(true);
+        } else if (lk === 'a') {
+          setActiveCategory('annotate');
+          setActiveTool('highlight');
+          setToolbarExpanded(true);
+        } else if (lk === 'l') {
+          setActiveCategory('arrange');
+          setActiveTool('select');
+          setToolbarExpanded(true);
+        } else if (lk === 'g') {
+          setActiveCategory('pages');
+          setToolbarExpanded(true);
+        } else if (lk === 'm') {
+          setActiveCategory('measure');
+          setActiveTool('measure');
+          setToolbarExpanded(true);
+        } else if (lk === 'k') {
+          setActiveCategory('inspect');
+          setToolbarExpanded(true);
+        } else if (selectedIds.length > 0) {
+          const step = e.shiftKey ? 10 : 1;
+          const nudged = (dx: number, dy: number) => {
+            e.preventDefault();
+            const updates = pageElements
+              .filter((el) => selectedIds.includes(el.id) && !el.locked)
+              .map((el) => ({
+                id: el.id,
+                patch: {
+                  x: Number((el.x + dx).toFixed(2)),
+                  y: Number((el.y + dy).toFixed(2)),
+                  eraseOriginal: el.isUserAdded ? false : true,
+                },
+              }));
+            if (updates.length > 0) handleUpdateElementsBatch(updates);
+          };
+          if (e.key === 'ArrowUp' || matchesShortcutCombo(e, shortcuts.nudgeUp)) {
+            nudged(0, -step);
+          } else if (e.key === 'ArrowDown' || matchesShortcutCombo(e, shortcuts.nudgeDown)) {
+            nudged(0, step);
+          } else if (e.key === 'ArrowLeft' || matchesShortcutCombo(e, shortcuts.nudgeLeft)) {
+            nudged(-step, 0);
+          } else if (e.key === 'ArrowRight' || matchesShortcutCombo(e, shortcuts.nudgeRight)) {
+            nudged(step, 0);
+          }
+        }
       } else if (selectedIds.length > 0) {
         const step = e.shiftKey ? 10 : 1;
         const nudged = (dx: number, dy: number) => {
@@ -1295,6 +1608,137 @@ export const EditorView: React.FC<EditorViewProps> = ({
 
   const isToolHidden = (id: string) =>
     Boolean(settings.hiddenEditorTools?.includes(id));
+
+  const showNoticeToast = (msg: string) => {
+    setStyleToast(msg);
+    window.setTimeout(() => setStyleToast(null), 2600);
+  };
+
+  const handleToggleFavoriteFont = (fontFamily: string) => {
+    if (!onUpdateSettings) return;
+    const curr = settings.favoriteFonts || [];
+    const next = curr.includes(fontFamily)
+      ? curr.filter((f) => f !== fontFamily)
+      : [fontFamily, ...curr];
+    onUpdateSettings({ ...settings, favoriteFonts: next });
+  };
+
+  const handleRecordRecentFont = (fontFamily: string) => {
+    if (!onUpdateSettings) return;
+    const curr = settings.recentFonts || [];
+    const next = [fontFamily, ...curr.filter((f) => f !== fontFamily)].slice(0, 8);
+    onUpdateSettings({ ...settings, recentFonts: next });
+  };
+
+  const handleCopyFormatting = (el: DocumentElement) => {
+    setCopiedFormatting(extractStylePainterPatch(el, 'appearance'));
+    showNoticeToast(`Copied formatting from "${el.text?.slice(0, 18) || el.type}"`);
+  };
+
+  const handlePasteFormatting = (targetIds: string[]) => {
+    if (!copiedFormatting || targetIds.length === 0) return;
+    const set = new Set(targetIds);
+    commitElements(
+      project.elements.map((el) =>
+        set.has(el.id) && !el.locked
+          ? {
+              ...el,
+              ...copiedFormatting,
+              eraseOriginal: el.isUserAdded ? false : true,
+            }
+          : el
+      ),
+      true,
+      'Paste Formatting',
+      `Applied copied typography & colors to ${targetIds.length} element(s)`
+    );
+    showNoticeToast(`Pasted formatting to ${targetIds.length} element(s)`);
+  };
+
+  const handleStartStylePainter = (
+    el: DocumentElement,
+    mode: 'appearance' | 'appearance_and_geometry'
+  ) => {
+    setStylePainter({
+      active: true,
+      mode,
+      sourceElementId: el.id,
+      sourceStyle: extractStylePainterPatch(el, mode),
+    });
+    setActiveTool('style_painter');
+    showNoticeToast(
+      `Style Painter active (${mode === 'appearance' ? 'Appearance Only' : 'Full Box & Style'}) — click target element`
+    );
+  };
+
+  const handleStylePaintTarget = (targetId: string) => {
+    if (!stylePainter.active || !stylePainter.sourceStyle) return;
+    const target = project.elements.find((e) => e.id === targetId);
+    if (!target || target.locked) return;
+    commitElements(
+      project.elements.map((el) =>
+        el.id === targetId
+          ? {
+              ...el,
+              ...stylePainter.sourceStyle,
+              eraseOriginal: el.isUserAdded ? false : true,
+            }
+          : el
+      ),
+      true,
+      'Style Painter',
+      `Applied style painter to "${target.text?.slice(0, 18) || target.type}"`
+    );
+    setSelectedIds([targetId]);
+    setStylePainter({ active: false, mode: stylePainter.mode });
+    setActiveTool('select');
+    showNoticeToast('Style applied');
+  };
+
+  const handleCanvasCreateElement = (newEl: DocumentElement) => {
+    commitElements(
+      [...project.elements, newEl],
+      true,
+      `Add ${newEl.type}`,
+      `Created ${newEl.type} on Page ${currentPage}`
+    );
+    setSelectedIds([newEl.id]);
+    setInspectorTab('element');
+    const keepActiveTools: ActiveEditorTool[] = [
+      'draw',
+      'measure',
+      'highlight',
+      'underline_annot',
+      'strikeout_annot',
+      'redact',
+    ];
+    if (!keepActiveTools.includes(activeTool)) {
+      setActiveTool('select');
+    }
+  };
+
+  const pendingRedactionCount = useMemo(
+    () =>
+      project.elements.filter(
+        (e) => e.type === 'redaction' && e.visible && !e.redactionApplied
+      ).length,
+    [project.elements]
+  );
+
+  const selectCategory = (cat: EditorToolCategory) => {
+    setActiveCategory(cat);
+    setToolbarExpanded(true);
+    if (cat === 'select') setActiveTool('select');
+    else if (cat === 'text') setActiveTool('text');
+    else if (cat === 'shapes') setActiveTool('rect');
+    else if (cat === 'draw') setActiveTool('draw');
+    else if (cat === 'annotate') setActiveTool('highlight');
+    else if (cat === 'measure') setActiveTool('measure');
+    else setActiveTool('select');
+    if (stylePainter.active) {
+      setStylePainter({ active: false, mode: stylePainter.mode });
+    }
+  };
 
   const stageInteractionMode: 'preview' | 'edit' =
     editorMode === 'preview' ? 'preview' : 'edit';
@@ -1377,10 +1821,10 @@ export const EditorView: React.FC<EditorViewProps> = ({
   const renderLayersList = (touchFriendly: boolean, hideHeader = false) => (
     <div className="flex flex-col h-full overflow-hidden">
       {!hideHeader && (
-        <div className="px-3 py-2.5 border-b border-slate-200/70 dark:border-white/10 flex items-center justify-between text-xs font-semibold text-slate-800 dark:text-slate-200 shrink-0">
+        <div className="px-3 py-2.5 border-b border-black/10 dark:border-white/12 flex items-center justify-between text-xs font-semibold text-[#101010] dark:text-white shrink-0">
           <span>Layers (Page {currentPage})</span>
           <div className="flex items-center gap-2">
-            <span className="text-[11px] font-normal text-slate-500 tabular-nums">
+            <span className="text-[11px] font-normal text-[#888888] dark:text-[#858585] tabular-nums">
               {pageElements.length}
             </span>
             {!viewport.isDesktop && (
@@ -1390,7 +1834,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   setShowLayersPanel(false);
                   if (viewport.isMobile) setEditorMode('edit');
                 }}
-                className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-900 dark:hover:text-slate-100"
+                className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-[#888888] dark:text-[#858585] hover:text-[#101010] dark:hover:text-white"
                 aria-label="Close layers"
               >
                 <X className="w-4 h-4" />
@@ -1407,7 +1851,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/60 pb-safe">
+      <div className="flex-1 overflow-y-auto divide-y divide-black/10 dark:divide-white/10 pb-safe">
         {pageElements.map((el) => {
           const isSel = selectedIds.includes(el.id);
           return (
@@ -1423,13 +1867,13 @@ export const EditorView: React.FC<EditorViewProps> = ({
                 touchFriendly ? 'min-h-[48px] py-2' : 'py-2'
               } flex items-center justify-between gap-1.5 text-xs cursor-pointer transition-colors ${
                 isSel
-                  ? 'bg-blue-600/12 text-blue-700 dark:text-blue-400'
-                  : 'text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                  ? 'bg-black/[0.08] text-[#101010] dark:bg-white/[0.14] dark:text-white'
+                  : 'text-[#555555] dark:text-[#B5B5B5] hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
               }`}
             >
               <div className="min-w-0 flex-1">
                 <div className="truncate font-medium">{el.text || el.type}</div>
-                <div className="text-[10px] text-slate-400 truncate">
+                <div className="text-[10px] text-[#888888] dark:text-[#858585] truncate">
                   {el.type}
                   {el.blockId ? ` · ${el.blockId}` : ''}
                 </div>
@@ -1447,7 +1891,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   }}
                   className={`${
                     touchFriendly ? 'min-w-[36px] min-h-[36px]' : 'p-1'
-                  } flex items-center justify-center text-slate-400 hover:text-slate-900 dark:hover:text-slate-100`}
+                  } flex items-center justify-center text-[#888888] dark:text-[#858585] hover:text-[#101010] dark:hover:text-white`}
                 >
                   <ArrowUp className="w-3.5 h-3.5" />
                 </button>
@@ -1460,7 +1904,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   }}
                   className={`${
                     touchFriendly ? 'min-w-[36px] min-h-[36px]' : 'p-1'
-                  } flex items-center justify-center text-slate-400 hover:text-slate-900 dark:hover:text-slate-100`}
+                  } flex items-center justify-center text-[#888888] dark:text-[#858585] hover:text-[#101010] dark:hover:text-white`}
                 >
                   <ArrowDown className="w-3.5 h-3.5" />
                 </button>
@@ -1472,7 +1916,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   }}
                   className={`${
                     touchFriendly ? 'min-w-[36px] min-h-[36px]' : 'p-1'
-                  } flex items-center justify-center text-slate-400 hover:text-slate-900 dark:hover:text-slate-100`}
+                  } flex items-center justify-center text-[#888888] dark:text-[#858585] hover:text-[#101010] dark:hover:text-white`}
                 >
                   {el.visible ? (
                     <Eye className="w-3.5 h-3.5" />
@@ -1488,10 +1932,10 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   }}
                   className={`${
                     touchFriendly ? 'min-w-[36px] min-h-[36px]' : 'p-1'
-                  } flex items-center justify-center text-slate-400 hover:text-slate-900 dark:hover:text-slate-100`}
+                  } flex items-center justify-center text-[#888888] dark:text-[#858585] hover:text-[#101010] dark:hover:text-white`}
                 >
                   {el.locked ? (
-                    <Lock className="w-3.5 h-3.5 text-amber-500" />
+                    <Lock className="w-3.5 h-3.5 text-[#101010] dark:text-white" />
                   ) : (
                     <Unlock className="w-3.5 h-3.5" />
                   )}
@@ -1506,13 +1950,13 @@ export const EditorView: React.FC<EditorViewProps> = ({
 
   const renderPagesDrawerContent = () => (
     <div className="flex flex-col h-full overflow-hidden">
-      <div className="px-3.5 py-2.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between text-xs font-semibold text-slate-800 dark:text-slate-200 shrink-0">
+      <div className="px-3.5 py-2.5 border-b border-black/10 dark:border-white/12 flex items-center justify-between text-xs font-semibold text-[#101010] dark:text-white shrink-0">
         <span>Pages ({project.pageCount})</span>
         <div className="flex items-center gap-1.5">
           <button
             type="button"
             onClick={handleDuplicatePage}
-            className="min-h-[36px] px-2.5 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium flex items-center gap-1"
+            className="min-h-[36px] px-2.5 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[11px] font-medium flex items-center gap-1"
           >
             <CopyPlus className="w-3.5 h-3.5" />
             Duplicate
@@ -1523,7 +1967,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
               setShowPagesDrawer(false);
               if (viewport.isMobile) setEditorMode('edit');
             }}
-            className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded text-slate-400 hover:text-slate-900 dark:hover:text-slate-100"
+            className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg text-[#888888] dark:text-[#858585] hover:text-[#101010] dark:hover:text-white"
             aria-label="Close pages"
           >
             <X className="w-4 h-4" />
@@ -1552,13 +1996,13 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   setEditorMode('edit');
                 }
               }}
-              className={`p-2 rounded-lg border text-left transition-colors ${
+              className={`p-2 rounded-xl border text-left transition-colors ${
                 isActive
-                  ? 'border-blue-600 bg-blue-600/10'
-                  : 'border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                  ? 'studio-active-surface'
+                  : 'border-black/10 dark:border-white/12 hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
               }`}
             >
-              <div className="aspect-[3/4] w-full rounded border border-slate-200 dark:border-slate-700 bg-white overflow-hidden flex items-center justify-center">
+              <div className="aspect-[3/4] w-full rounded border border-black/10 dark:border-white/12 bg-white overflow-hidden flex items-center justify-center">
                 {thumb ? (
                   <img
                     src={thumb}
@@ -1566,30 +2010,30 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     className="w-full h-full object-contain"
                   />
                 ) : (
-                  <span className="text-[11px] font-mono text-slate-400">
+                  <span className="text-[11px] font-mono text-[#888888]">
                     P{pageNum}
                   </span>
                 )}
               </div>
               <div className="mt-1.5 flex items-center justify-between text-[11px]">
-                <span className="font-semibold text-slate-800 dark:text-slate-200 tabular-nums">
+                <span className="font-semibold text-[#101010] dark:text-white tabular-nums">
                   Page {pageNum}
                 </span>
-                <span className="text-slate-400 tabular-nums">{elCount} el</span>
+                <span className="text-[#888888] dark:text-[#858585] tabular-nums">{elCount} el</span>
               </div>
             </button>
           );
         })}
       </div>
 
-      <div className="p-3 border-t border-slate-200 dark:border-slate-800 shrink-0">
+      <div className="p-3 border-t border-black/10 dark:border-white/12 shrink-0">
         <button
           type="button"
           onClick={() => {
             setShowPagesDrawer(false);
             setShowPageSetupModal(true);
           }}
-          className="w-full min-h-[44px] rounded-md border border-blue-600/40 bg-blue-600/10 text-blue-600 dark:text-blue-400 font-medium text-xs flex items-center justify-center gap-1.5"
+          className="w-full min-h-[44px] rounded-xl border border-black/15 dark:border-white/15 bg-black/[0.04] dark:bg-white/[0.07] hover:bg-black/[0.08] dark:hover:bg-white/[0.12] text-[#101010] dark:text-white font-medium text-xs flex items-center justify-center gap-1.5 transition-colors"
         >
           <Maximize2 className="w-3.5 h-3.5" />
           Page Size, Copies & Margins
@@ -1608,520 +2052,921 @@ export const EditorView: React.FC<EditorViewProps> = ({
 
   return (
     <div className="flex-1 flex flex-col h-full desktop:h-screen overflow-hidden relative">
-      {/* Desktop & Tablet Liquid Glass Top Toolbar */}
+      {/* Desktop & Tablet 10-Category Expandable Workstation Toolbar */}
       {!viewport.isMobile && (
-        <header className="h-12 px-3 border-b glass-level-2 flex items-center justify-between gap-2 overflow-x-auto no-scrollbar shrink-0 z-20">
-          <div className="flex items-center gap-1 shrink-0">
-            <button
-              type="button"
-              title="Toggle Layers"
-              onClick={() => setShowLayersPanel((v) => !v)}
-              className={`p-1.5 rounded-lg transition-colors ${
-                showLayersPanel
-                  ? 'bg-blue-500/18 text-blue-600 dark:text-blue-300'
-                  : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200/60 dark:hover:bg-white/10'
-              }`}
-            >
-              <Layers className="w-4 h-4" />
-            </button>
-
-            <button
-              type="button"
-              title="Page Thumbnails"
-              onClick={() => setShowPagesDrawer((v) => !v)}
-              className={`p-1.5 rounded-lg transition-colors ${
-                showPagesDrawer
-                  ? 'bg-blue-500/18 text-blue-600 dark:text-blue-300'
-                  : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200/60 dark:hover:bg-white/10'
-              }`}
-            >
-              <BookOpen className="w-4 h-4" />
-            </button>
-
-            {viewport.isDesktop ? (
+        <div className="shrink-0 z-20 flex flex-col border-b border-black/10 dark:border-white/12 glass-level-2">
+          {/* Row 1: Panels, Undo/Redo, 10 Tool Categories, View/Zoom/Page/Save */}
+          <header className="h-11 px-3 flex items-center justify-between gap-2 overflow-x-auto no-scrollbar">
+            <div className="flex items-center gap-1 shrink-0">
               <button
                 type="button"
-                title="Toggle Properties Inspector"
-                onClick={() => setShowDesktopInspector((v) => !v)}
+                title="Toggle Layers"
+                onClick={() => setShowLayersPanel((v) => !v)}
                 className={`p-1.5 rounded-lg transition-colors ${
-                  showDesktopInspector
-                    ? 'bg-blue-500/18 text-blue-600 dark:text-blue-300'
-                    : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200/60 dark:hover:bg-white/10'
+                  showLayersPanel
+                    ? 'bg-black/[0.08] text-[#101010] dark:bg-white/[0.14] dark:text-white'
+                    : 'text-[#555555] dark:text-[#B5B5B5] hover:bg-black/[0.05] dark:hover:bg-white/[0.08]'
                 }`}
               >
-                <PanelRight className="w-4 h-4" />
+                <Layers className="w-4 h-4" />
               </button>
-            ) : (
-              <button
-                type="button"
-                title="Properties & AI"
-                onClick={() => setShowInspectorDrawer((v) => !v)}
-                className={`px-2 py-1 rounded-lg text-xs font-medium flex items-center gap-1 ${
-                  showInspectorDrawer
-                    ? 'bg-blue-500/18 text-blue-600 dark:text-blue-300'
-                    : 'text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-white/10'
-                }`}
-              >
-                <Sliders className="w-3.5 h-3.5" />
-                Props
-              </button>
-            )}
 
-            {viewport.isDesktop && (
               <button
                 type="button"
-                title={isWorkspaceMaximized ? 'Restore Side Panels' : 'Maximize Canvas'}
-                onClick={toggleMaximizeWorkspace}
+                title="Page Thumbnails"
+                onClick={() => setShowPagesDrawer((v) => !v)}
                 className={`p-1.5 rounded-lg transition-colors ${
-                  isWorkspaceMaximized
-                    ? 'bg-blue-500/18 text-blue-600 dark:text-blue-300'
-                    : 'text-slate-600 dark:text-slate-400 hover:bg-slate-200/60 dark:hover:bg-white/10'
+                  showPagesDrawer
+                    ? 'bg-black/[0.08] text-[#101010] dark:bg-white/[0.14] dark:text-white'
+                    : 'text-[#555555] dark:text-[#B5B5B5] hover:bg-black/[0.05] dark:hover:bg-white/[0.08]'
                 }`}
               >
-                {isWorkspaceMaximized ? (
-                  <Minimize2 className="w-4 h-4" />
-                ) : (
-                  <Maximize2 className="w-4 h-4" />
-                )}
+                <BookOpen className="w-4 h-4" />
               </button>
-            )}
 
-            <div className="h-4 w-px bg-slate-300/60 dark:bg-white/10 mx-1" />
-
-            <button
-              type="button"
-              title="Undo"
-              disabled={undoStack.length === 0}
-              onClick={handleUndo}
-              className="p-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-white/10 disabled:opacity-35"
-            >
-              <Undo2 className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              title="Redo"
-              disabled={redoStack.length === 0}
-              onClick={handleRedo}
-              className="p-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-white/10 disabled:opacity-35"
-            >
-              <Redo2 className="w-4 h-4" />
-            </button>
-
-            <div className="h-4 w-px bg-slate-300/60 dark:bg-white/10 mx-1" />
-
-            {!isToolHidden('text') && (
-              <button
-                type="button"
-                title="Add Text"
-                onClick={() => addNewElement('text')}
-                className="px-2 py-1 rounded-lg text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-white/10 flex items-center gap-1 whitespace-nowrap"
-              >
-                <TypeIcon className="w-3.5 h-3.5" />
-                Text
-              </button>
-            )}
-            {!isToolHidden('rect') && (
-              <button
-                type="button"
-                title="Add Rectangle"
-                onClick={() => addNewElement('rect')}
-                className="p-1.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-white/10"
-              >
-                <Square className="w-3.5 h-3.5" />
-              </button>
-            )}
-            {!isToolHidden('circle') && (
-              <button
-                type="button"
-                title="Add Circle"
-                onClick={() => addNewElement('circle')}
-                className="p-1.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-white/10"
-              >
-                <Circle className="w-3.5 h-3.5" />
-              </button>
-            )}
-            {!isToolHidden('line') && (
-              <button
-                type="button"
-                title="Add Line"
-                onClick={() => addNewElement('line')}
-                className="p-1.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-white/10"
-              >
-                <Minus className="w-3.5 h-3.5" />
-              </button>
-            )}
-            {!isToolHidden('table') && (
-              <button
-                type="button"
-                title="Add Table"
-                onClick={() => addNewElement('table')}
-                className="p-1.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-white/10"
-              >
-                <Table2 className="w-3.5 h-3.5" />
-              </button>
-            )}
-            {!isToolHidden('block') && (
-              <button
-                type="button"
-                title="Create Document Block (from selection or new frame)"
-                onClick={handleCreateDocumentBlock}
-                className="px-2 py-1 rounded-lg text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-white/10 flex items-center gap-1 whitespace-nowrap"
-              >
-                <BoxSelect className="w-3.5 h-3.5" />
-                Block
-              </button>
-            )}
-            {!isToolHidden('image') && (
-              <button
-                type="button"
-                title="Add Image / Logo"
-                onClick={() => imageUploadRef.current?.click()}
-                className="p-1.5 rounded-lg text-slate-700 dark:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-white/10"
-              >
-                <ImageIcon className="w-3.5 h-3.5" />
-              </button>
-            )}
-            {!isToolHidden('assets') && (
-              <div className="relative">
+              {viewport.isDesktop ? (
                 <button
                   type="button"
-                  title="Insert Saved Asset from Library"
-                  onClick={() => setShowAssetInsertMenu((v) => !v)}
-                  className={`px-2 py-1 rounded-lg text-xs font-medium flex items-center gap-1 whitespace-nowrap ${
-                    showAssetInsertMenu
-                      ? 'bg-blue-500/18 text-blue-600 dark:text-blue-300'
-                      : 'text-slate-700 dark:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-white/10'
+                  title="Toggle Properties Inspector"
+                  onClick={() => setShowDesktopInspector((v) => !v)}
+                  className={`p-1.5 rounded-lg transition-colors ${
+                    showDesktopInspector
+                      ? 'bg-black/[0.08] text-[#101010] dark:bg-white/[0.14] dark:text-white'
+                      : 'text-[#555555] dark:text-[#B5B5B5] hover:bg-black/[0.05] dark:hover:bg-white/[0.08]'
                   }`}
                 >
-                  <FolderPlus className="w-3.5 h-3.5" />
-                  Assets
+                  <PanelRight className="w-4 h-4" />
                 </button>
-                {showAssetInsertMenu && (
-                  <div className="absolute left-0 top-full mt-1.5 w-64 rounded-2xl border glass-level-4 z-50 p-2.5 text-xs space-y-2 max-h-80 overflow-y-auto">
-                    <div className="font-semibold text-slate-700 dark:text-slate-200 px-1">
-                      Saved Logos & Images ({savedImages.length})
-                    </div>
-                    {savedImages.length === 0 ? (
-                      <div className="px-1 text-[11px] text-slate-400">
-                        None saved. Upload in Asset Library.
-                      </div>
-                    ) : (
-                      savedImages.map((img) => (
-                        <button
-                          key={img.id}
-                          type="button"
-                          onClick={() => handleInsertAssetImage(img)}
-                          className="w-full px-2 py-1.5 rounded-xl hover:bg-slate-200/60 dark:hover:bg-white/10 flex items-center gap-2 text-left"
-                        >
-                          <img
-                            src={img.dataUrl}
-                            alt={img.name}
-                            className="w-6 h-6 object-contain bg-white rounded border border-slate-200"
-                          />
-                          <span className="truncate flex-1">{img.name}</span>
-                        </button>
-                      ))
-                    )}
-                    <div className="font-semibold text-slate-700 dark:text-slate-200 px-1 pt-1 border-t border-slate-200/70 dark:border-white/10">
-                      Saved Shapes ({savedShapes.length})
-                    </div>
-                    {savedShapes.length === 0 ? (
-                      <div className="px-1 text-[11px] text-slate-400">
-                        None saved. Create in Asset Library.
-                      </div>
-                    ) : (
-                      savedShapes.map((shp) => (
-                        <button
-                          key={shp.id}
-                          type="button"
-                          onClick={() => handleInsertAssetShape(shp)}
-                          className="w-full px-2 py-1.5 rounded-xl hover:bg-slate-200/60 dark:hover:bg-white/10 flex items-center justify-between text-left"
-                        >
-                          <span className="truncate">{shp.name}</span>
-                          <span className="text-[10px] text-slate-400">{shp.shapeKind}</span>
-                        </button>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div className="h-4 w-px bg-slate-300/60 dark:bg-white/10 mx-1" />
-
-            <button
-              type="button"
-              title="Copy selected"
-              disabled={selectedIds.length === 0}
-              onClick={handleCopy}
-              className="p-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-white/10 disabled:opacity-35"
-            >
-              <Copy className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              title="Paste"
-              disabled={clipboard.length === 0}
-              onClick={handlePaste}
-              className="p-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-white/10 disabled:opacity-35"
-            >
-              <Clipboard className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              title={`Duplicate with offset (+${settings.duplicateOffsetXPt ?? 14}, +${settings.duplicateOffsetYPt ?? 14}pt)`}
-              disabled={selectedIds.length === 0}
-              onClick={handleDuplicateSelected}
-              className="p-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-white/10 disabled:opacity-35"
-            >
-              <CopyPlus className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              title="Group / Ungroup"
-              disabled={selectedIds.length === 0}
-              onClick={handleGroupToggle}
-              className="p-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-white/10 disabled:opacity-35"
-            >
-              {selectedElements[0]?.groupId ? (
-                <Ungroup className="w-3.5 h-3.5" />
               ) : (
-                <Group className="w-3.5 h-3.5" />
+                <button
+                  type="button"
+                  title="Properties & AI"
+                  onClick={() => setShowInspectorDrawer((v) => !v)}
+                  className={`px-2 py-1 rounded-lg text-xs font-medium flex items-center gap-1 ${
+                    showInspectorDrawer
+                      ? 'bg-black/[0.08] text-[#101010] dark:bg-white/[0.14] dark:text-white'
+                      : 'text-[#555555] dark:text-[#B5B5B5] hover:bg-black/[0.05] dark:hover:bg-white/[0.08]'
+                  }`}
+                >
+                  <Sliders className="w-3.5 h-3.5" />
+                  Props
+                </button>
               )}
-            </button>
-            {!isToolHidden('search') && (
-              <button
-                type="button"
-                title="Search & Replace"
-                onClick={() => {
-                  setShowSearchBar((v) => !v);
-                  onTrackRecentTool?.('search');
-                }}
-                className={`p-1.5 rounded-lg ${
-                  showSearchBar
-                    ? 'bg-blue-500/18 text-blue-600 dark:text-blue-300'
-                    : 'text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-white/10'
-                }`}
-              >
-                <Search className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
 
-          <div className="flex items-center gap-1.5 shrink-0">
-            <button
-              type="button"
-              title="Preview vs Edit Mode"
-              onClick={() =>
-                setEditorMode((m) => (m === 'preview' ? 'edit' : 'preview'))
-              }
-              className={`px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1 whitespace-nowrap ${
-                editorMode === 'preview'
-                  ? 'bg-blue-600 text-white'
-                  : 'text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-white/10'
-              }`}
-            >
-              <Eye className="w-3.5 h-3.5" />
-              {editorMode === 'preview' ? 'Preview' : 'Edit'}
-            </button>
-            {!isToolHidden('rulers') && (
+              {viewport.isDesktop && (
+                <button
+                  type="button"
+                  title={isWorkspaceMaximized ? 'Restore Side Panels' : 'Maximize Canvas'}
+                  onClick={toggleMaximizeWorkspace}
+                  className={`p-1.5 rounded-lg transition-colors ${
+                    isWorkspaceMaximized
+                      ? 'bg-black/[0.08] text-[#101010] dark:bg-white/[0.14] dark:text-white'
+                      : 'text-[#555555] dark:text-[#B5B5B5] hover:bg-black/[0.05] dark:hover:bg-white/[0.08]'
+                  }`}
+                >
+                  {isWorkspaceMaximized ? (
+                    <Minimize2 className="w-4 h-4" />
+                  ) : (
+                    <Maximize2 className="w-4 h-4" />
+                  )}
+                </button>
+              )}
+
+              <div className="h-4 w-px bg-black/15 dark:bg-white/15 mx-1" />
+
               <button
                 type="button"
-                title="Rulers"
-                onClick={() => setShowRulers((v) => !v)}
-                className={`p-1.5 rounded-lg ${
-                  showRulers
-                    ? 'bg-blue-500/18 text-blue-600 dark:text-blue-300'
-                    : 'text-slate-500 hover:bg-slate-200/60 dark:hover:bg-white/10'
+                title={undoStack.length > 0 ? `Undo: ${undoStack[undoStack.length - 1].label}` : 'Undo'}
+                disabled={undoStack.length === 0}
+                onClick={handleUndo}
+                className="p-1.5 rounded-lg text-[#555555] dark:text-[#B5B5B5] hover:bg-black/[0.05] dark:hover:bg-white/[0.08] disabled:opacity-35"
+              >
+                <Undo2 className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                title={redoStack.length > 0 ? `Redo: ${redoStack[redoStack.length - 1].label}` : 'Redo'}
+                disabled={redoStack.length === 0}
+                onClick={handleRedo}
+                className="p-1.5 rounded-lg text-[#555555] dark:text-[#B5B5B5] hover:bg-black/[0.05] dark:hover:bg-white/[0.08] disabled:opacity-35"
+              >
+                <Redo2 className="w-4 h-4" />
+              </button>
+
+              <div className="h-4 w-px bg-black/15 dark:bg-white/15 mx-1" />
+
+              {/* 10 Tool Category Tabs */}
+              <div className="flex items-center gap-0.5" role="tablist" aria-label="Editor Tool Categories">
+                {(
+                  [
+                    ['select', 'Select', 'V', MousePointer2],
+                    ['text', 'Text', 'T', TypeIcon],
+                    ['images', 'Images', 'I', ImageIcon],
+                    ['shapes', 'Shapes', 'S', Square],
+                    ['draw', 'Draw', 'P', Pencil],
+                    ['annotate', 'Annotate', 'A', Highlighter],
+                    ['arrange', 'Arrange', 'L', Group],
+                    ['pages', 'Pages', 'G', FileCog],
+                    ['measure', 'Measure', 'M', Ruler],
+                    ['inspect', 'Inspect', 'K', ShieldCheck],
+                  ] as const
+                ).map(([cat, label, shortcut, Icon]) => {
+                  const isActive = activeCategory === cat;
+                  return (
+                    <button
+                      key={cat}
+                      type="button"
+                      role="tab"
+                      aria-selected={isActive}
+                      title={`${label} (${shortcut})`}
+                      onClick={() => selectCategory(cat)}
+                      className={`px-2 py-1 rounded-lg text-[11px] font-medium flex items-center gap-1 whitespace-nowrap transition-colors ${
+                        isActive
+                          ? 'bg-[#101010] text-white dark:bg-white dark:text-[#050505] shadow-sm'
+                          : 'text-[#555555] dark:text-[#B5B5B5] hover:bg-black/[0.05] dark:hover:bg-white/[0.08]'
+                      }`}
+                    >
+                      <Icon className="w-3.5 h-3.5" />
+                      <span className="hidden desktop:inline">{label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <button
+                type="button"
+                title={toolbarExpanded ? 'Collapse Tool Ribbon' : 'Expand Tool Ribbon'}
+                onClick={() => setToolbarExpanded((v) => !v)}
+                className="p-1 rounded-lg text-[#888888] hover:text-[#101010] dark:hover:text-white"
+              >
+                {toolbarExpanded ? (
+                  <ChevronUp className="w-3.5 h-3.5" />
+                ) : (
+                  <ChevronDown className="w-3.5 h-3.5" />
+                )}
+              </button>
+            </div>
+
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                title="Preview vs Edit Mode"
+                onClick={() =>
+                  setEditorMode((m) => (m === 'preview' ? 'edit' : 'preview'))
+                }
+                className={`px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1 whitespace-nowrap ${
+                  editorMode === 'preview'
+                    ? 'bg-[#101010] text-white dark:bg-white dark:text-[#050505]'
+                    : 'text-[#555555] dark:text-[#B5B5B5] hover:bg-black/[0.05] dark:hover:bg-white/[0.08]'
                 }`}
               >
-                <Ruler className="w-3.5 h-3.5" />
+                <Eye className="w-3.5 h-3.5" />
+                {editorMode === 'preview' ? 'Preview' : 'Edit'}
               </button>
-            )}
-            {!isToolHidden('grid') && (
+
+              <div className="h-4 w-px bg-black/15 dark:bg-white/15 mx-0.5" />
+
               <button
                 type="button"
-                title="Grid"
-                onClick={() => setShowGrid((v) => !v)}
-                className={`p-1.5 rounded-lg ${
-                  showGrid
-                    ? 'bg-blue-500/18 text-blue-600 dark:text-blue-300'
-                    : 'text-slate-500 hover:bg-slate-200/60 dark:hover:bg-white/10'
-                }`}
+                onClick={() =>
+                  setZoom((z) => Math.max(0.3, Number((z - 0.15).toFixed(2))))
+                }
+                className="p-1 rounded-lg text-[#555555] dark:text-[#B5B5B5] hover:bg-black/[0.05] dark:hover:bg-white/[0.08]"
               >
-                <Grid className="w-3.5 h-3.5" />
+                <ZoomOut className="w-3.5 h-3.5" />
               </button>
-            )}
-            {!isToolHidden('snap') && (
+              <span className="text-xs font-mono tabular-nums w-10 text-center text-[#101010] dark:text-white">
+                {Math.round(zoom * 100)}%
+              </span>
               <button
                 type="button"
-                title="Snap to Grid & Alignment Guides"
+                onClick={() =>
+                  setZoom((z) => Math.min(2.5, Number((z + 0.15).toFixed(2))))
+                }
+                className="p-1 rounded-lg text-[#555555] dark:text-[#B5B5B5] hover:bg-black/[0.05] dark:hover:bg-white/[0.08]"
+              >
+                <ZoomIn className="w-3.5 h-3.5" />
+              </button>
+
+              <div className="h-4 w-px bg-black/15 dark:bg-white/15 mx-0.5" />
+
+              <button
+                type="button"
+                disabled={currentPage <= 1}
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                className="p-1 rounded-lg text-[#555555] dark:text-[#B5B5B5] hover:bg-black/[0.05] dark:hover:bg-white/[0.08] disabled:opacity-35"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <span className="text-xs tabular-nums text-[#101010] dark:text-white whitespace-nowrap">
+                {currentPage} / {project.pageCount}
+              </span>
+              <button
+                type="button"
+                disabled={currentPage >= project.pageCount}
+                onClick={() =>
+                  setCurrentPage((p) => Math.min(project.pageCount, p + 1))
+                }
+                className="p-1 rounded-lg text-[#555555] dark:text-[#B5B5B5] hover:bg-black/[0.05] dark:hover:bg-white/[0.08] disabled:opacity-35"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+
+              <button
+                type="button"
+                title="Open AI-Enhanced Analysis & AI Editing Assistant"
                 onClick={() => {
-                  setSnapToGrid((v) => !v);
-                  setShowGuides((v) => !v);
-                }}
-                className={`p-1.5 rounded-lg ${
-                  snapToGrid
-                    ? 'bg-blue-500/18 text-blue-600 dark:text-blue-300'
-                    : 'text-slate-500 hover:bg-slate-200/60 dark:hover:bg-white/10'
-                }`}
-              >
-                <Magnet className="w-3.5 h-3.5" />
-              </button>
-            )}
-            {!isToolHidden('crop') && (
-              <button
-                type="button"
-                title="Visual Crop & Content Boundary Handles"
-                onClick={() => {
-                  setCropMode((v) => {
-                    const next = !v;
-                    if (next) setInspectorTab('page');
-                    return next;
-                  });
-                  onTrackRecentTool?.('crop');
+                  setInspectorTab('ai');
+                  setShowDesktopInspector(true);
                 }}
                 className={`px-2 py-1 rounded-lg text-xs font-medium flex items-center gap-1 whitespace-nowrap ${
-                  cropMode
-                    ? 'bg-emerald-500/18 text-emerald-600 dark:text-emerald-300'
-                    : 'text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-white/10'
+                  inspectorTab === 'ai'
+                    ? 'bg-black/[0.08] text-[#101010] dark:bg-white/[0.14] dark:text-white'
+                    : 'text-[#555555] dark:text-[#B5B5B5] hover:bg-black/[0.05] dark:hover:bg-white/[0.08]'
                 }`}
               >
-                <Crop className="w-3.5 h-3.5" />
-                Crop
+                <Sparkles className="w-3.5 h-3.5" />
+                AI Assist
               </button>
-            )}
-            <button
-              type="button"
-              title="Custom Paper Size, Units, Margins & Presets"
-              onClick={() => setShowPageSetupModal(true)}
-              className="px-2 py-1 rounded-lg text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-white/10 flex items-center gap-1 whitespace-nowrap"
-            >
-              <Maximize2 className="w-3.5 h-3.5" />
-              {project.pageConfig.customPresetName || project.pageConfig.sizePreset}
-            </button>
 
-            <div className="h-4 w-px bg-slate-300/60 dark:bg-white/10 mx-1" />
-
-            <button
-              type="button"
-              onClick={() =>
-                setZoom((z) => Math.max(0.3, Number((z - 0.15).toFixed(2))))
-              }
-              className="p-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-white/10"
-            >
-              <ZoomOut className="w-3.5 h-3.5" />
-            </button>
-            <span className="text-xs font-mono tabular-nums w-11 text-center text-slate-700 dark:text-slate-300">
-              {Math.round(zoom * 100)}%
-            </span>
-            <button
-              type="button"
-              onClick={() =>
-                setZoom((z) => Math.min(2.5, Number((z + 0.15).toFixed(2))))
-              }
-              className="p-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-white/10"
-            >
-              <ZoomIn className="w-3.5 h-3.5" />
-            </button>
-
-            <div className="h-4 w-px bg-slate-300/60 dark:bg-white/10 mx-1" />
-
-            <button
-              type="button"
-              disabled={currentPage <= 1}
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              className="p-1 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-white/10 disabled:opacity-35"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            <span className="text-xs tabular-nums text-slate-700 dark:text-slate-300 whitespace-nowrap">
-              {currentPage} / {project.pageCount}
-            </span>
-            <button
-              type="button"
-              disabled={currentPage >= project.pageCount}
-              onClick={() =>
-                setCurrentPage((p) => Math.min(project.pageCount, p + 1))
-              }
-              className="p-1 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-white/10 disabled:opacity-35"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
-
-            {!isToolHidden('dupPage') && (
               <button
                 type="button"
-                title="Duplicate Entire PDF Page"
-                onClick={handleDuplicatePage}
-                className="px-2 py-1 rounded-lg text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-white/10 flex items-center gap-1 whitespace-nowrap"
+                onClick={() =>
+                  onSaveSnapshot(project, `Manual snapshot (Page ${currentPage})`)
+                }
+                className="ml-0.5 px-3 py-1 rounded-xl text-xs font-medium bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] shadow-sm flex items-center gap-1.5 whitespace-nowrap transition-colors"
               >
-                <CopyPlus className="w-3.5 h-3.5" />
-                Dup Page
+                <Save className="w-3.5 h-3.5" />
+                Save
               </button>
-            )}
+            </div>
+          </header>
 
-            {!isToolHidden('history') && (
-              <button
-                type="button"
-                title="Version History & Operation Log"
-                onClick={() => setShowVersionModal(true)}
-                className="p-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-white/10"
+          {/* Row 2: Contextual Expandable Tool Ribbon */}
+          <AnimatePresence initial={false}>
+            {toolbarExpanded && (
+              <motion.div
+                key={`subbar-${activeCategory}`}
+                initial={prefersReduced ? { opacity: 0 } : { opacity: 0, height: 0 }}
+                animate={{
+                  opacity: 1,
+                  height: 'auto',
+                  transition: { duration: MOTION_DURATION.fast },
+                }}
+                exit={
+                  prefersReduced
+                    ? { opacity: 0 }
+                    : { opacity: 0, height: 0, transition: { duration: MOTION_DURATION.instant } }
+                }
+                className="px-3 py-1.5 border-t border-black/10 dark:border-white/10 glass-level-1 flex items-center gap-1.5 text-[11px] overflow-x-auto no-scrollbar"
               >
-                <History className="w-3.5 h-3.5" />
-              </button>
+                {activeCategory === 'select' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTool('select')}
+                      className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap ${
+                        activeTool === 'select'
+                          ? 'studio-active-surface'
+                          : 'hover:bg-black/5 dark:hover:bg-white/10'
+                      }`}
+                    >
+                      <MousePointer2 className="w-3.5 h-3.5" />
+                      Pointer Select
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTool('marquee')}
+                      className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap ${
+                        activeTool === 'marquee'
+                          ? 'studio-active-surface'
+                          : 'hover:bg-black/5 dark:hover:bg-white/10'
+                      }`}
+                    >
+                      <BoxSelect className="w-3.5 h-3.5" />
+                      Marquee Box
+                    </button>
+                    <div className="h-4 w-px bg-black/15 dark:bg-white/15 mx-0.5" />
+                    <button
+                      type="button"
+                      disabled={selectedIds.length === 0}
+                      onClick={handleCopy}
+                      className="px-2 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 disabled:opacity-35 flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      Copy
+                    </button>
+                    <button
+                      type="button"
+                      disabled={clipboard.length === 0}
+                      onClick={handlePaste}
+                      className="px-2 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 disabled:opacity-35 flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <Clipboard className="w-3.5 h-3.5" />
+                      Paste
+                    </button>
+                    <button
+                      type="button"
+                      disabled={selectedIds.length === 0}
+                      onClick={handleDuplicateSelected}
+                      className="px-2 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 disabled:opacity-35 flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <CopyPlus className="w-3.5 h-3.5" />
+                      Duplicate
+                    </button>
+                    <div className="h-4 w-px bg-black/15 dark:bg-white/15 mx-0.5" />
+                    <button
+                      type="button"
+                      disabled={!primarySelected}
+                      onClick={() =>
+                        primarySelected &&
+                        handleStartStylePainter(primarySelected, 'appearance')
+                      }
+                      className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap disabled:opacity-35 ${
+                        stylePainter.active && stylePainter.mode === 'appearance'
+                          ? 'studio-active-surface'
+                          : 'hover:bg-black/5 dark:hover:bg-white/10'
+                      }`}
+                    >
+                      <Paintbrush className="w-3.5 h-3.5" />
+                      Paint Style
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!primarySelected}
+                      onClick={() =>
+                        primarySelected &&
+                        handleStartStylePainter(
+                          primarySelected,
+                          'appearance_and_geometry'
+                        )
+                      }
+                      className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap disabled:opacity-35 ${
+                        stylePainter.active &&
+                        stylePainter.mode === 'appearance_and_geometry'
+                          ? 'studio-active-surface'
+                          : 'hover:bg-black/5 dark:hover:bg-white/10'
+                      }`}
+                    >
+                      <Paintbrush className="w-3.5 h-3.5" />
+                      Paint Style + Box
+                    </button>
+                  </>
+                )}
+
+                {activeCategory === 'text' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTool('text')}
+                      className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap ${
+                        activeTool === 'text'
+                          ? 'studio-active-surface'
+                          : 'hover:bg-black/5 dark:hover:bg-white/10'
+                      }`}
+                    >
+                      <TypeIcon className="w-3.5 h-3.5" />
+                      Draw Text Box
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => addNewElement('text')}
+                      className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      Insert Text Block
+                    </button>
+                    <div className="h-4 w-px bg-black/15 dark:bg-white/15 mx-0.5" />
+                    <button
+                      type="button"
+                      onClick={() => setSmartReplaceOpen(true)}
+                      className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <Replace className="w-3.5 h-3.5" />
+                      Smart Replace
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBatchStyleOpen(true)}
+                      className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <Wand2 className="w-3.5 h-3.5" />
+                      Batch Style Pages
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowSearchBar((v) => !v);
+                        onTrackRecentTool?.('search');
+                      }}
+                      className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap ${
+                        showSearchBar
+                          ? 'studio-active-surface'
+                          : 'hover:bg-black/5 dark:hover:bg-white/10'
+                      }`}
+                    >
+                      <Search className="w-3.5 h-3.5" />
+                      Quick Find Bar
+                    </button>
+                    <div className="h-4 w-px bg-black/15 dark:bg-white/15 mx-0.5" />
+                    <button
+                      type="button"
+                      disabled={!primarySelected}
+                      onClick={() =>
+                        primarySelected && handleCopyFormatting(primarySelected)
+                      }
+                      className="px-2 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 disabled:opacity-35 whitespace-nowrap"
+                    >
+                      Copy Format
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!copiedFormatting || selectedIds.length === 0}
+                      onClick={() => handlePasteFormatting(selectedIds)}
+                      className="px-2 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 disabled:opacity-35 whitespace-nowrap"
+                    >
+                      Paste Format
+                    </button>
+                  </>
+                )}
+
+                {activeCategory === 'images' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => imageUploadRef.current?.click()}
+                      className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <ImageIcon className="w-3.5 h-3.5" />
+                      Upload Image / Logo
+                    </button>
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() => setShowAssetInsertMenu((v) => !v)}
+                        className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap ${
+                          showAssetInsertMenu
+                            ? 'studio-active-surface'
+                            : 'hover:bg-black/5 dark:hover:bg-white/10'
+                        }`}
+                      >
+                        <FolderPlus className="w-3.5 h-3.5" />
+                        Asset Library
+                      </button>
+                      <AnimatePresence>
+                        {showAssetInsertMenu && (
+                          <motion.div
+                            key="asset-insert-popover"
+                            variants={popoverVariants}
+                            initial="initial"
+                            animate="animate"
+                            exit="exit"
+                            className="fixed mt-2 w-64 rounded-2xl border glass-level-4 z-50 p-2.5 text-xs space-y-2 max-h-80 overflow-y-auto origin-top-left"
+                          >
+                            <div className="font-semibold text-[#101010] dark:text-white px-1">
+                              Saved Logos &amp; Images ({savedImages.length})
+                            </div>
+                            {savedImages.length === 0 ? (
+                              <div className="px-1 text-[11px] text-[#888888] dark:text-[#858585]">
+                                None saved. Upload in Asset Library.
+                              </div>
+                            ) : (
+                              savedImages.map((img) => (
+                                <button
+                                  key={img.id}
+                                  type="button"
+                                  onClick={() => handleInsertAssetImage(img)}
+                                  className="w-full px-2 py-1.5 rounded-xl hover:bg-black/[0.05] dark:hover:bg-white/[0.08] flex items-center gap-2 text-left transition-colors"
+                                >
+                                  <img
+                                    src={img.dataUrl}
+                                    alt={img.name}
+                                    className="w-6 h-6 object-contain bg-white rounded border border-black/15"
+                                  />
+                                  <span className="truncate flex-1">{img.name}</span>
+                                </button>
+                              ))
+                            )}
+                            <div className="font-semibold text-[#101010] dark:text-white px-1 pt-1 border-t border-black/10 dark:border-white/12">
+                              Saved Shapes ({savedShapes.length})
+                            </div>
+                            {savedShapes.length === 0 ? (
+                              <div className="px-1 text-[11px] text-[#888888] dark:text-[#858585]">
+                                None saved. Create in Asset Library.
+                              </div>
+                            ) : (
+                              savedShapes.map((shp) => (
+                                <button
+                                  key={shp.id}
+                                  type="button"
+                                  onClick={() => handleInsertAssetShape(shp)}
+                                  className="w-full px-2 py-1.5 rounded-xl hover:bg-black/[0.05] dark:hover:bg-white/[0.08] flex items-center justify-between text-left transition-colors"
+                                >
+                                  <span className="truncate">{shp.name}</span>
+                                  <span className="text-[10px] text-[#888888] dark:text-[#858585]">
+                                    {shp.shapeKind}
+                                  </span>
+                                </button>
+                              ))
+                            )}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setRestorationOpen(true)}
+                      className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <ScanLine className="w-3.5 h-3.5" />
+                      Scan Restoration &amp; OCR
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSignatureModalInitialTab('signature');
+                        setSignatureStampOpen(true);
+                      }}
+                      className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <PenTool className="w-3.5 h-3.5" />
+                      Signature Pad
+                    </button>
+                  </>
+                )}
+
+                {activeCategory === 'shapes' && (
+                  <>
+                    {(
+                      [
+                        ['rect', 'Rectangle', Square],
+                        ['circle', 'Circle / Ellipse', Circle],
+                        ['line', 'Line', Minus],
+                        ['arrow', 'Arrow', ArrowUpRight],
+                      ] as const
+                    ).map(([toolId, label, Icon]) => (
+                      <button
+                        key={toolId}
+                        type="button"
+                        onClick={() => setActiveTool(toolId)}
+                        className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap ${
+                          activeTool === toolId
+                            ? 'studio-active-surface'
+                            : 'hover:bg-black/5 dark:hover:bg-white/10'
+                        }`}
+                      >
+                        <Icon className="w-3.5 h-3.5" />
+                        {label}
+                      </button>
+                    ))}
+                    <div className="h-4 w-px bg-black/15 dark:bg-white/15 mx-0.5" />
+                    <button
+                      type="button"
+                      onClick={() => addNewElement('table')}
+                      className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <Table2 className="w-3.5 h-3.5" />
+                      Insert Table
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCreateDocumentBlock}
+                      className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <BoxSelect className="w-3.5 h-3.5" />
+                      Document Block
+                    </button>
+                  </>
+                )}
+
+                {activeCategory === 'draw' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTool('draw')}
+                      className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap ${
+                        activeTool === 'draw'
+                          ? 'studio-active-surface'
+                          : 'hover:bg-black/5 dark:hover:bg-white/10'
+                      }`}
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                      Freehand Ink Pen
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTool('arrow')}
+                      className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap ${
+                        activeTool === 'arrow'
+                          ? 'studio-active-surface'
+                          : 'hover:bg-black/5 dark:hover:bg-white/10'
+                      }`}
+                    >
+                      <ArrowUpRight className="w-3.5 h-3.5" />
+                      Vector Arrow
+                    </button>
+                    <div className="h-4 w-px bg-black/15 dark:bg-white/15 mx-0.5" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSignatureModalInitialTab('signature');
+                        setSignatureStampOpen(true);
+                      }}
+                      className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <PenTool className="w-3.5 h-3.5" />
+                      Signature Pad
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSignatureModalInitialTab('stamp');
+                        setSignatureStampOpen(true);
+                      }}
+                      className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <Stamp className="w-3.5 h-3.5" />
+                      Dated Stamp
+                    </button>
+                  </>
+                )}
+
+                {activeCategory === 'annotate' && (
+                  <>
+                    {(
+                      [
+                        ['highlight', 'Highlight', Highlighter],
+                        ['underline_annot', 'Underline', Underline],
+                        ['strikeout_annot', 'Strikeout', Strikethrough],
+                        ['note', 'Sticky Note', MessageSquare],
+                        ['callout', 'Callout', MessageSquarePlus],
+                      ] as const
+                    ).map(([toolId, label, Icon]) => (
+                      <button
+                        key={toolId}
+                        type="button"
+                        onClick={() => setActiveTool(toolId)}
+                        className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap ${
+                          activeTool === toolId
+                            ? 'studio-active-surface'
+                            : 'hover:bg-black/5 dark:hover:bg-white/10'
+                        }`}
+                      >
+                        <Icon className="w-3.5 h-3.5" />
+                        {label}
+                      </button>
+                    ))}
+                    <div className="h-4 w-px bg-black/15 dark:bg-white/15 mx-0.5" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSignatureModalInitialTab('stamp');
+                        setSignatureStampOpen(true);
+                      }}
+                      className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <Stamp className="w-3.5 h-3.5" />
+                      Stamp / Sign
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTool('redact')}
+                      className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap ${
+                        activeTool === 'redact'
+                          ? 'studio-active-surface'
+                          : 'hover:bg-black/5 dark:hover:bg-white/10'
+                      }`}
+                    >
+                      <ShieldAlert className="w-3.5 h-3.5" />
+                      Mark Redaction
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRedactionConfirmOpen(true)}
+                      className="px-2.5 py-1 rounded-lg border border-black/20 dark:border-white/20 hover:bg-black/10 dark:hover:bg-white/10 font-semibold flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                      Apply Redactions ({pendingRedactionCount})
+                    </button>
+                  </>
+                )}
+
+                {activeCategory === 'arrange' && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={selectedIds.length === 0}
+                      onClick={handleGroupToggle}
+                      className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 disabled:opacity-35 font-medium flex items-center gap-1 whitespace-nowrap"
+                    >
+                      {selectedElements[0]?.groupId ? (
+                        <Ungroup className="w-3.5 h-3.5" />
+                      ) : (
+                        <Group className="w-3.5 h-3.5" />
+                      )}
+                      {selectedElements[0]?.groupId ? 'Ungroup' : 'Group'}
+                    </button>
+                    {(['left', 'center', 'right'] as const).map((al) => (
+                      <button
+                        key={al}
+                        type="button"
+                        disabled={selectedIds.length < 2}
+                        onClick={() => handleAlignSelected(al)}
+                        className="px-2 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 disabled:opacity-35 capitalize whitespace-nowrap"
+                      >
+                        Align {al}
+                      </button>
+                    ))}
+                    <div className="h-4 w-px bg-black/15 dark:bg-white/15 mx-0.5" />
+                    <button
+                      type="button"
+                      onClick={() => setShowRulers((v) => !v)}
+                      className={`px-2 py-1 rounded-lg flex items-center gap-1 whitespace-nowrap ${
+                        showRulers ? 'studio-active-surface' : 'hover:bg-black/5 dark:hover:bg-white/10'
+                      }`}
+                    >
+                      <Ruler className="w-3.5 h-3.5" />
+                      Rulers
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowGrid((v) => !v)}
+                      className={`px-2 py-1 rounded-lg flex items-center gap-1 whitespace-nowrap ${
+                        showGrid ? 'studio-active-surface' : 'hover:bg-black/5 dark:hover:bg-white/10'
+                      }`}
+                    >
+                      <Grid className="w-3.5 h-3.5" />
+                      Grid
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSnapToGrid((v) => !v);
+                        setShowGuides((v) => !v);
+                      }}
+                      className={`px-2 py-1 rounded-lg flex items-center gap-1 whitespace-nowrap ${
+                        snapToGrid ? 'studio-active-surface' : 'hover:bg-black/5 dark:hover:bg-white/10'
+                      }`}
+                    >
+                      <Magnet className="w-3.5 h-3.5" />
+                      Snap &amp; Guides
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCropMode((v) => {
+                          const next = !v;
+                          if (next) setInspectorTab('page');
+                          return next;
+                        });
+                      }}
+                      className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap ${
+                        cropMode ? 'studio-active-surface' : 'hover:bg-black/5 dark:hover:bg-white/10'
+                      }`}
+                    >
+                      <Crop className="w-3.5 h-3.5" />
+                      Visual Crop
+                    </button>
+                  </>
+                )}
+
+                {activeCategory === 'pages' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setPageEngineeringOpen(true)}
+                      className="px-2.5 py-1 rounded-lg bg-[#101010] text-white dark:bg-white dark:text-[#050505] font-medium flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <FileCog className="w-3.5 h-3.5" />
+                      Page Engineering (Insert / Split / Merge / Reorder)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowPageSetupModal(true)}
+                      className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <Maximize2 className="w-3.5 h-3.5" />
+                      Paper Size, Copies &amp; Margins
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDuplicatePage}
+                      className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <CopyPlus className="w-3.5 h-3.5" />
+                      Duplicate Page {currentPage}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowVersionModal(true)}
+                      className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <History className="w-3.5 h-3.5" />
+                      History &amp; Timeline ({undoStack.length})
+                    </button>
+                  </>
+                )}
+
+                {activeCategory === 'measure' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTool('measure')}
+                      className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap ${
+                        activeTool === 'measure'
+                          ? 'studio-active-surface'
+                          : 'hover:bg-black/5 dark:hover:bg-white/10'
+                      }`}
+                    >
+                      <Ruler className="w-3.5 h-3.5" />
+                      Click &amp; Drag Distance Caliper
+                    </button>
+                    <span className="text-[#888888] ml-1">Unit:</span>
+                    {(['mm', 'cm', 'in', 'pt'] as MeasurementUnit[]).map((u) => (
+                      <button
+                        key={u}
+                        type="button"
+                        onClick={() => setMeasureUnit(u)}
+                        className={`px-2 py-0.5 rounded-lg font-mono uppercase ${
+                          measureUnit === u
+                            ? 'studio-active-surface'
+                            : 'hover:bg-black/5 dark:hover:bg-white/10'
+                        }`}
+                      >
+                        {u}
+                      </button>
+                    ))}
+                  </>
+                )}
+
+                {activeCategory === 'inspect' && (
+                  <>
+                    {onNavigateSection && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => onNavigateSection('preflight')}
+                          className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
+                        >
+                          <ShieldCheck className="w-3.5 h-3.5" />
+                          Preflight Quality Check
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onNavigateSection('compare')}
+                          className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
+                        >
+                          <GitCompare className="w-3.5 h-3.5" />
+                          Compare Documents
+                        </button>
+                      </>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setRestorationOpen(true)}
+                      className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <ScanLine className="w-3.5 h-3.5" />
+                      Scan Restoration &amp; OCR
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRedactionConfirmOpen(true)}
+                      className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <ShieldAlert className="w-3.5 h-3.5" />
+                      Redaction Sanitizer ({pendingRedactionCount})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowVersionModal(true)}
+                      className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
+                    >
+                      <History className="w-3.5 h-3.5" />
+                      Version History
+                    </button>
+                  </>
+                )}
+
+                {stylePainter.active && (
+                  <div className="ml-auto flex items-center gap-2 px-2.5 py-0.5 rounded-lg bg-[#101010] text-white dark:bg-white dark:text-[#050505] shrink-0">
+                    <span>Style Painter Active — click target element</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setStylePainter({ active: false, mode: stylePainter.mode });
+                        setActiveTool('select');
+                      }}
+                      className="underline font-semibold"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
+              </motion.div>
             )}
-
-            {!isToolHidden('qc') && onNavigateSection && (
-              <>
-                <button
-                  type="button"
-                  title="Run Preflight Quality Inspection"
-                  onClick={() => onNavigateSection('preflight')}
-                  className="p-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-white/10"
-                >
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  title="Compare Original vs Edited PDF"
-                  onClick={() => onNavigateSection('compare')}
-                  className="p-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-white/10"
-                >
-                  <GitCompare className="w-3.5 h-3.5" />
-                </button>
-              </>
-            )}
-
-            <button
-              type="button"
-              title="Open AI-Enhanced Analysis & AI Editing Assistant (Optional)"
-              onClick={() => {
-                setInspectorTab('ai');
-                setShowDesktopInspector(true);
-              }}
-              className={`px-2 py-1 rounded-lg text-xs font-medium flex items-center gap-1 whitespace-nowrap ${
-                inspectorTab === 'ai'
-                  ? 'bg-blue-500/18 text-blue-600 dark:text-blue-300'
-                  : 'text-slate-600 dark:text-slate-300 hover:bg-slate-200/60 dark:hover:bg-white/10'
-              }`}
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              AI Assist
-            </button>
-
-            <button
-              type="button"
-              onClick={() =>
-                onSaveSnapshot(project, `Manual snapshot (Page ${currentPage})`)
-              }
-              className="ml-1 px-3 py-1.5 rounded-xl text-xs font-medium bg-gradient-to-b from-blue-500 to-blue-600 text-white border border-blue-400/50 shadow-sm hover:from-blue-500 hover:to-blue-700 flex items-center gap-1.5 whitespace-nowrap"
-            >
-              <Save className="w-3.5 h-3.5" />
-              Save
-            </button>
-          </div>
-        </header>
+          </AnimatePresence>
+        </div>
       )}
 
       <input
@@ -2133,46 +2978,55 @@ export const EditorView: React.FC<EditorViewProps> = ({
       />
 
       {/* Search & Replace Bar */}
-      {showSearchBar && (
-        <div className="px-3 tablet:px-4 py-2 border-b glass-level-2 flex flex-wrap items-center gap-2 text-xs shrink-0 z-20">
-          <input
-            type="text"
-            placeholder="Find text..."
-            value={findQuery}
-            onChange={(e) => setFindQuery(e.target.value)}
-            className="flex-1 min-w-[120px] min-h-[38px] tablet:min-h-0 px-2.5 py-1 rounded-xl border border-slate-300/70 dark:border-white/15 bg-white/75 dark:bg-slate-900/70"
-          />
-          <input
-            type="text"
-            placeholder="Replace with..."
-            value={replaceQuery}
-            onChange={(e) => setReplaceQuery(e.target.value)}
-            className="flex-1 min-w-[120px] min-h-[38px] tablet:min-h-0 px-2.5 py-1 rounded-xl border border-slate-300/70 dark:border-white/15 bg-white/75 dark:bg-slate-900/70"
-          />
-          <button
-            type="button"
-            onClick={handleSearchAndReplace}
-            className="min-h-[38px] tablet:min-h-0 px-3 py-1 rounded-xl bg-blue-600 text-white font-medium hover:bg-blue-700"
+      <AnimatePresence initial={false}>
+        {showSearchBar && (
+          <motion.div
+            key="editor-search-bar"
+            variants={bannerVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            className="px-3 tablet:px-4 py-2 border-b glass-level-2 flex flex-wrap items-center gap-2 text-xs shrink-0 z-20"
           >
-            Replace All
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowSearchBar(false)}
-            className="min-h-[38px] tablet:min-h-0 px-2 text-slate-500 hover:text-slate-900 dark:hover:text-slate-100"
-          >
-            Close
-          </button>
-        </div>
-      )}
+            <input
+              type="text"
+              placeholder="Find text..."
+              value={findQuery}
+              onChange={(e) => setFindQuery(e.target.value)}
+              className="studio-input flex-1 min-w-[120px] min-h-[38px] tablet:min-h-0 px-2.5 py-1 rounded-xl"
+            />
+            <input
+              type="text"
+              placeholder="Replace with..."
+              value={replaceQuery}
+              onChange={(e) => setReplaceQuery(e.target.value)}
+              className="studio-input flex-1 min-w-[120px] min-h-[38px] tablet:min-h-0 px-2.5 py-1 rounded-xl"
+            />
+            <button
+              type="button"
+              onClick={handleSearchAndReplace}
+              className="min-h-[38px] tablet:min-h-0 px-3 py-1 rounded-xl bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] font-medium transition-colors active:scale-[0.98]"
+            >
+              Replace All
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowSearchBar(false)}
+              className="min-h-[38px] tablet:min-h-0 px-2 text-[#555555] dark:text-[#B5B5B5] hover:text-[#101010] dark:hover:text-white transition-colors"
+            >
+              Close
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Desktop Recent Tools Strip & Style Feedback */}
       {!viewport.isMobile &&
         ((settings.recentTools && settings.recentTools.length > 0 && !isToolHidden('recentBar')) ||
           styleToast) && (
-          <div className="px-3 py-1 border-b border-slate-200/70 dark:border-white/8 glass-level-1 flex items-center justify-between gap-2 text-[11px] shrink-0 overflow-x-auto no-scrollbar">
+          <div className="px-3 py-1 border-b border-black/10 dark:border-white/10 glass-level-1 flex items-center justify-between gap-2 text-[11px] shrink-0 overflow-x-auto no-scrollbar">
             <div className="flex items-center gap-1.5 shrink-0">
-              <span className="text-slate-400">Recent:</span>
+              <span className="text-[#888888] dark:text-[#858585]">Recent:</span>
               {(settings.recentTools || []).slice(0, 6).map((t) => (
                 <button
                   key={t}
@@ -2192,47 +3046,100 @@ export const EditorView: React.FC<EditorViewProps> = ({
                       handleAlignSelected(t.replace('align_', '') as AlignMode);
                     }
                   }}
-                  className="px-2 py-0.5 rounded-lg border border-slate-200/70 dark:border-white/10 glass-level-3 text-slate-600 dark:text-slate-300 hover:border-blue-500/50 capitalize"
+                  className="px-2 py-0.5 rounded-lg border border-black/10 dark:border-white/12 glass-level-3 text-[#555555] dark:text-[#B5B5B5] hover:border-black/40 dark:hover:border-white/40 hover:text-[#101010] dark:hover:text-white capitalize transition-colors"
                 >
                   {t.replace(/_/g, ' ')}
                 </button>
               ))}
             </div>
-            {styleToast && (
-              <span className="text-emerald-600 dark:text-emerald-400 font-medium">
-                {styleToast}
-              </span>
-            )}
+            <AnimatePresence>
+              {styleToast && (
+                <motion.span
+                  key={styleToast}
+                  variants={toastVariants}
+                  initial="initial"
+                  animate="animate"
+                  exit="exit"
+                  className="text-[#101010] dark:text-white font-medium"
+                >
+                  {styleToast}
+                </motion.span>
+              )}
+            </AnimatePresence>
           </div>
         )}
 
       {/* Main Workspace Container */}
       <div className="flex-1 flex overflow-hidden relative">
         {/* Desktop Resizable Left Layers Panel */}
-        {viewport.isDesktop && showLayersPanel && (
-          <div className="relative shrink-0 flex">
-            <aside
-              style={{ width: `${layersWidthPx}px` }}
-              className="shrink-0 border-r glass-level-2 flex flex-col overflow-hidden"
+        <AnimatePresence initial={false}>
+          {viewport.isDesktop && showLayersPanel && (
+            <motion.div
+              key="desktop-layers-panel"
+              initial={prefersReduced ? { opacity: 0 } : { width: 0, opacity: 0 }}
+              animate={{
+                width: 'auto',
+                opacity: 1,
+                transition: prefersReduced
+                  ? { duration: MOTION_DURATION.instant }
+                  : MOTION_SPRING.drawer,
+              }}
+              exit={
+                prefersReduced
+                  ? { opacity: 0, transition: { duration: MOTION_DURATION.instant } }
+                  : {
+                      width: 0,
+                      opacity: 0,
+                      transition: { duration: MOTION_DURATION.fast },
+                    }
+              }
+              className="relative shrink-0 flex overflow-hidden"
             >
-              {renderLayersList(false)}
-            </aside>
-            <div
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize layers panel"
-              onMouseDown={(e) => startResizeSidePanel('layers', e)}
-              className="w-1.5 -ml-0.5 cursor-col-resize hover:bg-blue-500/40 active:bg-blue-500/60 transition-colors z-10 shrink-0"
-            />
-          </div>
-        )}
+              <aside
+                style={{ width: `${layersWidthPx}px` }}
+                className="shrink-0 border-r glass-level-2 flex flex-col overflow-hidden"
+              >
+                {renderLayersList(false)}
+              </aside>
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize layers panel"
+                onMouseDown={(e) => startResizeSidePanel('layers', e)}
+                className="w-1.5 -ml-0.5 cursor-col-resize hover:bg-black/25 active:bg-black/40 dark:hover:bg-white/25 dark:active:bg-white/40 transition-colors z-10 shrink-0"
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Desktop Pages Strip Drawer */}
-        {viewport.isDesktop && showPagesDrawer && (
-          <aside className="w-52 shrink-0 border-r glass-level-2 flex flex-col overflow-hidden">
-            {renderPagesDrawerContent()}
-          </aside>
-        )}
+        <AnimatePresence initial={false}>
+          {viewport.isDesktop && showPagesDrawer && (
+            <motion.aside
+              key="desktop-pages-drawer"
+              initial={prefersReduced ? { opacity: 0 } : { width: 0, opacity: 0 }}
+              animate={{
+                width: 208,
+                opacity: 1,
+                transition: prefersReduced
+                  ? { duration: MOTION_DURATION.instant }
+                  : MOTION_SPRING.drawer,
+              }}
+              exit={
+                prefersReduced
+                  ? { opacity: 0, transition: { duration: MOTION_DURATION.instant } }
+                  : {
+                      width: 0,
+                      opacity: 0,
+                      transition: { duration: MOTION_DURATION.fast },
+                    }
+              }
+              className="shrink-0 border-r glass-level-2 flex flex-col overflow-hidden"
+            >
+              {renderPagesDrawerContent()}
+            </motion.aside>
+          )}
+        </AnimatePresence>
 
         {/* Central PDF Workspace (Document surface remains opaque for readability) */}
         <div className="flex-1 relative flex flex-col overflow-hidden">
@@ -2246,7 +3153,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                       type="button"
                       onClick={onOpenMobileNav}
                       aria-label="Open menu"
-                      className="min-w-[38px] min-h-[38px] flex items-center justify-center rounded-xl text-slate-700 dark:text-slate-200"
+                      className="min-w-[38px] min-h-[38px] flex items-center justify-center rounded-xl text-[#101010] dark:text-white"
                     >
                       <Menu className="w-4 h-4" />
                     </button>
@@ -2256,7 +3163,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     disabled={undoStack.length === 0}
                     onClick={handleUndo}
                     aria-label="Undo"
-                    className="min-w-[34px] min-h-[38px] flex items-center justify-center rounded-xl text-slate-700 dark:text-slate-200 disabled:opacity-30"
+                    className="min-w-[34px] min-h-[38px] flex items-center justify-center rounded-xl text-[#101010] dark:text-white disabled:opacity-30"
                   >
                     <Undo2 className="w-4 h-4" />
                   </button>
@@ -2265,7 +3172,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     disabled={redoStack.length === 0}
                     onClick={handleRedo}
                     aria-label="Redo"
-                    className="min-w-[34px] min-h-[38px] flex items-center justify-center rounded-xl text-slate-700 dark:text-slate-200 disabled:opacity-30"
+                    className="min-w-[34px] min-h-[38px] flex items-center justify-center rounded-xl text-[#101010] dark:text-white disabled:opacity-30"
                   >
                     <Redo2 className="w-4 h-4" />
                   </button>
@@ -2278,7 +3185,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     disabled={currentPage <= 1}
                     onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
                     aria-label="Previous page"
-                    className="min-w-[30px] min-h-[36px] flex items-center justify-center rounded-xl text-slate-600 dark:text-slate-300 disabled:opacity-30"
+                    className="min-w-[30px] min-h-[36px] flex items-center justify-center rounded-xl text-[#555555] dark:text-[#B5B5B5] disabled:opacity-30"
                   >
                     <ChevronLeft className="w-4 h-4" />
                   </button>
@@ -2287,8 +3194,8 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     onClick={() => setShowMobileThumbStrip((v) => !v)}
                     className={`px-2.5 min-h-[34px] rounded-xl text-[11px] font-mono font-medium tabular-nums border ${
                       showMobileThumbStrip
-                        ? 'border-blue-500/50 bg-blue-500/15 text-blue-600 dark:text-blue-300'
-                        : 'border-slate-200/70 dark:border-white/10 text-slate-800 dark:text-slate-100'
+                        ? 'studio-active-surface'
+                        : 'border-black/15 dark:border-white/15 text-[#101010] dark:text-white'
                     }`}
                   >
                     {currentPage}/{project.pageCount}
@@ -2300,7 +3207,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                       setCurrentPage((p) => Math.min(project.pageCount, p + 1))
                     }
                     aria-label="Next page"
-                    className="min-w-[30px] min-h-[36px] flex items-center justify-center rounded-xl text-slate-600 dark:text-slate-300 disabled:opacity-30"
+                    className="min-w-[30px] min-h-[36px] flex items-center justify-center rounded-xl text-[#555555] dark:text-[#B5B5B5] disabled:opacity-30"
                   >
                     <ChevronRight className="w-4 h-4" />
                   </button>
@@ -2311,7 +3218,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     type="button"
                     onClick={() => setShowPageSetupModal(true)}
                     aria-label="Page settings"
-                    className="min-w-[36px] min-h-[38px] flex items-center justify-center rounded-xl text-slate-600 dark:text-slate-300"
+                    className="min-w-[36px] min-h-[38px] flex items-center justify-center rounded-xl text-[#555555] dark:text-[#B5B5B5]"
                   >
                     <Maximize2 className="w-3.5 h-3.5" />
                   </button>
@@ -2320,7 +3227,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     onClick={() =>
                       onSaveSnapshot(project, `Manual snapshot (Page ${currentPage})`)
                     }
-                    className="min-h-[36px] px-2.5 rounded-xl text-xs font-medium bg-gradient-to-b from-blue-500 to-blue-600 text-white shadow-sm flex items-center gap-1"
+                    className="min-h-[36px] px-2.5 rounded-xl text-xs font-medium bg-[#101010] text-white dark:bg-white dark:text-[#050505] shadow-sm flex items-center gap-1"
                   >
                     <Save className="w-3.5 h-3.5" />
                     Save
@@ -2337,11 +3244,11 @@ export const EditorView: React.FC<EditorViewProps> = ({
                       setZoom((z) => Math.max(0.25, Number((z - 0.12).toFixed(2))))
                     }
                     aria-label="Zoom out"
-                    className="min-w-[30px] min-h-[30px] flex items-center justify-center text-slate-600 dark:text-slate-300"
+                    className="min-w-[30px] min-h-[30px] flex items-center justify-center text-[#555555] dark:text-[#B5B5B5]"
                   >
                     <ZoomOut className="w-3.5 h-3.5" />
                   </button>
-                  <span className="text-[11px] font-mono tabular-nums text-slate-700 dark:text-slate-200 px-0.5">
+                  <span className="text-[11px] font-mono tabular-nums text-[#101010] dark:text-white px-0.5">
                     {Math.round(zoom * 100)}%
                   </span>
                   <button
@@ -2350,7 +3257,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                       setZoom((z) => Math.min(2.5, Number((z + 0.12).toFixed(2))))
                     }
                     aria-label="Zoom in"
-                    className="min-w-[30px] min-h-[30px] flex items-center justify-center text-slate-600 dark:text-slate-300"
+                    className="min-w-[30px] min-h-[30px] flex items-center justify-center text-[#555555] dark:text-[#B5B5B5]"
                   >
                     <ZoomIn className="w-3.5 h-3.5" />
                   </button>
@@ -2360,7 +3267,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   <button
                     type="button"
                     onClick={() => setCropMode(false)}
-                    className="pointer-events-auto px-2.5 min-h-[32px] rounded-xl bg-emerald-600 text-white text-[11px] font-medium shadow-sm flex items-center gap-1"
+                    className="pointer-events-auto px-2.5 min-h-[32px] rounded-xl bg-[#101010] text-white dark:bg-white dark:text-[#050505] text-[11px] font-medium shadow-sm flex items-center gap-1"
                   >
                     <Crop className="w-3 h-3" />
                     Done Crop
@@ -2369,87 +3276,100 @@ export const EditorView: React.FC<EditorViewProps> = ({
               </div>
 
               {/* Collapsible Mobile Page Thumbnail Navigator */}
-              {showMobileThumbStrip && (
-                <div className="pointer-events-auto glass-level-3 border rounded-2xl p-2 space-y-2">
-                  <div className="flex items-center justify-between px-1">
-                    <span className="text-[11px] font-semibold text-slate-700 dark:text-slate-200">
-                      Pages ({project.pageCount})
-                    </span>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={handleDuplicatePage}
-                        className="px-2 py-1 rounded-lg border border-slate-300/70 dark:border-white/15 text-[10px] font-medium flex items-center gap-1"
-                      >
-                        <CopyPlus className="w-3 h-3" />
-                        Dup Page
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setShowMobileThumbStrip(false)}
-                        aria-label="Collapse thumbnails"
-                        className="p-1 text-slate-400"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
+              <AnimatePresence initial={false}>
+                {showMobileThumbStrip && (
+                  <motion.div
+                    key="mobile-thumb-strip"
+                    variants={popoverVariants}
+                    initial="initial"
+                    animate="animate"
+                    exit="exit"
+                    className="pointer-events-auto glass-level-3 border rounded-2xl p-2 space-y-2 origin-top"
+                  >
+                    <div className="flex items-center justify-between px-1">
+                      <span className="text-[11px] font-semibold text-[#101010] dark:text-white">
+                        Pages ({project.pageCount})
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={handleDuplicatePage}
+                          className="px-2 py-1 rounded-lg border border-black/15 dark:border-white/15 text-[10px] font-medium flex items-center gap-1"
+                        >
+                          <CopyPlus className="w-3 h-3" />
+                          Dup Page
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowMobileThumbStrip(false)}
+                          aria-label="Collapse thumbnails"
+                          className="p-1 text-[#888888] dark:text-[#858585]"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                  <div className="flex gap-2 overflow-x-auto pb-1 snap-x no-scrollbar">
-                    {Array.from({ length: project.pageCount }, (_, i) => i + 1).map(
-                      (pageNum) => {
-                        const thumb =
-                          project.originalPages.find((p) => p.pageNumber === pageNum)
-                            ?.previewImageDataUrl || thumbnails[pageNum];
-                        const isActive = pageNum === currentPage;
-                        return (
-                          <button
-                            key={pageNum}
-                            type="button"
-                            onClick={() => {
-                              setCurrentPage(pageNum);
-                              setSelectedIds([]);
-                            }}
-                            className={`snap-start shrink-0 w-16 p-1 rounded-xl border text-center ${
-                              isActive
-                                ? 'border-blue-500 bg-blue-500/15'
-                                : 'border-slate-200/70 dark:border-white/10'
-                            }`}
-                          >
-                            <div className="aspect-[3/4] w-full rounded-lg bg-white overflow-hidden flex items-center justify-center">
-                              {thumb ? (
-                                <img
-                                  src={thumb}
-                                  alt={`Page ${pageNum}`}
-                                  className="w-full h-full object-contain"
-                                />
-                              ) : (
-                                <span className="text-[10px] font-mono text-slate-400">
-                                  P{pageNum}
-                                </span>
-                              )}
-                            </div>
-                            <div className="mt-0.5 text-[10px] font-mono tabular-nums">
-                              {pageNum}
-                            </div>
-                          </button>
-                        );
-                      }
-                    )}
-                  </div>
-                </div>
-              )}
+                    <div className="flex gap-2 overflow-x-auto pb-1 snap-x no-scrollbar">
+                      {Array.from({ length: project.pageCount }, (_, i) => i + 1).map(
+                        (pageNum) => {
+                          const thumb =
+                            project.originalPages.find((p) => p.pageNumber === pageNum)
+                              ?.previewImageDataUrl || thumbnails[pageNum];
+                          const isActive = pageNum === currentPage;
+                          return (
+                            <button
+                              key={pageNum}
+                              type="button"
+                              onClick={() => {
+                                setCurrentPage(pageNum);
+                                setSelectedIds([]);
+                              }}
+                              className={`snap-start shrink-0 w-16 p-1 rounded-xl border text-center transition-colors ${
+                                isActive
+                                  ? 'border-[#101010] bg-black/[0.06] dark:border-white dark:bg-white/[0.12]'
+                                  : 'border-black/10 dark:border-white/12'
+                              }`}
+                            >
+                              <div className="aspect-[3/4] w-full rounded-lg bg-white overflow-hidden flex items-center justify-center">
+                                {thumb ? (
+                                  <img
+                                    src={thumb}
+                                    alt={`Page ${pageNum}`}
+                                    className="w-full h-full object-contain"
+                                  />
+                                ) : (
+                                  <span className="text-[10px] font-mono text-[#888888]">
+                                    P{pageNum}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="mt-0.5 text-[10px] font-mono tabular-nums">
+                                {pageNum}
+                              </div>
+                            </button>
+                          );
+                        }
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           )}
 
           {/* Central Konva PDF Stage (Document canvas stays opaque & uncluttered) */}
           <PdfCanvasStage
             pageConfig={project.pageConfig}
-            backgroundImageUrl={pageBgUrl}
+            backgroundImageUrl={currentMeta?.restoredPreviewDataUrl || pageBgUrl}
             originalPageSize={currentMeta}
             elements={pageElements}
             selectedIds={selectedIds}
             zoom={zoom}
             interactionMode={stageInteractionMode}
+            activeTool={activeTool}
+            stylePainterActive={stylePainter.active}
+            currentPageNumber={currentPage}
+            measureUnit={measureUnit}
             showRulers={showRulers}
             showGrid={showGrid}
             snapToGrid={snapToGrid}
@@ -2480,203 +3400,243 @@ export const EditorView: React.FC<EditorViewProps> = ({
             onSelectIds={setSelectedIds}
             onUpdateElement={handleUpdateElement}
             onUpdateElementsBatch={handleUpdateElementsBatch}
+            onCreateElement={handleCanvasCreateElement}
+            onStylePaintTarget={handleStylePaintTarget}
           />
 
           {/* Floating Contextual Selection Toolbar (Desktop & Mobile) */}
-          {selectedElements.length > 0 && editorMode !== 'preview' && (
-            <div
-              className={`absolute left-1/2 -translate-x-1/2 z-30 max-w-[94vw] pointer-events-auto ${
-                viewport.isMobile ? 'bottom-3' : 'bottom-4'
-              }`}
-            >
-              <div className="glass-level-3 border rounded-2xl px-2 py-1.5 flex items-center gap-1 overflow-x-auto no-scrollbar">
-                <span className="text-[11px] font-medium text-slate-600 dark:text-slate-300 px-1.5 tabular-nums whitespace-nowrap">
-                  {selectedElements.length === 1
-                    ? primarySelected?.type.replace('_', ' ')
-                    : `${selectedElements.length} selected`}
-                </span>
-                <div className="h-4 w-px bg-slate-300/60 dark:bg-white/10" />
+          <AnimatePresence>
+            {selectedElements.length > 0 && editorMode !== 'preview' && (
+              <motion.div
+                key="floating-selection-toolbar"
+                variants={floatingToolbarVariants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                className={`absolute left-1/2 -translate-x-1/2 z-30 max-w-[94vw] pointer-events-auto ${
+                  viewport.isMobile ? 'bottom-3' : 'bottom-4'
+                }`}
+              >
+                <div className="glass-level-3 border rounded-2xl px-2 py-1.5 flex items-center gap-1 overflow-x-auto no-scrollbar">
+                  <span className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5] px-1.5 tabular-nums whitespace-nowrap">
+                    {selectedElements.length === 1
+                      ? primarySelected?.type.replace('_', ' ')
+                      : `${selectedElements.length} selected`}
+                  </span>
+                  <div className="h-4 w-px bg-black/15 dark:bg-white/15" />
 
-                {selectedElements.length === 1 && isTextLikeSelection && primarySelected && (
-                  <>
-                    <button
-                      type="button"
-                      title="Toggle Bold"
-                      onClick={() =>
-                        handleUpdateElement(primarySelected.id, {
-                          fontWeight:
-                            primarySelected.fontWeight === 'bold' ? 'normal' : 'bold',
-                          eraseOriginal: primarySelected.isUserAdded ? false : true,
-                        })
-                      }
-                      className={`min-w-[34px] min-h-[34px] flex items-center justify-center rounded-xl ${
-                        primarySelected.fontWeight === 'bold'
-                          ? 'bg-blue-500/18 text-blue-600 dark:text-blue-300'
-                          : 'text-slate-700 dark:text-slate-200 hover:bg-slate-200/50 dark:hover:bg-white/10'
-                      }`}
-                    >
-                      <Bold className="w-3.5 h-3.5" />
-                    </button>
-                    {(['left', 'center', 'right'] as const).map((al) => (
+                  {selectedElements.length === 1 && isTextLikeSelection && primarySelected && (
+                    <>
                       <button
-                        key={al}
                         type="button"
-                        title={`Align ${al}`}
+                        title="Toggle Bold"
                         onClick={() =>
                           handleUpdateElement(primarySelected.id, {
-                            align: al,
+                            fontWeight:
+                              primarySelected.fontWeight === 'bold' ? 'normal' : 'bold',
                             eraseOriginal: primarySelected.isUserAdded ? false : true,
                           })
                         }
-                        className={`min-w-[32px] min-h-[34px] flex items-center justify-center rounded-xl ${
-                          primarySelected.align === al
-                            ? 'bg-blue-500/18 text-blue-600 dark:text-blue-300'
-                            : 'text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-white/10'
+                        className={`min-w-[34px] min-h-[34px] flex items-center justify-center rounded-xl transition-colors ${
+                          primarySelected.fontWeight === 'bold'
+                            ? 'bg-black/[0.08] text-[#101010] dark:bg-white/[0.14] dark:text-white'
+                            : 'text-[#101010] dark:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08]'
                         }`}
                       >
-                        {al === 'left' ? (
-                          <AlignLeft className="w-3.5 h-3.5" />
-                        ) : al === 'center' ? (
-                          <AlignCenter className="w-3.5 h-3.5" />
-                        ) : (
-                          <AlignRight className="w-3.5 h-3.5" />
-                        )}
+                        <Bold className="w-3.5 h-3.5" />
                       </button>
-                    ))}
-                  </>
-                )}
+                      {(['left', 'center', 'right'] as const).map((al) => (
+                        <button
+                          key={al}
+                          type="button"
+                          title={`Align ${al}`}
+                          onClick={() =>
+                            handleUpdateElement(primarySelected.id, {
+                              align: al,
+                              eraseOriginal: primarySelected.isUserAdded ? false : true,
+                            })
+                          }
+                          className={`min-w-[32px] min-h-[34px] flex items-center justify-center rounded-xl transition-colors ${
+                            primarySelected.align === al
+                              ? 'bg-black/[0.08] text-[#101010] dark:bg-white/[0.14] dark:text-white'
+                              : 'text-[#555555] dark:text-[#B5B5B5] hover:bg-black/[0.05] dark:hover:bg-white/[0.08]'
+                          }`}
+                        >
+                          {al === 'left' ? (
+                            <AlignLeft className="w-3.5 h-3.5" />
+                          ) : al === 'center' ? (
+                            <AlignCenter className="w-3.5 h-3.5" />
+                          ) : (
+                            <AlignRight className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                      ))}
+                    </>
+                  )}
 
-                {selectedElements.length > 1 && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => handleAlignSelected('left')}
-                      className="px-2 min-h-[34px] rounded-xl text-[11px] font-medium hover:bg-slate-200/50 dark:hover:bg-white/10"
-                    >
-                      Align L
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleAlignSelected('center')}
-                      className="px-2 min-h-[34px] rounded-xl text-[11px] font-medium hover:bg-slate-200/50 dark:hover:bg-white/10"
-                    >
-                      Align C
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleGroupToggle}
-                      className="px-2 min-h-[34px] rounded-xl text-[11px] font-medium hover:bg-slate-200/50 dark:hover:bg-white/10"
-                    >
-                      {primarySelected?.groupId ? 'Ungroup' : 'Group'}
-                    </button>
-                  </>
-                )}
+                  {selectedElements.length > 1 && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => handleAlignSelected('left')}
+                        className="px-2 min-h-[34px] rounded-xl text-[11px] font-medium hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
+                      >
+                        Align L
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleAlignSelected('center')}
+                        className="px-2 min-h-[34px] rounded-xl text-[11px] font-medium hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
+                      >
+                        Align C
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleGroupToggle}
+                        className="px-2 min-h-[34px] rounded-xl text-[11px] font-medium hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
+                      >
+                        {primarySelected?.groupId ? 'Ungroup' : 'Group'}
+                      </button>
+                    </>
+                  )}
 
-                <button
-                  type="button"
-                  title="Duplicate"
-                  onClick={handleDuplicateSelected}
-                  className="min-w-[34px] min-h-[34px] flex items-center justify-center rounded-xl text-slate-700 dark:text-slate-200 hover:bg-slate-200/50 dark:hover:bg-white/10"
-                >
-                  <CopyPlus className="w-3.5 h-3.5" />
-                </button>
-
-                {selectedElements.length === 1 && primarySelected && (
                   <button
                     type="button"
-                    title={primarySelected.locked ? 'Unlock' : 'Lock'}
-                    onClick={() =>
-                      handleUpdateElement(primarySelected.id, {
-                        locked: !primarySelected.locked,
-                      })
-                    }
-                    className="min-w-[34px] min-h-[34px] flex items-center justify-center rounded-xl text-slate-700 dark:text-slate-200 hover:bg-slate-200/50 dark:hover:bg-white/10"
+                    title="Duplicate"
+                    onClick={handleDuplicateSelected}
+                    className="min-w-[34px] min-h-[34px] flex items-center justify-center rounded-xl text-[#101010] dark:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
                   >
-                    {primarySelected.locked ? (
-                      <Lock className="w-3.5 h-3.5 text-amber-500" />
-                    ) : (
-                      <Unlock className="w-3.5 h-3.5" />
-                    )}
+                    <CopyPlus className="w-3.5 h-3.5" />
                   </button>
-                )}
 
-                {viewport.isMobile && (
+                  {selectedElements.length === 1 && primarySelected && (
+                    <button
+                      type="button"
+                      title={primarySelected.locked ? 'Unlock' : 'Lock'}
+                      onClick={() =>
+                        handleUpdateElement(primarySelected.id, {
+                          locked: !primarySelected.locked,
+                        })
+                      }
+                      className="min-w-[34px] min-h-[34px] flex items-center justify-center rounded-xl text-[#101010] dark:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
+                    >
+                      {primarySelected.locked ? (
+                        <Lock className="w-3.5 h-3.5 text-[#101010] dark:text-white" />
+                      ) : (
+                        <Unlock className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  )}
+
+                  {viewport.isMobile && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInspectorTab('element');
+                        handleSelectMode('properties');
+                      }}
+                      className="px-2.5 min-h-[34px] rounded-xl bg-[#101010] text-white dark:bg-white dark:text-[#050505] text-[11px] font-medium flex items-center gap-1"
+                    >
+                      <Sliders className="w-3 h-3" />
+                      Edit
+                    </button>
+                  )}
+
                   <button
                     type="button"
-                    onClick={() => {
-                      setInspectorTab('element');
-                      handleSelectMode('properties');
-                    }}
-                    className="px-2.5 min-h-[34px] rounded-xl bg-blue-600 text-white text-[11px] font-medium flex items-center gap-1"
+                    title="Delete"
+                    onClick={handleDeleteSelected}
+                    className="min-w-[34px] min-h-[34px] flex items-center justify-center rounded-xl text-[#555555] hover:text-[#101010] dark:text-[#B5B5B5] dark:hover:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
                   >
-                    <Sliders className="w-3 h-3" />
-                    Edit
+                    <Trash2 className="w-3.5 h-3.5" />
                   </button>
-                )}
-
-                <button
-                  type="button"
-                  title="Delete"
-                  onClick={handleDeleteSelected}
-                  className="min-w-[34px] min-h-[34px] flex items-center justify-center rounded-xl text-red-500 hover:bg-red-500/12"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </div>
-          )}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
         {/* Desktop Resizable Right Properties Inspector */}
-        {viewport.isDesktop && showDesktopInspector && (
-          <div className="relative shrink-0 flex">
-            <div
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize properties inspector"
-              onMouseDown={(e) => startResizeSidePanel('inspector', e)}
-              className="w-1.5 -mr-0.5 cursor-col-resize hover:bg-blue-500/40 active:bg-blue-500/60 transition-colors z-10 shrink-0"
-            />
-            <PropertiesInspector
-              activeTab={inspectorTab}
-              onTabChange={setInspectorTab}
-              selectedElements={selectedElements}
-              allElements={project.elements}
-              pageConfig={project.pageConfig}
-              fitConfig={fitConfig}
-              originalPageMeta={currentMeta}
-              activeSourceBox={currentLayout.sourceBox}
-              cropMode={cropMode}
-              redetectingBounds={redetectingBounds}
-              currentPage={currentPage}
-              dataColumnNames={project.dataColumns.map((c) => c.name)}
-              customFonts={customFonts}
-              savedTextStyles={savedTextStyles}
-              savedPalettes={savedPalettes}
-              panelWidthPx={inspectorWidthPx}
-              onReorderElement={handleReorderElement}
-              onUpdateElement={handleUpdateElement}
-              onDeleteSelected={handleDeleteSelected}
-              onDuplicateSelected={handleDuplicateSelected}
-              onAlignSelected={handleAlignSelected}
-              onDistributeSelected={handleDistributeSelected}
-              onEqualSpaceSelected={handleEqualSpaceSelected}
-              onBatchUpdateSelected={handleBatchUpdateSelected}
-              onGroupToggle={handleGroupToggle}
-              onSaveAsTextStyle={handleSaveAsTextStyle}
-              onUpdatePageConfig={handleUpdatePageConfig}
-              onUpdateFitConfig={handleUpdateFitConfig}
-              onToggleCropMode={() => setCropMode((v) => !v)}
-              onRedetectBounds={handleRedetectBounds}
-              onApplyAiPlan={handleApplyAiPlan}
-              aiSummary={project.aiSummary}
-              aiEnhancing={aiEnhancing}
-              aiEnhanceNotice={aiEnhanceNotice}
-              onRunAiEnhancedAnalysis={() => void handleRunAiEnhancedAnalysis()}
-              onOpenPageSetup={() => setShowPageSetupModal(true)}
-            />
-          </div>
-        )}
+        <AnimatePresence initial={false}>
+          {viewport.isDesktop && showDesktopInspector && (
+            <motion.div
+              key="desktop-properties-inspector"
+              initial={prefersReduced ? { opacity: 0 } : { width: 0, opacity: 0 }}
+              animate={{
+                width: 'auto',
+                opacity: 1,
+                transition: prefersReduced
+                  ? { duration: MOTION_DURATION.instant }
+                  : MOTION_SPRING.drawer,
+              }}
+              exit={
+                prefersReduced
+                  ? { opacity: 0, transition: { duration: MOTION_DURATION.instant } }
+                  : {
+                      width: 0,
+                      opacity: 0,
+                      transition: { duration: MOTION_DURATION.fast },
+                    }
+              }
+              className="relative shrink-0 flex overflow-hidden"
+            >
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize properties inspector"
+                onMouseDown={(e) => startResizeSidePanel('inspector', e)}
+                className="w-1.5 -mr-0.5 cursor-col-resize hover:bg-black/25 active:bg-black/40 dark:hover:bg-white/25 dark:active:bg-white/40 transition-colors z-10 shrink-0"
+              />
+              <PropertiesInspector
+                activeTab={inspectorTab}
+                onTabChange={setInspectorTab}
+                selectedElements={selectedElements}
+                allElements={project.elements}
+                pageConfig={project.pageConfig}
+                fitConfig={fitConfig}
+                originalPageMeta={currentMeta}
+                activeSourceBox={currentLayout.sourceBox}
+                cropMode={cropMode}
+                redetectingBounds={redetectingBounds}
+                currentPage={currentPage}
+                dataColumnNames={project.dataColumns.map((c) => c.name)}
+                customFonts={customFonts}
+                savedTextStyles={savedTextStyles}
+                savedPalettes={savedPalettes}
+                panelWidthPx={inspectorWidthPx}
+                onReorderElement={handleReorderElement}
+                onUpdateElement={handleUpdateElement}
+                onDeleteSelected={handleDeleteSelected}
+                onDuplicateSelected={handleDuplicateSelected}
+                onAlignSelected={handleAlignSelected}
+                onDistributeSelected={handleDistributeSelected}
+                onEqualSpaceSelected={handleEqualSpaceSelected}
+                onBatchUpdateSelected={handleBatchUpdateSelected}
+                onGroupToggle={handleGroupToggle}
+                onSaveAsTextStyle={handleSaveAsTextStyle}
+                onUpdatePageConfig={handleUpdatePageConfig}
+                onUpdateFitConfig={handleUpdateFitConfig}
+                onToggleCropMode={() => setCropMode((v) => !v)}
+                onRedetectBounds={handleRedetectBounds}
+                onApplyAiPlan={handleApplyAiPlan}
+                aiSummary={project.aiSummary}
+                aiEnhancing={aiEnhancing}
+                aiEnhanceNotice={aiEnhanceNotice}
+                onRunAiEnhancedAnalysis={() => void handleRunAiEnhancedAnalysis()}
+                onOpenPageSetup={() => setShowPageSetupModal(true)}
+                recentFonts={settings.recentFonts}
+                favoriteFonts={settings.favoriteFonts}
+                onToggleFavoriteFont={handleToggleFavoriteFont}
+                onRecordRecentFont={handleRecordRecentFont}
+                onCopyFormatting={handleCopyFormatting}
+                onPasteFormatting={handlePasteFormatting}
+                hasCopiedFormatting={Boolean(copiedFormatting)}
+                onStartStylePainter={handleStartStylePainter}
+                onOpenRedactionConfirm={() => setRedactionConfirmOpen(true)}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Mobile Adaptive GlassBottomSheet: Layers */}
         {viewport.isMobile && (
@@ -2757,18 +3717,30 @@ export const EditorView: React.FC<EditorViewProps> = ({
                 setShowInspectorDrawer(false);
                 setShowPageSetupModal(true);
               }}
+              recentFonts={settings.recentFonts}
+              favoriteFonts={settings.favoriteFonts}
+              onToggleFavoriteFont={handleToggleFavoriteFont}
+              onRecordRecentFont={handleRecordRecentFont}
+              onCopyFormatting={handleCopyFormatting}
+              onPasteFormatting={handlePasteFormatting}
+              hasCopiedFormatting={Boolean(copiedFormatting)}
+              onStartStylePainter={handleStartStylePainter}
+              onOpenRedactionConfirm={() => {
+                setShowInspectorDrawer(false);
+                setRedactionConfirmOpen(true);
+              }}
             />
           </GlassBottomSheet>
         )}
 
-        {/* Mobile Adaptive GlassBottomSheet: Add Elements & Canvas Tools */}
+        {/* Mobile Adaptive GlassBottomSheet: Add Elements & Workstation 2.0 Tools */}
         {viewport.isMobile && (
           <GlassBottomSheet
             isOpen={mobileAddSheetOpen}
             snapState="medium"
             onClose={() => setMobileAddSheetOpen(false)}
-            title="Insert & Workspace Tools"
-            subtitle="Add text, shapes, tables, images, or toggle guides"
+            title="Insert & Studio 2.0 Tools"
+            subtitle="Add elements, annotate, restore scans, or manage pages"
           >
             <div className="p-4 space-y-4">
               <div className="grid grid-cols-3 gap-2">
@@ -2790,9 +3762,9 @@ export const EditorView: React.FC<EditorViewProps> = ({
                       action();
                       setMobileAddSheetOpen(false);
                     }}
-                    className="min-h-[60px] p-2.5 rounded-2xl border glass-level-3 flex flex-col items-center justify-center gap-1.5 text-xs font-medium text-slate-800 dark:text-slate-100"
+                    className="min-h-[56px] p-2 rounded-2xl border glass-level-3 flex flex-col items-center justify-center gap-1 text-xs font-medium text-[#101010] dark:text-white"
                   >
-                    <Icon className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                    <Icon className="w-4 h-4 text-[#101010] dark:text-white" />
                     <span>{label}</span>
                   </button>
                 ))}
@@ -2805,37 +3777,101 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     imageUploadRef.current?.click();
                     setMobileAddSheetOpen(false);
                   }}
-                  className="min-h-[46px] px-3 rounded-xl border glass-level-3 flex items-center justify-center gap-2 text-xs font-medium"
+                  className="min-h-[44px] px-3 rounded-xl border glass-level-3 flex items-center justify-center gap-2 text-xs font-medium text-[#101010] dark:text-white"
                 >
-                  <ImageIcon className="w-4 h-4 text-blue-500" />
+                  <ImageIcon className="w-4 h-4" />
                   Upload Image
                 </button>
                 <button
                   type="button"
                   onClick={() => {
-                    handleSelectMode('edit');
-                    setCropMode((v) => !v);
+                    setSignatureModalInitialTab('signature');
+                    setSignatureStampOpen(true);
                     setMobileAddSheetOpen(false);
                   }}
-                  className={`min-h-[46px] px-3 rounded-xl border flex items-center justify-center gap-2 text-xs font-medium ${
-                    cropMode
-                      ? 'bg-emerald-600 text-white border-emerald-500'
-                      : 'glass-level-3'
-                  }`}
+                  className="min-h-[44px] px-3 rounded-xl border glass-level-3 flex items-center justify-center gap-2 text-xs font-medium text-[#101010] dark:text-white"
                 >
-                  <Crop className="w-4 h-4" />
-                  Visual Crop
+                  <PenTool className="w-4 h-4" />
+                  Sign &amp; Stamp
                 </button>
                 <button
                   type="button"
                   onClick={() => {
-                    setShowSearchBar((v) => !v);
+                    setActiveTool('draw');
+                    handleSelectMode('edit');
                     setMobileAddSheetOpen(false);
                   }}
-                  className="min-h-[46px] px-3 rounded-xl border glass-level-3 flex items-center justify-center gap-2 text-xs font-medium"
+                  className="min-h-[44px] px-3 rounded-xl border glass-level-3 flex items-center justify-center gap-2 text-xs font-medium text-[#101010] dark:text-white"
                 >
-                  <Search className="w-4 h-4 text-indigo-500" />
-                  Find & Replace
+                  <Pencil className="w-4 h-4" />
+                  Freehand Pen
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTool('highlight');
+                    handleSelectMode('edit');
+                    setMobileAddSheetOpen(false);
+                  }}
+                  className="min-h-[44px] px-3 rounded-xl border glass-level-3 flex items-center justify-center gap-2 text-xs font-medium text-[#101010] dark:text-white"
+                >
+                  <Highlighter className="w-4 h-4" />
+                  Highlight
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSmartReplaceOpen(true);
+                    setMobileAddSheetOpen(false);
+                  }}
+                  className="min-h-[44px] px-3 rounded-xl border glass-level-3 flex items-center justify-center gap-2 text-xs font-medium text-[#101010] dark:text-white"
+                >
+                  <Replace className="w-4 h-4" />
+                  Smart Replace
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBatchStyleOpen(true);
+                    setMobileAddSheetOpen(false);
+                  }}
+                  className="min-h-[44px] px-3 rounded-xl border glass-level-3 flex items-center justify-center gap-2 text-xs font-medium text-[#101010] dark:text-white"
+                >
+                  <Wand2 className="w-4 h-4" />
+                  Batch Style
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRestorationOpen(true);
+                    setMobileAddSheetOpen(false);
+                  }}
+                  className="min-h-[44px] px-3 rounded-xl border glass-level-3 flex items-center justify-center gap-2 text-xs font-medium text-[#101010] dark:text-white"
+                >
+                  <ScanLine className="w-4 h-4" />
+                  Scan Restore
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPageEngineeringOpen(true);
+                    setMobileAddSheetOpen(false);
+                  }}
+                  className="min-h-[44px] px-3 rounded-xl border glass-level-3 flex items-center justify-center gap-2 text-xs font-medium text-[#101010] dark:text-white"
+                >
+                  <FileCog className="w-4 h-4" />
+                  Page Studio
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRedactionConfirmOpen(true);
+                    setMobileAddSheetOpen(false);
+                  }}
+                  className="min-h-[44px] px-3 rounded-xl border glass-level-3 flex items-center justify-center gap-2 text-xs font-medium text-[#101010] dark:text-white"
+                >
+                  <ShieldAlert className="w-4 h-4" />
+                  Redaction ({pendingRedactionCount})
                 </button>
                 <button
                   type="button"
@@ -2843,10 +3879,10 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     setShowVersionModal(true);
                     setMobileAddSheetOpen(false);
                   }}
-                  className="min-h-[46px] px-3 rounded-xl border glass-level-3 flex items-center justify-center gap-2 text-xs font-medium"
+                  className="min-h-[44px] px-3 rounded-xl border glass-level-3 flex items-center justify-center gap-2 text-xs font-medium text-[#101010] dark:text-white"
                 >
-                  <History className="w-4 h-4 text-amber-500" />
-                  Version History
+                  <History className="w-4 h-4" />
+                  History
                 </button>
               </div>
             </div>
@@ -2854,88 +3890,136 @@ export const EditorView: React.FC<EditorViewProps> = ({
         )}
 
         {/* Tablet Slide-Out Layers, Pages & Inspector Drawers */}
-        {viewport.isTablet && showLayersPanel && (
-          <div
-            className="fixed inset-0 z-40 bg-black/45 flex"
-            onClick={() => setShowLayersPanel(false)}
-          >
-            <div
-              onClick={(e) => e.stopPropagation()}
-              className="w-[85vw] max-w-xs h-full glass-level-4 border-r"
+        <AnimatePresence>
+          {viewport.isTablet && showLayersPanel && (
+            <motion.div
+              key="tablet-layers-backdrop"
+              variants={modalBackdropVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              className="fixed inset-0 z-40 bg-black/45 flex"
+              onClick={() => setShowLayersPanel(false)}
             >
-              {renderLayersList(true)}
-            </div>
-          </div>
-        )}
+              <motion.div
+                key="tablet-layers-panel"
+                variants={drawerLeftVariants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                onClick={(e) => e.stopPropagation()}
+                className="w-[85vw] max-w-xs h-full glass-level-4 border-r"
+              >
+                {renderLayersList(true)}
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-        {viewport.isTablet && showPagesDrawer && (
-          <div
-            className="fixed inset-0 z-40 bg-black/45 flex"
-            onClick={() => setShowPagesDrawer(false)}
-          >
-            <div
-              onClick={(e) => e.stopPropagation()}
-              className="w-[85vw] max-w-xs h-full glass-level-4 border-r"
+        <AnimatePresence>
+          {viewport.isTablet && showPagesDrawer && (
+            <motion.div
+              key="tablet-pages-backdrop"
+              variants={modalBackdropVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              className="fixed inset-0 z-40 bg-black/45 flex"
+              onClick={() => setShowPagesDrawer(false)}
             >
-              {renderPagesDrawerContent()}
-            </div>
-          </div>
-        )}
+              <motion.div
+                key="tablet-pages-panel"
+                variants={drawerLeftVariants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                onClick={(e) => e.stopPropagation()}
+                className="w-[85vw] max-w-xs h-full glass-level-4 border-r"
+              >
+                {renderPagesDrawerContent()}
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-        {viewport.isTablet && showInspectorDrawer && (
-          <div
-            className="fixed inset-0 z-40 bg-black/45 flex justify-end"
-            onClick={() => setShowInspectorDrawer(false)}
-          >
-            <div
-              onClick={(e) => e.stopPropagation()}
-              className="w-full tablet:w-96 max-w-md h-full glass-level-4 border-l"
+        <AnimatePresence>
+          {viewport.isTablet && showInspectorDrawer && (
+            <motion.div
+              key="tablet-inspector-backdrop"
+              variants={modalBackdropVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              className="fixed inset-0 z-40 bg-black/45 flex justify-end"
+              onClick={() => setShowInspectorDrawer(false)}
             >
-              <PropertiesInspector
-                isDrawer
-                onCloseDrawer={() => setShowInspectorDrawer(false)}
-                activeTab={inspectorTab}
-                onTabChange={setInspectorTab}
-                selectedElements={selectedElements}
-                allElements={project.elements}
-                pageConfig={project.pageConfig}
-                fitConfig={fitConfig}
-                originalPageMeta={currentMeta}
-                activeSourceBox={currentLayout.sourceBox}
-                cropMode={cropMode}
-                redetectingBounds={redetectingBounds}
-                currentPage={currentPage}
-                dataColumnNames={project.dataColumns.map((c) => c.name)}
-                customFonts={customFonts}
-                savedTextStyles={savedTextStyles}
-                savedPalettes={savedPalettes}
-                onReorderElement={handleReorderElement}
-                onUpdateElement={handleUpdateElement}
-                onDeleteSelected={handleDeleteSelected}
-                onDuplicateSelected={handleDuplicateSelected}
-                onAlignSelected={handleAlignSelected}
-                onDistributeSelected={handleDistributeSelected}
-                onEqualSpaceSelected={handleEqualSpaceSelected}
-                onBatchUpdateSelected={handleBatchUpdateSelected}
-                onGroupToggle={handleGroupToggle}
-                onSaveAsTextStyle={handleSaveAsTextStyle}
-                onUpdatePageConfig={handleUpdatePageConfig}
-                onUpdateFitConfig={handleUpdateFitConfig}
-                onToggleCropMode={() => setCropMode((v) => !v)}
-                onRedetectBounds={handleRedetectBounds}
-                onApplyAiPlan={handleApplyAiPlan}
-                aiSummary={project.aiSummary}
-                aiEnhancing={aiEnhancing}
-                aiEnhanceNotice={aiEnhanceNotice}
-                onRunAiEnhancedAnalysis={() => void handleRunAiEnhancedAnalysis()}
-                onOpenPageSetup={() => {
-                  setShowInspectorDrawer(false);
-                  setShowPageSetupModal(true);
-                }}
-              />
-            </div>
-          </div>
-        )}
+              <motion.div
+                key="tablet-inspector-panel"
+                variants={drawerRightVariants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                onClick={(e) => e.stopPropagation()}
+                className="w-full tablet:w-96 max-w-md h-full glass-level-4 border-l"
+              >
+                <PropertiesInspector
+                  isDrawer
+                  onCloseDrawer={() => setShowInspectorDrawer(false)}
+                  activeTab={inspectorTab}
+                  onTabChange={setInspectorTab}
+                  selectedElements={selectedElements}
+                  allElements={project.elements}
+                  pageConfig={project.pageConfig}
+                  fitConfig={fitConfig}
+                  originalPageMeta={currentMeta}
+                  activeSourceBox={currentLayout.sourceBox}
+                  cropMode={cropMode}
+                  redetectingBounds={redetectingBounds}
+                  currentPage={currentPage}
+                  dataColumnNames={project.dataColumns.map((c) => c.name)}
+                  customFonts={customFonts}
+                  savedTextStyles={savedTextStyles}
+                  savedPalettes={savedPalettes}
+                  onReorderElement={handleReorderElement}
+                  onUpdateElement={handleUpdateElement}
+                  onDeleteSelected={handleDeleteSelected}
+                  onDuplicateSelected={handleDuplicateSelected}
+                  onAlignSelected={handleAlignSelected}
+                  onDistributeSelected={handleDistributeSelected}
+                  onEqualSpaceSelected={handleEqualSpaceSelected}
+                  onBatchUpdateSelected={handleBatchUpdateSelected}
+                  onGroupToggle={handleGroupToggle}
+                  onSaveAsTextStyle={handleSaveAsTextStyle}
+                  onUpdatePageConfig={handleUpdatePageConfig}
+                  onUpdateFitConfig={handleUpdateFitConfig}
+                  onToggleCropMode={() => setCropMode((v) => !v)}
+                  onRedetectBounds={handleRedetectBounds}
+                  onApplyAiPlan={handleApplyAiPlan}
+                  aiSummary={project.aiSummary}
+                  aiEnhancing={aiEnhancing}
+                  aiEnhanceNotice={aiEnhanceNotice}
+                  onRunAiEnhancedAnalysis={() => void handleRunAiEnhancedAnalysis()}
+                  onOpenPageSetup={() => {
+                    setShowInspectorDrawer(false);
+                    setShowPageSetupModal(true);
+                  }}
+                  recentFonts={settings.recentFonts}
+                  favoriteFonts={settings.favoriteFonts}
+                  onToggleFavoriteFont={handleToggleFavoriteFont}
+                  onRecordRecentFont={handleRecordRecentFont}
+                  onCopyFormatting={handleCopyFormatting}
+                  onPasteFormatting={handlePasteFormatting}
+                  hasCopiedFormatting={Boolean(copiedFormatting)}
+                  onStartStylePainter={handleStartStylePainter}
+                  onOpenRedactionConfirm={() => {
+                    setShowInspectorDrawer(false);
+                    setRedactionConfirmOpen(true);
+                  }}
+                />
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* Mobile Compact Floating-Glass Bottom Editor Dock */}
@@ -2947,10 +4031,10 @@ export const EditorView: React.FC<EditorViewProps> = ({
               onClick={() =>
                 handleSelectMode(editorMode === 'preview' ? 'edit' : 'preview')
               }
-              className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium ${
+              className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[10px] transition-colors ${
                 editorMode === 'preview'
-                  ? 'text-blue-600 dark:text-blue-400'
-                  : 'text-slate-600 dark:text-slate-300'
+                  ? 'text-[#101010] dark:text-white font-semibold'
+                  : 'text-[#888888] dark:text-[#858585] font-medium'
               }`}
             >
               <Eye className="w-4 h-4" />
@@ -2960,10 +4044,10 @@ export const EditorView: React.FC<EditorViewProps> = ({
             <button
               type="button"
               onClick={() => handleSelectMode('layers')}
-              className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium ${
+              className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[10px] transition-colors ${
                 showLayersPanel
-                  ? 'text-blue-600 dark:text-blue-400'
-                  : 'text-slate-600 dark:text-slate-300'
+                  ? 'text-[#101010] dark:text-white font-semibold'
+                  : 'text-[#888888] dark:text-[#858585] font-medium'
               }`}
             >
               <Layers className="w-4 h-4" />
@@ -2971,23 +4055,25 @@ export const EditorView: React.FC<EditorViewProps> = ({
             </button>
 
             <div className="flex items-center justify-center">
-              <button
+              <motion.button
                 type="button"
+                whileTap={!prefersReduced ? FAB_TAP : undefined}
+                transition={MOTION_SPRING.snappy}
                 onClick={() => setMobileAddSheetOpen(true)}
                 aria-label="Add element or tool"
-                className="min-w-[48px] min-h-[40px] px-3 rounded-2xl bg-gradient-to-b from-blue-500 to-blue-600 text-white border border-white/35 shadow-md flex items-center justify-center active:scale-[0.96] transition-transform"
+                className="min-w-[48px] min-h-[40px] px-3 rounded-2xl bg-[#101010] text-white dark:bg-white dark:text-[#050505] border border-black/15 dark:border-white/25 shadow-md flex items-center justify-center touch-manipulation"
               >
                 <Plus className="w-5 h-5" />
-              </button>
+              </motion.button>
             </div>
 
             <button
               type="button"
               onClick={() => handleSelectMode('properties')}
-              className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium ${
+              className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[10px] ${
                 showInspectorDrawer
-                  ? 'text-blue-600 dark:text-blue-400'
-                  : 'text-slate-600 dark:text-slate-300'
+                  ? 'text-[#101010] dark:text-white font-semibold'
+                  : 'text-[#888888] dark:text-[#858585] font-medium'
               }`}
             >
               <Sliders className="w-4 h-4" />
@@ -2997,10 +4083,10 @@ export const EditorView: React.FC<EditorViewProps> = ({
             <button
               type="button"
               onClick={() => setShowMobileThumbStrip((v) => !v)}
-              className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium ${
+              className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 text-[10px] ${
                 showMobileThumbStrip
-                  ? 'text-blue-600 dark:text-blue-400'
-                  : 'text-slate-600 dark:text-slate-300'
+                  ? 'text-[#101010] dark:text-white font-semibold'
+                  : 'text-[#888888] dark:text-[#858585] font-medium'
               }`}
             >
               <BookOpen className="w-4 h-4" />
@@ -3020,31 +4106,36 @@ export const EditorView: React.FC<EditorViewProps> = ({
           nextCopiesPatch,
           nextFitPatch
         ) => {
-          onUpdateProject({
-            ...project,
-            pageConfig: nextPageConfig,
-            fitConfig: nextFitPatch
-              ? { ...fitConfig, ...nextFitPatch }
-              : project.fitConfig,
-            exportConfig: {
-              ...project.exportConfig,
-              bleedPt: nextPageConfig.bleedPt ?? project.exportConfig.bleedPt,
-              cropMarks: nextPageConfig.cropMarks ?? project.exportConfig.cropMarks,
-              customWidthPt: undefined,
-              customHeightPt: undefined,
+          commitProjectChange(
+            {
+              ...project,
+              pageConfig: nextPageConfig,
+              fitConfig: nextFitPatch
+                ? { ...fitConfig, ...nextFitPatch }
+                : project.fitConfig,
+              exportConfig: {
+                ...project.exportConfig,
+                bleedPt: nextPageConfig.bleedPt ?? project.exportConfig.bleedPt,
+                cropMarks: nextPageConfig.cropMarks ?? project.exportConfig.cropMarks,
+                customWidthPt: undefined,
+                customHeightPt: undefined,
+              },
+              copiesConfig: {
+                ...project.copiesConfig,
+                ...(nextCopiesPatch || {}),
+                ...(nextSpacing
+                  ? {
+                      horizontalSpacingPt: nextSpacing.horizontalSpacingPt,
+                      verticalSpacingPt: nextSpacing.verticalSpacingPt,
+                    }
+                  : {}),
+              },
             },
-            copiesConfig: {
-              ...project.copiesConfig,
-              ...(nextCopiesPatch || {}),
-              ...(nextSpacing
-                ? {
-                    horizontalSpacingPt: nextSpacing.horizontalSpacingPt,
-                    verticalSpacingPt: nextSpacing.verticalSpacingPt,
-                  }
-                : {}),
-            },
-            updatedAt: new Date().toISOString(),
-          });
+            'Page Configuration',
+            'page_config',
+            'Page Setup',
+            `${nextPageConfig.sizePreset} (${Math.round(nextPageConfig.widthPt)}×${Math.round(nextPageConfig.heightPt)}pt)`
+          );
         }}
       />
 
@@ -3055,6 +4146,9 @@ export const EditorView: React.FC<EditorViewProps> = ({
         onSaveNamedVersion={(note) => {
           onSaveSnapshot(project, note);
         }}
+        historyEntries={undoStack}
+        onRevertHistoryEntry={handleRevertToHistoryEntry}
+        onRevertIndividualOperation={handleRevertIndividualOperation}
         onRestoreVersion={(snap) => {
           if (onRestoreVersion) {
             onRestoreVersion(snap);
@@ -3080,6 +4174,158 @@ export const EditorView: React.FC<EditorViewProps> = ({
             );
           }
           setShowVersionModal(false);
+        }}
+      />
+
+      <SmartReplaceModal
+        isOpen={smartReplaceOpen}
+        onClose={() => setSmartReplaceOpen(false)}
+        elements={project.elements}
+        currentPage={currentPage}
+        onApplyReplace={(updates, summary) => {
+          const map = new Map(updates.map((u) => [u.id, u.patch]));
+          commitElements(
+            project.elements.map((el) =>
+              map.has(el.id) ? { ...el, ...map.get(el.id)! } : el
+            ),
+            true,
+            'Smart Replace',
+            summary
+          );
+          showNoticeToast(summary);
+        }}
+      />
+
+      <BatchStyleModal
+        isOpen={batchStyleOpen}
+        onClose={() => setBatchStyleOpen(false)}
+        project={project}
+        currentPage={currentPage}
+        customFonts={customFonts}
+        onApplyBatchStyle={(updates, summary) => {
+          const map = new Map(updates.map((u) => [u.id, u.patch]));
+          commitElements(
+            project.elements.map((el) =>
+              map.has(el.id) ? { ...el, ...map.get(el.id)! } : el
+            ),
+            true,
+            'Batch Style',
+            summary
+          );
+          showNoticeToast(summary);
+        }}
+      />
+
+      <RestorationStudioModal
+        isOpen={restorationOpen}
+        onClose={() => setRestorationOpen(false)}
+        project={project}
+        currentPage={currentPage}
+        sourceImageUrl={pageBgUrl}
+        ocrLanguage={settings.ocrLanguage}
+        onApplyPageRestoration={(
+          pageNumbers,
+          restorationConfig: PageRestorationConfig,
+          previewsByPage
+        ) => {
+          const targetSet = new Set(pageNumbers);
+          const nextPages = project.originalPages.map((pg) => {
+            if (!targetSet.has(pg.pageNumber)) return pg;
+            return {
+              ...pg,
+              restoration: restorationConfig.enabled ? restorationConfig : undefined,
+              restoredPreviewDataUrl: restorationConfig.enabled
+                ? previewsByPage[pg.pageNumber] || pg.restoredPreviewDataUrl
+                : undefined,
+            };
+          });
+          commitProjectChange(
+            { ...project, originalPages: nextPages },
+            restorationConfig.enabled
+              ? `Restore Scan (${pageNumbers.length} page)`
+              : `Revert Scan Restoration`,
+            'restoration',
+            'Scan Restoration',
+            restorationConfig.enabled
+              ? `Restored ${pageNumbers.length} page(s)`
+              : 'Reverted page restoration'
+          );
+          showNoticeToast(
+            restorationConfig.enabled
+              ? `Restored ${pageNumbers.length} page(s)`
+              : 'Reverted to original scan'
+          );
+        }}
+        onAppendOcrElements={(newEls) => {
+          commitElements(
+            [...project.elements, ...newEls],
+            true,
+            'Local Scan OCR',
+            `Extracted ${newEls.length} text block(s) on Page ${currentPage}`
+          );
+        }}
+      />
+
+      <PageEngineeringModal
+        isOpen={pageEngineeringOpen}
+        onClose={() => setPageEngineeringOpen(false)}
+        project={project}
+        currentPage={currentPage}
+        onApplyPageStructure={(nextProject, nextCurrentPage, label) => {
+          commitProjectChange(
+            nextProject,
+            label,
+            'page_structure',
+            'Page Engineering',
+            label
+          );
+          setCurrentPage(nextCurrentPage);
+          setSelectedIds([]);
+        }}
+      />
+
+      <SignatureStampModal
+        isOpen={signatureStampOpen}
+        onClose={() => setSignatureStampOpen(false)}
+        currentPage={currentPage}
+        initialTab={signatureModalInitialTab}
+        onInsertElement={(el, label) => {
+          commitElements([...project.elements, el], true, label, label);
+          setSelectedIds([el.id]);
+          setInspectorTab('element');
+        }}
+        onSaveSignatureToLibrary={
+          onSaveAsset
+            ? (name, dataUrl, naturalWidth, naturalHeight) => {
+                onSaveAsset({
+                  id: `sig-asset-${Date.now()}`,
+                  kind: 'logo',
+                  name,
+                  dataUrl,
+                  naturalWidth,
+                  naturalHeight,
+                  createdAt: new Date().toISOString(),
+                });
+              }
+            : undefined
+        }
+      />
+
+      <RedactionConfirmModal
+        isOpen={redactionConfirmOpen}
+        onClose={() => setRedactionConfirmOpen(false)}
+        project={project}
+        customFonts={customFonts}
+        onApplyRedactions={(updatedProject, summary) => {
+          commitProjectChange(
+            updatedProject,
+            'Apply True Redaction',
+            'redaction',
+            'True Redaction',
+            summary
+          );
+          setSelectedIds([]);
+          showNoticeToast(summary);
         }}
       />
     </div>

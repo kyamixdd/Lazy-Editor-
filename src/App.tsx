@@ -1,5 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { RotateCcw, X } from 'lucide-react';
+import { AnimatePresence, MotionConfig, motion, useReducedMotion } from 'motion/react';
+import {
+  bannerVariants,
+  getNavigationDirection,
+  reducedScreenVariants,
+  screenVariants,
+} from './config/motionSystem';
 import { AboutView } from './components/AboutView';
 import { AssetLibraryView } from './components/AssetLibraryView';
 import { BatchCenterView } from './components/BatchCenterView';
@@ -65,7 +72,34 @@ export default function App() {
       ? window.matchMedia('(prefers-color-scheme: dark)').matches
       : true
   );
-  const [activeSection, setActiveSection] = useState<NavSection>('dashboard');
+  const [activeSection, setActiveSectionState] = useState<NavSection>('dashboard');
+  const [navDirection, setNavDirection] = useState<number>(1);
+  const mainRef = useRef<HTMLElement | null>(null);
+  const scrollPositionsRef = useRef<
+    Partial<Record<NavSection, { windowY: number; innerTop: number }>>
+  >({});
+  const prefersReduced = useReducedMotion();
+
+  const setActiveSection = useCallback(
+    (next: NavSection) => {
+      setActiveSectionState((prev) => {
+        if (prev === next) return prev;
+        if (prev !== 'editor' && typeof window !== 'undefined') {
+          const innerEl = mainRef.current?.querySelector('.overflow-y-auto') as
+            | HTMLElement
+            | null;
+          scrollPositionsRef.current[prev] = {
+            windowY: window.scrollY,
+            innerTop: innerEl ? innerEl.scrollTop : 0,
+          };
+        }
+        setNavDirection(getNavigationDirection(prev, next));
+        return next;
+      });
+    },
+    []
+  );
+
   const [projects, setProjects] = useState<PDFProject[]>([]);
   const [assets, setAssets] = useState<AssetLibraryItem[]>([]);
   const [automationProfiles, setAutomationProfiles] = useState<
@@ -466,219 +500,266 @@ export default function App() {
   );
 
   return (
-    <div className="min-h-[100dvh] flex flex-col tablet:flex-row studio-ambient-bg text-slate-900 dark:text-slate-100">
-      <SidebarNav
-        activeSection={activeSection}
-        onSelectSection={setActiveSection}
-        activeProject={activeProject}
-        onCloseProject={handleCloseProject}
-        theme={settings.theme}
-        resolvedTheme={resolvedTheme}
-        onToggleTheme={() =>
-          setSettings((s) => ({
-            ...s,
-            theme: resolvedTheme === 'dark' ? 'light' : 'dark',
-          }))
-        }
-        widthPx={settings.navSidebarWidthPx}
-        workspaceLayout={settings.workspaceLayout}
-        mobileDrawerOpen={mobileDrawerOpen}
-        onMobileDrawerOpenChange={setMobileDrawerOpen}
-      />
+    <MotionConfig reducedMotion="user">
+      <div className="min-h-[100dvh] flex flex-col tablet:flex-row studio-ambient-bg text-[#101010] dark:text-white">
+        <SidebarNav
+          activeSection={activeSection}
+          onSelectSection={setActiveSection}
+          activeProject={activeProject}
+          onCloseProject={handleCloseProject}
+          theme={settings.theme}
+          resolvedTheme={resolvedTheme}
+          onToggleTheme={() =>
+            setSettings((s) => ({
+              ...s,
+              theme: resolvedTheme === 'dark' ? 'light' : 'dark',
+            }))
+          }
+          widthPx={settings.navSidebarWidthPx}
+          workspaceLayout={settings.workspaceLayout}
+          mobileDrawerOpen={mobileDrawerOpen}
+          onMobileDrawerOpenChange={setMobileDrawerOpen}
+        />
 
-      <main
-        className={`flex-1 flex flex-col min-w-0 ${
-          activeSection === 'editor'
-            ? 'h-[100dvh] overflow-hidden'
-            : 'min-h-[calc(100dvh-48px)] tablet:min-h-screen pb-18 tablet:pb-0'
-        }`}
-      >
-        {/* Non-intrusive Unsaved Draft Recovery Strip (Module 4) */}
-        {visibleDrafts.length > 0 && activeSection !== 'editor' && (
-          <div className="px-4 py-2 border-b border-amber-500/30 glass-level-2 bg-amber-500/10 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
-            <div className="flex items-center gap-2 text-amber-800 dark:text-amber-200">
-              <RotateCcw className="w-3.5 h-3.5 shrink-0" />
-              <span>
-                Recoverable unsaved draft for{' '}
-                <strong>{visibleDrafts[0].projectName}</strong> (autosaved{' '}
-                {new Date(visibleDrafts[0].savedAt).toLocaleTimeString()})
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  const d = visibleDrafts[0];
-                  handleSaveProject(d.projectSnapshot);
-                  handleOpenProject(d.projectSnapshot);
-                  setRecoverableDrafts((prev) =>
-                    prev.filter((x) => x.projectId !== d.projectId)
-                  );
-                  void clearUnsavedDraft(d.projectId);
-                  setActiveSection('editor');
-                }}
-                className="px-2.5 py-1 rounded-lg bg-amber-600 text-white font-medium hover:bg-amber-700"
+        <main
+          ref={mainRef}
+          className={`flex-1 flex flex-col min-w-0 ${
+            activeSection === 'editor'
+              ? 'h-[100dvh] overflow-hidden'
+              : 'min-h-[calc(100dvh-48px)] tablet:min-h-screen pb-18 tablet:pb-0'
+          }`}
+        >
+          {/* Non-intrusive Unsaved Draft Recovery Strip (Module 4) */}
+          <AnimatePresence initial={false}>
+            {visibleDrafts.length > 0 && activeSection !== 'editor' && (
+              <motion.div
+                key="draft-recovery-banner"
+                variants={bannerVariants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                className="px-4 py-2 border-b border-black/10 dark:border-white/12 glass-level-2 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0"
               >
-                Restore Draft
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const d = visibleDrafts[0];
-                  setRecoverableDrafts((prev) =>
-                    prev.filter((x) => x.projectId !== d.projectId)
-                  );
-                  void clearUnsavedDraft(d.projectId);
-                }}
-                className="p-1 text-amber-700 dark:text-amber-300 hover:opacity-75"
-                title="Dismiss draft"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-        )}
+                <div className="flex items-center gap-2 text-[#101010] dark:text-white">
+                  <RotateCcw className="w-3.5 h-3.5 shrink-0 text-[#555555] dark:text-[#B5B5B5]" />
+                  <span>
+                    Recoverable unsaved draft for{' '}
+                    <strong>{visibleDrafts[0].projectName}</strong>{' '}
+                    <span className="text-[#555555] dark:text-[#B5B5B5]">
+                      (autosaved {new Date(visibleDrafts[0].savedAt).toLocaleTimeString()})
+                    </span>
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const d = visibleDrafts[0];
+                      handleSaveProject(d.projectSnapshot);
+                      handleOpenProject(d.projectSnapshot);
+                      setRecoverableDrafts((prev) =>
+                        prev.filter((x) => x.projectId !== d.projectId)
+                      );
+                      void clearUnsavedDraft(d.projectId);
+                      setActiveSection('editor');
+                    }}
+                    className="px-3 py-1 rounded-lg bg-[#101010] text-white dark:bg-white dark:text-[#050505] font-medium hover:opacity-90 active:scale-[0.97] transition-[opacity,transform]"
+                  >
+                    Restore Draft
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const d = visibleDrafts[0];
+                      setRecoverableDrafts((prev) =>
+                        prev.filter((x) => x.projectId !== d.projectId)
+                      );
+                      void clearUnsavedDraft(d.projectId);
+                    }}
+                    className="p-1 text-[#555555] dark:text-[#B5B5B5] hover:text-[#101010] dark:hover:text-white transition-colors"
+                    title="Dismiss draft"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-        {activeSection === 'dashboard' && (
-          <DashboardView
-            projects={projects}
-            activeProject={activeProject}
-            batchJobs={batchJobs}
-            onNavigate={setActiveSection}
-            onOpenProject={handleOpenProject}
-            onDeleteProject={handleDeleteProject}
-            onToggleFavorite={handleToggleFavoriteProject}
-          />
-        )}
+          <AnimatePresence
+            mode="wait"
+            custom={navDirection}
+            onExitComplete={() => {
+              if (activeSection !== 'editor' && typeof window !== 'undefined') {
+                const saved = scrollPositionsRef.current[activeSection];
+                const windowY = saved?.windowY ?? 0;
+                const innerTop = saved?.innerTop ?? 0;
+                requestAnimationFrame(() => {
+                  window.scrollTo({ top: windowY, behavior: 'auto' });
+                  const innerEl = mainRef.current?.querySelector('.overflow-y-auto') as
+                    | HTMLElement
+                    | null;
+                  if (innerEl) {
+                    innerEl.scrollTop = innerTop;
+                  }
+                });
+              }
+            }}
+          >
+            <motion.div
+              key={activeSection}
+              custom={navDirection}
+              variants={prefersReduced ? reducedScreenVariants : screenVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              className={`flex-1 flex flex-col min-w-0 ${
+                activeSection === 'editor' ? 'h-full overflow-hidden' : ''
+              }`}
+            >
+              {activeSection === 'dashboard' && (
+                <DashboardView
+                  projects={projects}
+                  activeProject={activeProject}
+                  batchJobs={batchJobs}
+                  onNavigate={setActiveSection}
+                  onOpenProject={handleOpenProject}
+                  onDeleteProject={handleDeleteProject}
+                  onToggleFavorite={handleToggleFavoriteProject}
+                />
+              )}
 
-        {activeSection === 'new-project' && (
-          <NewProjectView
-            settings={settings}
-            onProjectCreated={handleProjectCreated}
-            onUpdateProject={handleSaveProject}
-          />
-        )}
+              {activeSection === 'new-project' && (
+                <NewProjectView
+                  settings={settings}
+                  onProjectCreated={handleProjectCreated}
+                  onUpdateProject={handleSaveProject}
+                />
+              )}
 
-        {activeSection === 'templates' && (
-          <TemplatesView
-            projects={projects}
-            activeProject={activeProject}
-            automationProfiles={automationProfiles}
-            onOpenProject={handleOpenProject}
-            onSaveProject={handleSaveProject}
-            onDeleteProject={handleDeleteProject}
-            onSaveProfile={handleSaveProfile}
-            onDeleteProfile={handleDeleteProfile}
-            onRunProfile={handleRunProfile}
-            onApplyProfileToActive={handleApplyProfileToActive}
-            onSaveSnapshot={handleSaveSnapshot}
-            onRestoreVersion={handleRestoreVersion}
-            onNavigate={setActiveSection}
-          />
-        )}
+              {activeSection === 'templates' && (
+                <TemplatesView
+                  projects={projects}
+                  activeProject={activeProject}
+                  automationProfiles={automationProfiles}
+                  onOpenProject={handleOpenProject}
+                  onSaveProject={handleSaveProject}
+                  onDeleteProject={handleDeleteProject}
+                  onSaveProfile={handleSaveProfile}
+                  onDeleteProfile={handleDeleteProfile}
+                  onRunProfile={handleRunProfile}
+                  onApplyProfileToActive={handleApplyProfileToActive}
+                  onSaveSnapshot={handleSaveSnapshot}
+                  onRestoreVersion={handleRestoreVersion}
+                  onNavigate={setActiveSection}
+                />
+              )}
 
-        {activeSection === 'editor' && activeProject && (
-          <EditorView
-            project={activeProject}
-            settings={settings}
-            assets={assets}
-            focusTarget={editorFocusTarget}
-            onUpdateProject={handleSaveProject}
-            onUpdateSettings={setSettings}
-            onSaveSnapshot={handleSaveSnapshot}
-            onRestoreVersion={(snap) =>
-              handleRestoreVersion(activeProject, snap)
-            }
-            onSaveAsset={handleSaveAsset}
-            onTrackRecentTool={handleTrackRecentTool}
-            onSaveUnsavedDraft={(draft) => void saveUnsavedDraft(draft)}
-            onNavigateSection={setActiveSection}
-            onOpenMobileNav={() => setMobileDrawerOpen(true)}
-          />
-        )}
+              {activeSection === 'editor' && activeProject && (
+                <EditorView
+                  project={activeProject}
+                  settings={settings}
+                  assets={assets}
+                  focusTarget={editorFocusTarget}
+                  onUpdateProject={handleSaveProject}
+                  onUpdateSettings={setSettings}
+                  onSaveSnapshot={handleSaveSnapshot}
+                  onRestoreVersion={(snap) =>
+                    handleRestoreVersion(activeProject, snap)
+                  }
+                  onSaveAsset={handleSaveAsset}
+                  onTrackRecentTool={handleTrackRecentTool}
+                  onSaveUnsavedDraft={(draft) => void saveUnsavedDraft(draft)}
+                  onNavigateSection={setActiveSection}
+                  onOpenMobileNav={() => setMobileDrawerOpen(true)}
+                />
+              )}
 
-        {activeSection === 'bulk-generator' && activeProject && (
-          <BulkGeneratorView
-            project={activeProject}
-            onUpdateProject={handleSaveProject}
-            onGoToExport={() => setActiveSection('export-center')}
-          />
-        )}
+              {activeSection === 'bulk-generator' && activeProject && (
+                <BulkGeneratorView
+                  project={activeProject}
+                  onUpdateProject={handleSaveProject}
+                  onGoToExport={() => setActiveSection('export-center')}
+                />
+              )}
 
-        {activeSection === 'data-manager' && activeProject && (
-          <DataManagerView
-            project={activeProject}
-            onUpdateProject={handleSaveProject}
-          />
-        )}
+              {activeSection === 'data-manager' && activeProject && (
+                <DataManagerView
+                  project={activeProject}
+                  onUpdateProject={handleSaveProject}
+                />
+              )}
 
-        {activeSection === 'preflight' && activeProject && (
-          <PreflightView
-            project={activeProject}
-            customFonts={customFonts}
-            onUpdateProject={handleSaveProject}
-            onInspectElement={handleInspectElement}
-            onGoToExport={() => setActiveSection('export-center')}
-            onGoToDataManager={() => setActiveSection('data-manager')}
-          />
-        )}
+              {activeSection === 'preflight' && activeProject && (
+                <PreflightView
+                  project={activeProject}
+                  customFonts={customFonts}
+                  onUpdateProject={handleSaveProject}
+                  onInspectElement={handleInspectElement}
+                  onGoToExport={() => setActiveSection('export-center')}
+                  onGoToDataManager={() => setActiveSection('data-manager')}
+                />
+              )}
 
-        {activeSection === 'compare' && activeProject && (
-          <ComparisonView
-            project={activeProject}
-            customFonts={customFonts}
-            onInspectElement={handleInspectElement}
-          />
-        )}
+              {activeSection === 'compare' && activeProject && (
+                <ComparisonView
+                  project={activeProject}
+                  customFonts={customFonts}
+                  onInspectElement={handleInspectElement}
+                />
+              )}
 
-        {activeSection === 'batch-center' && (
-          <BatchCenterView
-            projects={projects}
-            customFonts={customFonts}
-            batchJobs={batchJobs}
-            onSaveBatchJob={handleSaveBatchJob}
-            onDeleteBatchJob={handleDeleteBatchJob}
-            onClearBatchHistory={handleClearBatchHistory}
-          />
-        )}
+              {activeSection === 'batch-center' && (
+                <BatchCenterView
+                  projects={projects}
+                  customFonts={customFonts}
+                  batchJobs={batchJobs}
+                  onSaveBatchJob={handleSaveBatchJob}
+                  onDeleteBatchJob={handleDeleteBatchJob}
+                  onClearBatchHistory={handleClearBatchHistory}
+                />
+              )}
 
-        {activeSection === 'asset-library' && (
-          <AssetLibraryView
-            assets={assets}
-            activeProject={activeProject}
-            onSaveAsset={handleSaveAsset}
-            onDeleteAsset={handleDeleteAsset}
-            onInsertImageIntoProject={handleInsertImageFromLibrary}
-            onInsertShapeIntoProject={handleInsertShapeFromLibrary}
-          />
-        )}
+              {activeSection === 'asset-library' && (
+                <AssetLibraryView
+                  assets={assets}
+                  activeProject={activeProject}
+                  onSaveAsset={handleSaveAsset}
+                  onDeleteAsset={handleDeleteAsset}
+                  onInsertImageIntoProject={handleInsertImageFromLibrary}
+                  onInsertShapeIntoProject={handleInsertShapeFromLibrary}
+                />
+              )}
 
-        {activeSection === 'export-center' && activeProject && (
-          <ExportCenterView
-            project={activeProject}
-            customFonts={customFonts}
-            onUpdateProject={handleSaveProject}
-            onJumpToEditor={() => setActiveSection('editor')}
-            onInspectElement={handleInspectElement}
-            onReopenAsProject={(proj) => handleProjectCreated(proj, true)}
-            onEnqueueBatch={handleEnqueueBatch}
-            onRecordExportActivity={handleSaveBatchJob}
-          />
-        )}
+              {activeSection === 'export-center' && activeProject && (
+                <ExportCenterView
+                  project={activeProject}
+                  customFonts={customFonts}
+                  onUpdateProject={handleSaveProject}
+                  onJumpToEditor={() => setActiveSection('editor')}
+                  onInspectElement={handleInspectElement}
+                  onReopenAsProject={(proj) => handleProjectCreated(proj, true)}
+                  onEnqueueBatch={handleEnqueueBatch}
+                  onRecordExportActivity={handleSaveBatchJob}
+                />
+              )}
 
-        {activeSection === 'settings' && (
-          <SettingsView
-            settings={settings}
-            onUpdateSettings={setSettings}
-            onClearWorkspace={handleClearWorkspace}
-            onNavigate={setActiveSection}
-          />
-        )}
+              {activeSection === 'settings' && (
+                <SettingsView
+                  settings={settings}
+                  onUpdateSettings={setSettings}
+                  onClearWorkspace={handleClearWorkspace}
+                  onNavigate={setActiveSection}
+                />
+              )}
 
-        {activeSection === 'about' && (
-          <AboutView onNavigate={setActiveSection} />
-        )}
-      </main>
-    </div>
+              {activeSection === 'about' && (
+                <AboutView onNavigate={setActiveSection} />
+              )}
+            </motion.div>
+          </AnimatePresence>
+        </main>
+      </div>
+    </MotionConfig>
   );
 }

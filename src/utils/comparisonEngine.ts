@@ -1,3 +1,4 @@
+import * as pdfjsLib from 'pdfjs-dist';
 import { DocumentElement, PDFProject } from '../types/pdfStudio';
 
 export interface ElementDiffRecord {
@@ -196,5 +197,113 @@ export function compareOriginalVsEdited(
     unexpectedDiffCount: diffs.filter((d) => d.unexpectedVisualDiff).length,
     pageSizeChanged,
     diffs,
+  };
+}
+
+export function compareTwoSnapshots(
+  project: PDFProject,
+  leftSnapshotIndex: number,
+  rightSnapshotIndex: number
+): ComparisonSummary {
+  const leftSnap = project.versions?.[leftSnapshotIndex];
+  const rightSnap = project.versions?.[rightSnapshotIndex];
+  if (!leftSnap || !rightSnap) {
+    return compareOriginalVsEdited(project);
+  }
+  const virtualRightProject: PDFProject = {
+    ...project,
+    elements: rightSnap.elementsSnapshot,
+    pageConfig: rightSnap.pageConfigSnapshot,
+    versions: project.versions,
+  };
+  return compareOriginalVsEdited(virtualRightProject, leftSnapshotIndex);
+}
+
+export interface ExternalPdfPageDiff {
+  pageNumber: number;
+  leftDimPt: { width: number; height: number } | null;
+  rightDimPt: { width: number; height: number } | null;
+  dimensionChanged: boolean;
+  addedLines: string[];
+  removedLines: string[];
+  unchangedCount: number;
+}
+
+export interface ExternalPdfComparisonResult {
+  leftPageCount: number;
+  rightPageCount: number;
+  pages: ExternalPdfPageDiff[];
+  totalAddedLines: number;
+  totalRemovedLines: number;
+}
+
+export async function compareExternalPdfBytes(
+  leftBytes: Uint8Array,
+  rightBytes: Uint8Array
+): Promise<ExternalPdfComparisonResult> {
+  const [leftDoc, rightDoc] = await Promise.all([
+    pdfjsLib.getDocument({ data: new Uint8Array(leftBytes) }).promise,
+    pdfjsLib.getDocument({ data: new Uint8Array(rightBytes) }).promise,
+  ]);
+
+  const maxPages = Math.max(leftDoc.numPages, rightDoc.numPages);
+  const pages: ExternalPdfPageDiff[] = [];
+  let totalAddedLines = 0;
+  let totalRemovedLines = 0;
+
+  const extractLines = async (
+    doc: pdfjsLib.PDFDocumentProxy,
+    pageNum: number
+  ): Promise<{ dim: { width: number; height: number }; lines: string[] } | null> => {
+    if (pageNum > doc.numPages) return null;
+    const page = await doc.getPage(pageNum);
+    const vp = page.getViewport({ scale: 1 });
+    const tc = await page.getTextContent();
+    const lines = tc.items
+      .map((item) => ('str' in item ? item.str.trim() : ''))
+      .filter((s) => s.length > 0);
+    return {
+      dim: { width: Number(vp.width.toFixed(1)), height: Number(vp.height.toFixed(1)) },
+      lines,
+    };
+  };
+
+  for (let p = 1; p <= maxPages; p++) {
+    const [leftInfo, rightInfo] = await Promise.all([
+      extractLines(leftDoc, p),
+      extractLines(rightDoc, p),
+    ]);
+    const leftSet = new Set(leftInfo?.lines || []);
+    const rightSet = new Set(rightInfo?.lines || []);
+    const addedLines = (rightInfo?.lines || []).filter((l) => !leftSet.has(l));
+    const removedLines = (leftInfo?.lines || []).filter((l) => !rightSet.has(l));
+    const unchangedCount = (rightInfo?.lines || []).filter((l) => leftSet.has(l)).length;
+    totalAddedLines += addedLines.length;
+    totalRemovedLines += removedLines.length;
+
+    const dimensionChanged = Boolean(
+      leftInfo &&
+        rightInfo &&
+        (Math.abs(leftInfo.dim.width - rightInfo.dim.width) > 1.5 ||
+          Math.abs(leftInfo.dim.height - rightInfo.dim.height) > 1.5)
+    );
+
+    pages.push({
+      pageNumber: p,
+      leftDimPt: leftInfo?.dim || null,
+      rightDimPt: rightInfo?.dim || null,
+      dimensionChanged,
+      addedLines,
+      removedLines,
+      unchangedCount,
+    });
+  }
+
+  return {
+    leftPageCount: leftDoc.numPages,
+    rightPageCount: rightDoc.numPages,
+    pages,
+    totalAddedLines,
+    totalRemovedLines,
   };
 }

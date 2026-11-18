@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useId, useState } from 'react';
 import {
   AlignCenter,
   AlignLeft,
@@ -13,20 +13,38 @@ import {
   Copy,
   Cpu,
   Crop,
+  ImagePlus,
   Italic,
+  Link2,
   Loader2,
   Lock,
   Maximize2,
   Minus,
+  Paintbrush,
   Plus,
   RotateCcw,
   Scan,
   Send,
+  ShieldAlert,
   Sparkles,
+  Star,
+  Strikethrough,
   Trash2,
+  Underline,
   Unlock,
   X,
 } from 'lucide-react';
+import {
+  AnimatePresence,
+  LayoutGroup,
+  motion,
+  useReducedMotion,
+} from 'motion/react';
+import {
+  MOTION_DURATION,
+  MOTION_SPRING,
+  popoverVariants,
+} from '../config/motionSystem';
 import {
   AiEditPlan,
   AssetFontItem,
@@ -47,6 +65,7 @@ import { useViewport } from '../hooks/useViewport';
 import { formatFriendlyAiError } from '../utils/aiEnhancedAnalysis';
 import { AlignMode } from '../utils/alignmentEngine';
 import { clampRect } from '../utils/geometryEngine';
+import { computeTypographyLayout } from '../utils/typographyEngine';
 import {
   applyOrientationChange,
   getPresetDimensions,
@@ -101,6 +120,18 @@ interface PropertiesInspectorProps {
   aiEnhanceNotice?: { kind: 'info' | 'warning'; message: string } | null;
   onRunAiEnhancedAnalysis?: () => void;
   onOpenPageSetup?: () => void;
+  recentFonts?: string[];
+  favoriteFonts?: string[];
+  onToggleFavoriteFont?: (fontFamily: string) => void;
+  onRecordRecentFont?: (fontFamily: string) => void;
+  onCopyFormatting?: (el: DocumentElement) => void;
+  onPasteFormatting?: (targetIds: string[]) => void;
+  hasCopiedFormatting?: boolean;
+  onStartStylePainter?: (
+    el: DocumentElement,
+    mode: 'appearance' | 'appearance_and_geometry'
+  ) => void;
+  onOpenRedactionConfirm?: () => void;
 }
 
 const FONT_OPTIONS = [
@@ -168,13 +199,25 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
   aiEnhanceNotice = null,
   onRunAiEnhancedAnalysis,
   onOpenPageSetup,
+  recentFonts = [],
+  favoriteFonts = [],
+  onToggleFavoriteFont,
+  onRecordRecentFont,
+  onCopyFormatting,
+  onPasteFormatting,
+  hasCopiedFormatting = false,
+  onStartStylePainter,
+  onOpenRedactionConfirm,
 }) => {
   const viewport = useViewport();
+  const prefersReduced = useReducedMotion();
+  const tabGroupId = useId();
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [pendingPlan, setPendingPlan] = useState<AiEditPlan | null>(null);
   const [equalGapPt, setEqualGapPt] = useState<number>(12);
+  const [copiedDebug, setCopiedDebug] = useState(false);
 
   const el = selectedElements.length === 1 ? selectedElements[0] : null;
   const unit = pageConfig.unit;
@@ -253,15 +296,15 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
       }
     >
       {isDrawer && !hideDrawerHeader && (
-        <div className="px-4 py-2 border-b border-slate-200/70 dark:border-white/10 flex items-center justify-between shrink-0">
-          <span className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+        <div className="px-4 py-2 border-b border-black/10 dark:border-white/12 flex items-center justify-between shrink-0">
+          <span className="text-xs font-semibold text-[#101010] dark:text-white">
             Inspector & AI Controls
           </span>
           {onCloseDrawer && (
             <button
               type="button"
               onClick={onCloseDrawer}
-              className="min-w-[44px] min-h-[44px] -mr-2 flex items-center justify-center rounded-xl text-slate-500 hover:text-slate-900 dark:hover:text-slate-100"
+              className="min-w-[44px] min-h-[44px] -mr-2 flex items-center justify-center rounded-xl text-[#888888] hover:text-[#101010] dark:text-[#858585] dark:hover:text-white transition-colors"
               aria-label="Close inspector"
             >
               <X className="w-4 h-4" />
@@ -271,22 +314,45 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
       )}
 
       {/* Inspector Tabs */}
-      <div className="grid grid-cols-3 border-b border-slate-200/70 dark:border-white/10 text-xs font-medium shrink-0 px-2 pt-1.5 gap-1">
-        {(['element', 'page', 'ai'] as const).map((tab) => (
-          <button
-            key={tab}
-            type="button"
-            onClick={() => onTabChange(tab)}
-            className={`min-h-[40px] tablet:min-h-[34px] text-center transition-colors rounded-t-xl border-b-2 ${
-              activeTab === tab
-                ? 'border-blue-500 text-blue-600 dark:text-blue-400 bg-blue-500/8'
-                : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
-            }`}
-          >
-            {tab === 'element' ? 'Properties' : tab === 'page' ? 'Page & Fit' : 'AI Assist'}
-          </button>
-        ))}
-      </div>
+      <LayoutGroup id={`inspector-tabs-${tabGroupId}`}>
+        <div className="grid grid-cols-3 border-b border-black/10 dark:border-white/12 text-xs font-medium shrink-0 px-2 pt-1.5 gap-1">
+          {(['element', 'page', 'ai'] as const).map((tab) => {
+            const active = activeTab === tab;
+            return (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => onTabChange(tab)}
+                className={`relative min-h-[40px] tablet:min-h-[34px] text-center transition-colors rounded-t-xl ${
+                  active
+                    ? 'text-[#101010] dark:text-white font-semibold'
+                    : 'text-[#888888] dark:text-[#858585] hover:text-[#101010] dark:hover:text-white'
+                }`}
+              >
+                {active && (
+                  <motion.span
+                    layoutId={`inspector-tab-bg-${tabGroupId}`}
+                    transition={
+                      prefersReduced
+                        ? { duration: MOTION_DURATION.instant }
+                        : MOTION_SPRING.nav
+                    }
+                    className="absolute inset-0 rounded-t-xl bg-black/[0.05] dark:bg-white/[0.08] border-b-2 border-[#101010] dark:border-white"
+                    aria-hidden="true"
+                  />
+                )}
+                <span className="relative z-10">
+                  {tab === 'element'
+                    ? 'Properties'
+                    : tab === 'page'
+                    ? 'Page & Fit'
+                    : 'AI Assist'}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </LayoutGroup>
 
       {/* Tab Body */}
       <div
@@ -297,7 +363,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
         {activeTab === 'element' && (
           <>
             {selectedElements.length === 0 && (
-              <div className="py-10 text-center text-slate-500 dark:text-slate-400">
+              <div className="py-10 text-center text-[#888888] dark:text-[#858585]">
                 Select any element on the canvas to inspect or edit its geometry, typography, and data mapping.
               </div>
             )}
@@ -305,14 +371,14 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
             {selectedElements.length > 1 && (
               <div className="space-y-3.5">
                 <div className="flex items-center justify-between">
-                  <span className="font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
+                  <span className="font-semibold text-[#101010] dark:text-white tabular-nums">
                     {selectedElements.length} Elements Selected
                   </span>
                   {onGroupToggle && (
                     <button
                       type="button"
                       onClick={onGroupToggle}
-                      className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium"
+                      className="px-2 py-1 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white text-[11px] font-medium transition-colors"
                     >
                       {selectedElements[0]?.groupId ? 'Ungroup' : 'Group'}
                     </button>
@@ -321,7 +387,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
 
                 {onAlignSelected && (
                   <div>
-                    <div className="text-[10px] font-medium text-slate-500 dark:text-slate-400 mb-1.5">
+                    <div className="text-[10px] font-medium text-[#555555] dark:text-[#B5B5B5] mb-1.5">
                       Align Selection
                     </div>
                     <div className="grid grid-cols-3 gap-1.5">
@@ -339,7 +405,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                           key={mode}
                           type="button"
                           onClick={() => onAlignSelected(mode)}
-                          className="py-1.5 px-2 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium"
+                          className="py-1.5 px-2 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white text-[11px] font-medium transition-colors"
                         >
                           {label}
                         </button>
@@ -350,21 +416,21 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
 
                 {onDistributeSelected && selectedElements.length >= 3 && (
                   <div>
-                    <div className="text-[10px] font-medium text-slate-500 dark:text-slate-400 mb-1.5">
+                    <div className="text-[10px] font-medium text-[#555555] dark:text-[#B5B5B5] mb-1.5">
                       Distribute Evenly
                     </div>
                     <div className="grid grid-cols-2 gap-1.5">
                       <button
                         type="button"
                         onClick={() => onDistributeSelected('horizontal')}
-                        className="py-1.5 px-2 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium"
+                        className="py-1.5 px-2 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white text-[11px] font-medium transition-colors"
                       >
                         Distribute H
                       </button>
                       <button
                         type="button"
                         onClick={() => onDistributeSelected('vertical')}
-                        className="py-1.5 px-2 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium"
+                        className="py-1.5 px-2 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white text-[11px] font-medium transition-colors"
                       >
                         Distribute V
                       </button>
@@ -375,7 +441,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                 {onEqualSpaceSelected && (
                   <div>
                     <div className="flex items-center justify-between mb-1">
-                      <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400">
+                      <span className="text-[10px] font-medium text-[#555555] dark:text-[#B5B5B5]">
                         Equal Spacing (pt)
                       </span>
                       <input
@@ -384,21 +450,21 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                         step="1"
                         value={equalGapPt}
                         onChange={(e) => setEqualGapPt(Math.max(0, Number(e.target.value) || 0))}
-                        className="w-14 px-1.5 py-0.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent text-[11px] text-center tabular-nums"
+                        className="w-14 px-1.5 py-0.5 rounded-lg border studio-input text-[11px] text-center tabular-nums"
                       />
                     </div>
                     <div className="grid grid-cols-2 gap-1.5">
                       <button
                         type="button"
                         onClick={() => onEqualSpaceSelected('horizontal', equalGapPt)}
-                        className="py-1.5 px-2 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium"
+                        className="py-1.5 px-2 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white text-[11px] font-medium transition-colors"
                       >
                         Equal Space H
                       </button>
                       <button
                         type="button"
                         onClick={() => onEqualSpaceSelected('vertical', equalGapPt)}
-                        className="py-1.5 px-2 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium"
+                        className="py-1.5 px-2 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white text-[11px] font-medium transition-colors"
                       >
                         Equal Space V
                       </button>
@@ -407,36 +473,106 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                 )}
 
                 {onBatchUpdateSelected && (
-                  <div className="grid grid-cols-2 gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => onBatchUpdateSelected({ locked: true })}
-                      className="py-1.5 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium"
-                    >
-                      Lock All
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onBatchUpdateSelected({ locked: false })}
-                      className="py-1.5 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium"
-                    >
-                      Unlock All
-                    </button>
+                  <div className="space-y-2 pt-2 border-t border-black/10 dark:border-white/10">
+                    <div className="text-[10px] font-medium text-[#555555] dark:text-[#B5B5B5]">
+                      Batch Typography & Locking (Preserves Unique Text)
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <select
+                        defaultValue=""
+                        onChange={(e) => {
+                          if (!e.target.value) return;
+                          onBatchUpdateSelected({ fontFamily: e.target.value });
+                        }}
+                        className="px-2 py-1 rounded-lg border studio-select text-[11px]"
+                      >
+                        <option value="">Set Font...</option>
+                        {FONT_OPTIONS.map((f) => (
+                          <option key={f} value={f}>{f}</option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        min={5}
+                        max={120}
+                        placeholder="Size (pt)"
+                        onChange={(e) => {
+                          const v = Number(e.target.value);
+                          if (v >= 5 && v <= 120) onBatchUpdateSelected({ fontSize: v });
+                        }}
+                        className="px-2 py-1 rounded-lg border studio-input text-[11px] tabular-nums"
+                      />
+                    </div>
+                    <div className="grid grid-cols-4 gap-1">
+                      <button
+                        type="button"
+                        onClick={() => onBatchUpdateSelected({ fontWeight: 'bold' })}
+                        className="py-1 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[11px] font-bold"
+                      >
+                        B
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onBatchUpdateSelected({ fontStyle: 'italic' })}
+                        className="py-1 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[11px] italic"
+                      >
+                        I
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onBatchUpdateSelected({ underline: true })}
+                        className="py-1 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[11px] underline"
+                      >
+                        U
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onBatchUpdateSelected({ autofit: true })}
+                        className="py-1 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[10px]"
+                      >
+                        Fit
+                      </button>
+                    </div>
+                    {hasCopiedFormatting && onPasteFormatting && (
+                      <button
+                        type="button"
+                        onClick={() => onPasteFormatting(selectedElements.map((s) => s.id))}
+                        className="w-full py-1.5 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white text-[11px] font-medium"
+                      >
+                        Paste Copied Formatting to {selectedElements.length} Items
+                      </button>
+                    )}
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => onBatchUpdateSelected({ locked: true })}
+                        className="py-1.5 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white text-[11px] font-medium transition-colors"
+                      >
+                        Lock All
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onBatchUpdateSelected({ locked: false })}
+                        className="py-1.5 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white text-[11px] font-medium transition-colors"
+                      >
+                        Unlock All
+                      </button>
+                    </div>
                   </div>
                 )}
 
-                <div className="flex gap-2 pt-1 border-t border-slate-200 dark:border-slate-800">
+                <div className="flex gap-2 pt-1 border-t border-black/10 dark:border-white/10">
                   <button
                     type="button"
                     onClick={onDuplicateSelected}
-                    className="flex-1 py-1.5 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 font-medium"
+                    className="flex-1 py-1.5 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white font-medium transition-colors"
                   >
                     Duplicate All
                   </button>
                   <button
                     type="button"
                     onClick={onDeleteSelected}
-                    className="flex-1 py-1.5 rounded border border-red-500/40 text-red-600 dark:text-red-400 hover:bg-red-500/10 font-medium"
+                    className="flex-1 py-1.5 rounded-lg border border-black/15 dark:border-white/15 text-[#555555] hover:text-[#101010] dark:text-[#B5B5B5] dark:hover:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08] font-medium transition-colors"
                   >
                     Delete All
                   </button>
@@ -449,10 +585,10 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                 {/* Header & Review Warning */}
                 <div className="flex items-center justify-between gap-2">
                   <div>
-                    <div className="font-semibold text-slate-900 dark:text-slate-100 capitalize">
+                    <div className="font-semibold text-[#101010] dark:text-white capitalize">
                       {el.type.replace('_', ' ')}
                     </div>
-                    <div className="text-[11px] text-slate-500 dark:text-slate-400 tabular-nums">
+                    <div className="text-[11px] text-[#555555] dark:text-[#B5B5B5] tabular-nums">
                       Confidence: {Math.round(el.confidence * 100)}%
                     </div>
                   </div>
@@ -463,10 +599,10 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                       onClick={() =>
                         onUpdateElement(el.id, { locked: !el.locked })
                       }
-                      className="p-1.5 rounded border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+                      className="p-1.5 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white transition-colors"
                     >
                       {el.locked ? (
-                        <Lock className="w-3.5 h-3.5 text-amber-500" />
+                        <Lock className="w-3.5 h-3.5 text-[#101010] dark:text-white" />
                       ) : (
                         <Unlock className="w-3.5 h-3.5" />
                       )}
@@ -475,7 +611,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                       type="button"
                       title="Duplicate element"
                       onClick={onDuplicateSelected}
-                      className="p-1.5 rounded border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+                      className="p-1.5 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white transition-colors"
                     >
                       <Copy className="w-3.5 h-3.5" />
                     </button>
@@ -483,7 +619,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                       type="button"
                       title="Delete element"
                       onClick={onDeleteSelected}
-                      className="p-1.5 rounded border border-slate-200 dark:border-slate-700 text-red-500 hover:bg-red-500/10"
+                      className="p-1.5 rounded-lg border border-black/15 dark:border-white/15 text-[#555555] hover:text-[#101010] dark:text-[#B5B5B5] dark:hover:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -491,7 +627,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                 </div>
 
                 {el.needsReview && (
-                  <div className="p-2.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 space-y-2">
+                  <div className="p-2.5 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 space-y-2">
                     <div className="flex items-start gap-2">
                       <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                       <div className="text-[11px]">
@@ -503,7 +639,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                       onClick={() =>
                         onUpdateElement(el.id, { needsReview: false })
                       }
-                      className="w-full py-1 rounded bg-amber-600 text-white font-medium text-[11px] hover:bg-amber-700 flex items-center justify-center gap-1"
+                      className="w-full py-1 rounded-lg bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] font-medium text-[11px] flex items-center justify-center gap-1 transition-colors"
                     >
                       <Check className="w-3 h-3" />
                       Mark Verified
@@ -511,14 +647,116 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                   </div>
                 )}
 
-                {/* Coordinates, Dimensions, Rotation & Scaling */}
+                {/* Provenance, Edit Method & Layer Z-Index Readout */}
+                {(() => {
+                  const pageEls = allElements.filter((x) => x.pageNumber === el.pageNumber);
+                  const zIdx = pageEls.findIndex((x) => x.id === el.id);
+                  const originLabel =
+                    el.sourceOrigin === 'scanned_ocr'
+                      ? 'Scanned OCR'
+                      : el.sourceOrigin === 'annotation'
+                      ? 'Annotation Layer'
+                      : el.sourceOrigin === 'redaction'
+                      ? 'Redaction Layer'
+                      : el.isUserAdded || el.sourceOrigin === 'user_overlay'
+                      ? 'User Overlay'
+                      : 'Native Original PDF';
+                  const methodLabel =
+                    el.type === 'redaction'
+                      ? el.redactionApplied
+                        ? 'Sanitized True Redaction'
+                        : 'Pending Visual Mask'
+                      : el.isUserAdded
+                      ? 'Direct Overlay Object'
+                      : el.eraseOriginal
+                      ? 'Controlled Replacement Region'
+                      : 'Original PDF Pass-Through';
+                  return (
+                    <div className="p-2.5 rounded-xl border border-black/10 dark:border-white/12 bg-black/[0.025] dark:bg-white/[0.03] space-y-1.5 text-[10px]">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-[#101010] dark:text-white">
+                          Origin: {originLabel}
+                        </span>
+                        <span className="font-mono text-[#888888] dark:text-[#858585] tabular-nums">
+                          Layer #{zIdx >= 0 ? zIdx + 1 : 1}/{Math.max(1, pageEls.length)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 text-[#555555] dark:text-[#B5B5B5]">
+                        <span>Method: {methodLabel}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            try {
+                              void navigator.clipboard?.writeText(JSON.stringify(el, null, 2));
+                              setCopiedDebug(true);
+                              window.setTimeout(() => setCopiedDebug(false), 1600);
+                            } catch {
+                              // Ignore clipboard errors
+                            }
+                          }}
+                          className="underline hover:text-[#101010] dark:hover:text-white"
+                        >
+                          {copiedDebug ? 'Copied JSON' : 'Copy Debug'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Redaction Workflow Quick Action */}
+                {el.type === 'redaction' && (
+                  <div className="p-2.5 rounded-xl border border-red-500/35 bg-red-500/10 space-y-2">
+                    <div className="flex items-start gap-2 text-red-700 dark:text-red-300 text-[11px]">
+                      <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5" />
+                      <div>
+                        <div className="font-semibold">
+                          {el.redactionApplied
+                            ? 'True Redaction Applied'
+                            : 'Visual Mask Only — Sensitive Text Still Extractable'}
+                        </div>
+                        <div className="text-[10px] opacity-90">
+                          {el.redactionApplied
+                            ? 'Underlying glyphs will be permanently scrubbed on PDF export.'
+                            : 'Click Apply True Redaction to permanently strip underlying PDF text on export.'}
+                        </div>
+                      </div>
+                    </div>
+                    {!el.redactionApplied && onOpenRedactionConfirm && (
+                      <button
+                        type="button"
+                        onClick={onOpenRedactionConfirm}
+                        className="w-full py-1.5 rounded-lg bg-[#101010] text-white dark:bg-white dark:text-[#050505] text-[11px] font-semibold"
+                      >
+                        Apply True Redaction...
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* Coordinates, Dimensions, Aspect Lock, Rotation & Scaling */}
                 <div>
-                  <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-1.5">
-                    Position & Dimensions ({unit})
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5]">
+                      Position & Dimensions ({unit})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onUpdateElement(el.id, { lockAspectRatio: !el.lockAspectRatio })
+                      }
+                      className={`px-2 py-0.5 rounded-md border text-[10px] flex items-center gap-1 transition-colors ${
+                        el.lockAspectRatio
+                          ? 'studio-active-surface font-semibold'
+                          : 'border-black/15 dark:border-white/15 text-[#555555] dark:text-[#B5B5B5]'
+                      }`}
+                    >
+                      <Link2 className="w-3 h-3" />
+                      {el.lockAspectRatio ? 'Ratio Locked' : 'Lock Ratio'}
+                    </button>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <label className="block">
-                      <span className="text-[10px] text-slate-400">X</span>
+                      <span className="text-[10px] text-[#888888] dark:text-[#858585]">X</span>
                       <input
                         type="number"
                         step="0.5"
@@ -530,11 +768,11 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                             eraseOriginal: el.isUserAdded ? false : true,
                           })
                         }
-                        className={`mt-0.5 w-full px-2 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums ${inputHeightClass}`}
+                        className={`mt-0.5 w-full px-2 rounded-lg border studio-input tabular-nums ${inputHeightClass}`}
                       />
                     </label>
                     <label className="block">
-                      <span className="text-[10px] text-slate-400">Y</span>
+                      <span className="text-[10px] text-[#888888] dark:text-[#858585]">Y</span>
                       <input
                         type="number"
                         step="0.5"
@@ -546,52 +784,56 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                             eraseOriginal: el.isUserAdded ? false : true,
                           })
                         }
-                        className={`mt-0.5 w-full px-2 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums ${inputHeightClass}`}
+                        className={`mt-0.5 w-full px-2 rounded-lg border studio-input tabular-nums ${inputHeightClass}`}
                       />
                     </label>
                     <label className="block">
-                      <span className="text-[10px] text-slate-400">Width</span>
+                      <span className="text-[10px] text-[#888888] dark:text-[#858585]">Width</span>
                       <input
                         type="number"
                         step="0.5"
                         onFocus={scrollOnFocus}
                         value={ptToUnit(el.width, unit)}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          const newW = Math.max(4, unitToPt(Number(e.target.value), unit));
+                          const ratio = el.width > 0 ? el.height / el.width : 1;
                           onUpdateElement(el.id, {
-                            width: Math.max(
-                              4,
-                              unitToPt(Number(e.target.value), unit)
-                            ),
+                            width: newW,
+                            ...(el.lockAspectRatio
+                              ? { height: Number(Math.max(4, newW * ratio).toFixed(2)) }
+                              : {}),
                             eraseOriginal: el.isUserAdded ? false : true,
-                          })
-                        }
-                        className={`mt-0.5 w-full px-2 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums ${inputHeightClass}`}
+                          });
+                        }}
+                        className={`mt-0.5 w-full px-2 rounded-lg border studio-input tabular-nums ${inputHeightClass}`}
                       />
                     </label>
                     <label className="block">
-                      <span className="text-[10px] text-slate-400">Height</span>
+                      <span className="text-[10px] text-[#888888] dark:text-[#858585]">Height</span>
                       <input
                         type="number"
                         step="0.5"
                         onFocus={scrollOnFocus}
                         value={ptToUnit(el.height, unit)}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          const newH = Math.max(4, unitToPt(Number(e.target.value), unit));
+                          const ratio = el.height > 0 ? el.width / el.height : 1;
                           onUpdateElement(el.id, {
-                            height: Math.max(
-                              4,
-                              unitToPt(Number(e.target.value), unit)
-                            ),
+                            height: newH,
+                            ...(el.lockAspectRatio
+                              ? { width: Number(Math.max(4, newH * ratio).toFixed(2)) }
+                              : {}),
                             eraseOriginal: el.isUserAdded ? false : true,
-                          })
-                        }
-                        className={`mt-0.5 w-full px-2 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums ${inputHeightClass}`}
+                          });
+                        }}
+                        className={`mt-0.5 w-full px-2 rounded-lg border studio-input tabular-nums ${inputHeightClass}`}
                       />
                     </label>
                   </div>
 
                   {/* Quick Proportional Element Scaling */}
                   <div className="mt-2">
-                    <span className="text-[10px] text-slate-400 block mb-1">
+                    <span className="text-[10px] text-[#888888] dark:text-[#858585] block mb-1">
                       Quick Scale
                     </span>
                     <div className="grid grid-cols-3 gap-1.5">
@@ -617,7 +859,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                               eraseOriginal: el.isUserAdded ? false : true,
                             })
                           }
-                          className={`px-2 py-1 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium tabular-nums ${btnHeightClass}`}
+                          className={`px-2 py-1 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white text-[11px] font-medium tabular-nums transition-colors ${btnHeightClass}`}
                         >
                           {label}
                         </button>
@@ -628,7 +870,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                   {/* Rotation & Opacity */}
                   <div className="grid grid-cols-2 gap-2 mt-2">
                     <div className="block">
-                      <span className="text-[10px] text-slate-400">Rotation (°)</span>
+                      <span className="text-[10px] text-[#888888] dark:text-[#858585]">Rotation (°)</span>
                       <div className="mt-0.5 flex items-center gap-1">
                         <button
                           type="button"
@@ -637,7 +879,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                               rotation: ((el.rotation || 0) - 15) % 360,
                             })
                           }
-                          className={`px-2 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 ${btnHeightClass}`}
+                          className={`px-2 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white transition-colors ${btnHeightClass}`}
                         >
                           -15°
                         </button>
@@ -650,7 +892,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                               rotation: Number(e.target.value) || 0,
                             })
                           }
-                          className={`w-full px-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums text-center ${inputHeightClass}`}
+                          className={`w-full px-1.5 rounded-lg border studio-input tabular-nums text-center ${inputHeightClass}`}
                         />
                         <button
                           type="button"
@@ -659,14 +901,14 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                               rotation: ((el.rotation || 0) + 15) % 360,
                             })
                           }
-                          className={`px-2 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 ${btnHeightClass}`}
+                          className={`px-2 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white transition-colors ${btnHeightClass}`}
                         >
                           +15°
                         </button>
                       </div>
                     </div>
                     <label className="block">
-                      <span className="text-[10px] text-slate-400">Opacity</span>
+                      <span className="text-[10px] text-[#888888] dark:text-[#858585]">Opacity</span>
                       <input
                         type="number"
                         min="0.1"
@@ -682,7 +924,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                             ),
                           })
                         }
-                        className={`mt-0.5 w-full px-2 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums ${inputHeightClass}`}
+                        className={`mt-0.5 w-full px-2 rounded-lg border studio-input tabular-nums ${inputHeightClass}`}
                       />
                     </label>
                   </div>
@@ -690,7 +932,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                   {/* Layer Ordering */}
                   {onReorderElement && (
                     <div className="mt-2.5">
-                      <span className="text-[10px] text-slate-400 block mb-1">
+                      <span className="text-[10px] text-[#888888] dark:text-[#858585] block mb-1">
                         Layer Ordering
                       </span>
                       <div className="grid grid-cols-4 gap-1">
@@ -707,7 +949,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                             type="button"
                             title={label}
                             onClick={() => onReorderElement(el.id, dir)}
-                            className={`px-1.5 py-1 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center gap-1 text-[10px] font-medium ${btnHeightClass}`}
+                            className={`px-1.5 py-1 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white flex items-center justify-center gap-1 text-[10px] font-medium transition-colors ${btnHeightClass}`}
                           >
                             <Icon className="w-3.5 h-3.5" />
                             <span>{label}</span>
@@ -718,11 +960,228 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                   )}
                 </div>
 
-                {/* Text Content & Typography */}
-                {el.type !== 'image' && el.type !== 'line' && (
-                  <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2.5">
+                {/* Object & Image Studio (for images & signatures) */}
+                {(el.type === 'image' || el.type === 'signature') && (
+                  <div className="pt-3 border-t border-black/10 dark:border-white/10 space-y-2.5">
+                    <div className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5]">
+                      Image & Mask Studio
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <label className="flex-1 py-1.5 px-2.5 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-center text-[11px] font-medium cursor-pointer flex items-center justify-center gap-1.5">
+                        <ImagePlus className="w-3.5 h-3.5" />
+                        Replace Image
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp"
+                          className="hidden"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (!f) return;
+                            const reader = new FileReader();
+                            reader.onload = () => {
+                              const dataUrl = String(reader.result || '');
+                              const im = new Image();
+                              im.onload = () => {
+                                onUpdateElement(el.id, {
+                                  imageDataUrl: dataUrl,
+                                  imageNaturalWidth: im.naturalWidth,
+                                  imageNaturalHeight: im.naturalHeight,
+                                  imageCropRect: undefined,
+                                  isUserAdded: true,
+                                });
+                              };
+                              im.src = dataUrl;
+                            };
+                            reader.readAsDataURL(f);
+                            e.target.value = '';
+                          }}
+                        />
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="block">
+                        <span className="text-[10px] text-[#888888] dark:text-[#858585]">Mask Shape</span>
+                        <select
+                          value={el.maskShape || 'none'}
+                          onChange={(e) =>
+                            onUpdateElement(el.id, {
+                              maskShape: e.target.value as 'none' | 'rect' | 'rounded' | 'circle',
+                            })
+                          }
+                          className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-select text-[11px]"
+                        >
+                          <option value="none">None</option>
+                          <option value="rect">Rectangle</option>
+                          <option value="rounded">Rounded Corners</option>
+                          <option value="circle">Circle / Oval</option>
+                        </select>
+                      </label>
+                      <label className="block">
+                        <span className="text-[10px] text-[#888888] dark:text-[#858585]">Compression</span>
+                        <select
+                          value={el.imageCompressionQuality ?? 1}
+                          onChange={(e) =>
+                            onUpdateElement(el.id, {
+                              imageCompressionQuality: Number(e.target.value),
+                            })
+                          }
+                          className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-select text-[11px]"
+                        >
+                          <option value={1}>Lossless (100%)</option>
+                          <option value={0.85}>Balanced (85%)</option>
+                          <option value={0.65}>Compact (65%)</option>
+                        </select>
+                      </label>
+                    </div>
+                    {el.imageNaturalWidth && el.imageNaturalHeight && (
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between text-[10px] text-[#888888] dark:text-[#858585]">
+                          <span>Crop (px: {el.imageNaturalWidth}×{el.imageNaturalHeight})</span>
+                          {el.imageCropRect && (
+                            <button
+                              type="button"
+                              onClick={() => onUpdateElement(el.id, { imageCropRect: undefined })}
+                              className="underline text-[#101010] dark:text-white"
+                            >
+                              Reset Crop
+                            </button>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-4 gap-1">
+                          {(['x', 'y', 'width', 'height'] as const).map((k) => {
+                            const natW = el.imageNaturalWidth!;
+                            const natH = el.imageNaturalHeight!;
+                            const cur = el.imageCropRect || { x: 0, y: 0, width: natW, height: natH };
+                            return (
+                              <label key={k} className="block">
+                                <span className="text-[9px] uppercase text-[#888888]">{k}</span>
+                                <input
+                                  type="number"
+                                  min={k === 'x' || k === 'y' ? 0 : 10}
+                                  value={Math.round(cur[k])}
+                                  onChange={(e) => {
+                                    const next = { ...cur, [k]: Math.max(0, Number(e.target.value) || 0) };
+                                    next.x = Math.min(natW - 10, next.x);
+                                    next.y = Math.min(natH - 10, next.y);
+                                    next.width = Math.max(10, Math.min(natW - next.x, next.width));
+                                    next.height = Math.max(10, Math.min(natH - next.y, next.height));
+                                    onUpdateElement(el.id, { imageCropRect: next });
+                                  }}
+                                  className="w-full px-1 py-0.5 rounded border studio-input text-[10px] tabular-nums"
+                                />
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Annotation / Stamp / Callout Fields */}
+                {(el.type === 'annotation' || el.type === 'stamp' || el.type === 'callout') && (
+                  <div className="pt-3 border-t border-black/10 dark:border-white/10 space-y-2">
+                    <div className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5]">
+                      {el.type === 'stamp'
+                        ? 'Stamp Configuration'
+                        : el.type === 'callout'
+                        ? 'Callout Target'
+                        : 'Annotation Details'}
+                    </div>
+                    {el.type === 'annotation' && (
+                      <textarea
+                        rows={2}
+                        placeholder="Comment / review note..."
+                        value={el.commentText || ''}
+                        onChange={(e) => onUpdateElement(el.id, { commentText: e.target.value })}
+                        className="w-full px-2 py-1.5 rounded-lg border studio-input text-xs"
+                      />
+                    )}
+                    {el.type === 'stamp' && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          type="text"
+                          value={el.stampText ?? el.text}
+                          onChange={(e) =>
+                            onUpdateElement(el.id, {
+                              stampText: e.target.value,
+                              text: e.target.value,
+                            })
+                          }
+                          placeholder="APPROVED"
+                          className="px-2 py-1 rounded-lg border studio-input text-xs"
+                        />
+                        <input
+                          type="text"
+                          value={el.stampDate || ''}
+                          onChange={(e) => onUpdateElement(el.id, { stampDate: e.target.value })}
+                          placeholder="YYYY-MM-DD"
+                          className="px-2 py-1 rounded-lg border studio-input text-xs tabular-nums"
+                        />
+                      </div>
+                    )}
+                    {el.type === 'callout' && el.calloutTarget && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="block">
+                          <span className="text-[10px] text-[#888888]">Target X (pt)</span>
+                          <input
+                            type="number"
+                            value={Math.round(el.calloutTarget.x)}
+                            onChange={(e) =>
+                              onUpdateElement(el.id, {
+                                calloutTarget: {
+                                  ...el.calloutTarget!,
+                                  x: Number(e.target.value) || 0,
+                                },
+                              })
+                            }
+                            className="w-full px-2 py-1 rounded-lg border studio-input text-xs tabular-nums"
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="text-[10px] text-[#888888]">Target Y (pt)</span>
+                          <input
+                            type="number"
+                            value={Math.round(el.calloutTarget.y)}
+                            onChange={(e) =>
+                              onUpdateElement(el.id, {
+                                calloutTarget: {
+                                  ...el.calloutTarget!,
+                                  y: Number(e.target.value) || 0,
+                                },
+                              })
+                            }
+                            className="w-full px-2 py-1 rounded-lg border studio-input text-xs tabular-nums"
+                          />
+                        </label>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Advanced Typography Studio & Styling */}
+                {el.type !== 'image' && el.type !== 'signature' && el.type !== 'line' && el.type !== 'draw' && (
+                  <div className="pt-3 border-t border-black/10 dark:border-white/10 space-y-2.5">
+                    {(() => {
+                      const typo = computeTypographyLayout(el);
+                      return typo.isClipped ? (
+                        <div className="p-2 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 text-[10px] flex items-center justify-between gap-2">
+                          <span>
+                            Text overflows box ({Math.round(typo.totalTextHeightPt)}pt tall).
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => onUpdateElement(el.id, { autofit: true, eraseOriginal: el.isUserAdded ? false : true })}
+                            className="underline font-semibold shrink-0"
+                          >
+                            Autofit
+                          </button>
+                        </div>
+                      ) : null;
+                    })()}
+
                     <label className="block">
-                      <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                      <span className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5]">
                         Text Content
                       </span>
                       <textarea
@@ -736,24 +1195,50 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                             needsReview: false,
                           })
                         }
-                        className="mt-1 w-full px-2.5 py-2 rounded border border-slate-300 dark:border-slate-700 bg-transparent text-slate-900 dark:text-slate-100 text-sm tablet:text-xs"
+                        className="mt-1 w-full px-2.5 py-2 rounded-lg border studio-input text-sm tablet:text-xs"
                       />
                     </label>
 
                     <div className="grid grid-cols-1 tablet:grid-cols-2 gap-2">
-                      <label className="block">
-                        <span className="text-[10px] text-slate-400">Font</span>
+                      <div className="block">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] text-[#888888] dark:text-[#858585]">Font</span>
+                          {onToggleFavoriteFont && (
+                            <button
+                              type="button"
+                              title="Favorite font"
+                              onClick={() => onToggleFavoriteFont(el.fontFamily)}
+                              className="text-[10px] flex items-center gap-0.5 text-[#555555] hover:text-[#101010] dark:text-[#B5B5B5] dark:hover:text-white"
+                            >
+                              <Star
+                                className={`w-3 h-3 ${
+                                  favoriteFonts.includes(el.fontFamily) ? 'fill-current' : ''
+                                }`}
+                              />
+                            </button>
+                          )}
+                        </div>
                         <select
                           onFocus={scrollOnFocus}
                           value={el.fontFamily}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            onRecordRecentFont?.(e.target.value);
                             onUpdateElement(el.id, {
                               fontFamily: e.target.value,
                               eraseOriginal: el.isUserAdded ? false : true,
-                            })
-                          }
-                          className={`mt-0.5 w-full px-2 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#111827] ${inputHeightClass}`}
+                            });
+                          }}
+                          className={`mt-0.5 w-full px-2 rounded-lg border studio-select ${inputHeightClass}`}
                         >
+                          {favoriteFonts.length > 0 && (
+                            <optgroup label="Favorite Fonts">
+                              {favoriteFonts.map((f) => (
+                                <option key={`fav-${f}`} value={f}>
+                                  ★ {f}
+                                </option>
+                              ))}
+                            </optgroup>
+                          )}
                           <optgroup label="Standard PDF Fonts">
                             {FONT_OPTIONS.map((f) => (
                               <option key={f} value={f}>
@@ -772,9 +1257,9 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                             </optgroup>
                           )}
                         </select>
-                      </label>
+                      </div>
                       <div className="block">
-                        <span className="text-[10px] text-slate-400">Size (pt)</span>
+                        <span className="text-[10px] text-[#888888] dark:text-[#858585]">Size (pt)</span>
                         <div className="mt-0.5 flex items-center gap-1">
                           <button
                             type="button"
@@ -784,7 +1269,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                                 eraseOriginal: el.isUserAdded ? false : true,
                               })
                             }
-                            className={`px-2.5 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center ${btnHeightClass}`}
+                            className={`px-2 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white flex items-center justify-center transition-colors ${btnHeightClass}`}
                           >
                             <Minus className="w-3.5 h-3.5" />
                           </button>
@@ -800,7 +1285,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                                 eraseOriginal: el.isUserAdded ? false : true,
                               })
                             }
-                            className={`w-full px-1.5 text-center rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums ${inputHeightClass}`}
+                            className={`w-full px-1.5 text-center rounded-lg border studio-input tabular-nums ${inputHeightClass}`}
                           />
                           <button
                             type="button"
@@ -810,7 +1295,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                                 eraseOriginal: el.isUserAdded ? false : true,
                               })
                             }
-                            className={`px-2.5 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center ${btnHeightClass}`}
+                            className={`px-2 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white flex items-center justify-center transition-colors ${btnHeightClass}`}
                           >
                             <Plus className="w-3.5 h-3.5" />
                           </button>
@@ -818,45 +1303,106 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                       </div>
                     </div>
 
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-1.5">
+                    {/* Recent Font Chips & Live Preview */}
+                    {recentFonts.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1">
+                        {recentFonts.slice(0, 4).map((rf) => (
+                          <button
+                            key={rf}
+                            type="button"
+                            onClick={() =>
+                              onUpdateElement(el.id, {
+                                fontFamily: rf,
+                                eraseOriginal: el.isUserAdded ? false : true,
+                              })
+                            }
+                            style={{ fontFamily: rf }}
+                            className={`px-2 py-0.5 rounded border text-[10px] transition-colors ${
+                              el.fontFamily === rf
+                                ? 'studio-active-surface font-semibold'
+                                : 'border-black/10 dark:border-white/10 text-[#555555] dark:text-[#B5B5B5]'
+                            }`}
+                          >
+                            {rf}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Style Toggles: Bold, Italic, Underline, Strikethrough + Align */}
+                    <div className="flex flex-wrap items-center justify-between gap-1.5">
+                      <div className="flex items-center gap-1">
                         <button
                           type="button"
+                          title="Bold"
                           onClick={() =>
                             onUpdateElement(el.id, {
-                              fontWeight:
-                                el.fontWeight === 'bold' ? 'normal' : 'bold',
+                              fontWeight: el.fontWeight === 'bold' ? 'normal' : 'bold',
                               eraseOriginal: el.isUserAdded ? false : true,
                             })
                           }
-                          className={`px-3 py-1.5 rounded border flex items-center justify-center ${btnHeightClass} ${
+                          className={`p-1.5 rounded-lg border flex items-center justify-center transition-colors ${btnHeightClass} ${
                             el.fontWeight === 'bold'
-                              ? 'border-blue-500 bg-blue-500/15 text-blue-500'
-                              : 'border-slate-300 dark:border-slate-700'
+                              ? 'studio-active-surface'
+                              : 'border-black/15 dark:border-white/15 text-[#555555] dark:text-[#B5B5B5]'
                           }`}
                         >
-                          <Bold className="w-4 h-4" />
+                          <Bold className="w-3.5 h-3.5" />
                         </button>
                         <button
                           type="button"
+                          title="Italic"
                           onClick={() =>
                             onUpdateElement(el.id, {
-                              fontStyle:
-                                el.fontStyle === 'italic' ? 'normal' : 'italic',
+                              fontStyle: el.fontStyle === 'italic' ? 'normal' : 'italic',
                               eraseOriginal: el.isUserAdded ? false : true,
                             })
                           }
-                          className={`px-3 py-1.5 rounded border flex items-center justify-center ${btnHeightClass} ${
+                          className={`p-1.5 rounded-lg border flex items-center justify-center transition-colors ${btnHeightClass} ${
                             el.fontStyle === 'italic'
-                              ? 'border-blue-500 bg-blue-500/15 text-blue-500'
-                              : 'border-slate-300 dark:border-slate-700'
+                              ? 'studio-active-surface'
+                              : 'border-black/15 dark:border-white/15 text-[#555555] dark:text-[#B5B5B5]'
                           }`}
                         >
-                          <Italic className="w-4 h-4" />
+                          <Italic className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          title="Underline"
+                          onClick={() =>
+                            onUpdateElement(el.id, {
+                              underline: !el.underline,
+                              eraseOriginal: el.isUserAdded ? false : true,
+                            })
+                          }
+                          className={`p-1.5 rounded-lg border flex items-center justify-center transition-colors ${btnHeightClass} ${
+                            el.underline
+                              ? 'studio-active-surface'
+                              : 'border-black/15 dark:border-white/15 text-[#555555] dark:text-[#B5B5B5]'
+                          }`}
+                        >
+                          <Underline className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          title="Strikethrough"
+                          onClick={() =>
+                            onUpdateElement(el.id, {
+                              strikethrough: !el.strikethrough,
+                              eraseOriginal: el.isUserAdded ? false : true,
+                            })
+                          }
+                          className={`p-1.5 rounded-lg border flex items-center justify-center transition-colors ${btnHeightClass} ${
+                            el.strikethrough
+                              ? 'studio-active-surface'
+                              : 'border-black/15 dark:border-white/15 text-[#555555] dark:text-[#B5B5B5]'
+                          }`}
+                        >
+                          <Strikethrough className="w-3.5 h-3.5" />
                         </button>
                       </div>
 
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1">
                         {(['left', 'center', 'right'] as const).map((a) => (
                           <button
                             key={a}
@@ -867,27 +1413,186 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                                 eraseOriginal: el.isUserAdded ? false : true,
                               })
                             }
-                            className={`px-3 py-1.5 rounded border flex items-center justify-center ${btnHeightClass} ${
+                            className={`p-1.5 rounded-lg border flex items-center justify-center transition-colors ${btnHeightClass} ${
                               el.align === a
-                                ? 'border-blue-500 bg-blue-500/15 text-blue-500'
-                                : 'border-slate-300 dark:border-slate-700'
+                                ? 'studio-active-surface'
+                                : 'border-black/15 dark:border-white/15 text-[#555555] dark:text-[#B5B5B5]'
                             }`}
                           >
                             {a === 'left' ? (
-                              <AlignLeft className="w-4 h-4" />
+                              <AlignLeft className="w-3.5 h-3.5" />
                             ) : a === 'center' ? (
-                              <AlignCenter className="w-4 h-4" />
+                              <AlignCenter className="w-3.5 h-3.5" />
                             ) : (
-                              <AlignRight className="w-4 h-4" />
+                              <AlignRight className="w-3.5 h-3.5" />
                             )}
                           </button>
                         ))}
                       </div>
                     </div>
 
+                    {/* Vertical Align, Wrap & Autofit */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <span className="text-[10px] text-[#888888] dark:text-[#858585] block mb-0.5">
+                          Vertical Align
+                        </span>
+                        <div className="grid grid-cols-3 gap-1">
+                          {(['top', 'middle', 'bottom'] as const).map((va) => (
+                            <button
+                              key={va}
+                              type="button"
+                              onClick={() =>
+                                onUpdateElement(el.id, {
+                                  verticalAlign: va,
+                                  eraseOriginal: el.isUserAdded ? false : true,
+                                })
+                              }
+                              className={`py-1 rounded border text-[10px] capitalize ${
+                                (el.verticalAlign || 'top') === va
+                                  ? 'studio-active-surface font-semibold'
+                                  : 'border-black/15 dark:border-white/15 text-[#555555] dark:text-[#B5B5B5]'
+                              }`}
+                            >
+                              {va}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="flex flex-col justify-end gap-1">
+                        <label className="flex items-center gap-1.5 cursor-pointer text-[11px]">
+                          <input
+                            type="checkbox"
+                            checked={el.textWrap !== false}
+                            onChange={(e) =>
+                              onUpdateElement(el.id, {
+                                textWrap: e.target.checked,
+                                eraseOriginal: el.isUserAdded ? false : true,
+                              })
+                            }
+                          />
+                          <span>Wrap Text</span>
+                        </label>
+                        <label className="flex items-center gap-1.5 cursor-pointer text-[11px]">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(el.autofit)}
+                            onChange={(e) =>
+                              onUpdateElement(el.id, {
+                                autofit: e.target.checked,
+                                eraseOriginal: el.isUserAdded ? false : true,
+                              })
+                            }
+                          />
+                          <span>Autofit Box</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Spacing & Box Padding Controls */}
+                    <div className="grid grid-cols-4 gap-1.5">
+                      <label className="block">
+                        <span className="text-[9px] text-[#888888]">Track</span>
+                        <input
+                          type="number"
+                          step="0.2"
+                          value={el.letterSpacing ?? 0}
+                          onChange={(e) =>
+                            onUpdateElement(el.id, {
+                              letterSpacing: Number(e.target.value) || 0,
+                              eraseOriginal: el.isUserAdded ? false : true,
+                            })
+                          }
+                          className="w-full px-1.5 py-1 rounded border studio-input text-[10px] tabular-nums"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[9px] text-[#888888]">Line H</span>
+                        <input
+                          type="number"
+                          step="0.05"
+                          min="0.8"
+                          max="3"
+                          value={el.lineHeight ?? 1.2}
+                          onChange={(e) =>
+                            onUpdateElement(el.id, {
+                              lineHeight: Math.max(0.8, Number(e.target.value) || 1.2),
+                              eraseOriginal: el.isUserAdded ? false : true,
+                            })
+                          }
+                          className="w-full px-1.5 py-1 rounded border studio-input text-[10px] tabular-nums"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[9px] text-[#888888]">Para pt</span>
+                        <input
+                          type="number"
+                          step="1"
+                          min="0"
+                          value={el.paragraphSpacing ?? 0}
+                          onChange={(e) =>
+                            onUpdateElement(el.id, {
+                              paragraphSpacing: Math.max(0, Number(e.target.value) || 0),
+                              eraseOriginal: el.isUserAdded ? false : true,
+                            })
+                          }
+                          className="w-full px-1.5 py-1 rounded border studio-input text-[10px] tabular-nums"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-[9px] text-[#888888]">Pad pt</span>
+                        <input
+                          type="number"
+                          step="0.5"
+                          min="0"
+                          value={el.paddingPt ?? 1}
+                          onChange={(e) =>
+                            onUpdateElement(el.id, {
+                              paddingPt: Math.max(0, Number(e.target.value) || 0),
+                              eraseOriginal: el.isUserAdded ? false : true,
+                            })
+                          }
+                          className="w-full px-1.5 py-1 rounded border studio-input text-[10px] tabular-nums"
+                        />
+                      </label>
+                    </div>
+
+                    {/* Formatting Copy / Paste & Style Painter Actions */}
+                    {(onCopyFormatting || onStartStylePainter) && (
+                      <div className="grid grid-cols-2 gap-1.5 pt-1">
+                        {onCopyFormatting && (
+                          <button
+                            type="button"
+                            onClick={() => onCopyFormatting(el)}
+                            className="py-1 px-2 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[10px] font-medium"
+                          >
+                            Copy Formatting
+                          </button>
+                        )}
+                        {hasCopiedFormatting && onPasteFormatting ? (
+                          <button
+                            type="button"
+                            onClick={() => onPasteFormatting([el.id])}
+                            className="py-1 px-2 rounded-lg studio-active-surface border text-[10px] font-semibold"
+                          >
+                            Paste Formatting
+                          </button>
+                        ) : onStartStylePainter ? (
+                          <button
+                            type="button"
+                            onClick={() => onStartStylePainter(el, 'appearance')}
+                            className="py-1 px-2 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[10px] font-medium flex items-center justify-center gap-1"
+                          >
+                            <Paintbrush className="w-3 h-3" />
+                            Style Painter
+                          </button>
+                        ) : null}
+                      </div>
+                    )}
+
                     <div className="space-y-2">
                       <div>
-                        <span className="text-[10px] text-slate-400 block mb-1">
+                        <span className="text-[10px] text-[#888888] dark:text-[#858585] block mb-1">
                           Text Color
                         </span>
                         <div className="flex flex-wrap items-center gap-1.5">
@@ -900,7 +1605,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                                 eraseOriginal: el.isUserAdded ? false : true,
                               })
                             }
-                            className="w-9 h-9 rounded border border-slate-300 dark:border-slate-700 bg-transparent cursor-pointer"
+                            className="w-9 h-9 rounded-lg border border-black/15 dark:border-white/15 bg-transparent cursor-pointer"
                           />
                           {QUICK_COLOR_SWATCHES.map((hex) => (
                             <button
@@ -916,8 +1621,8 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                               style={{ backgroundColor: hex }}
                               className={`w-7 h-7 rounded-md border ${
                                 el.color.toLowerCase() === hex.toLowerCase()
-                                  ? 'ring-2 ring-blue-500 border-white'
-                                  : 'border-slate-300 dark:border-slate-700'
+                                  ? 'ring-2 ring-[#101010] dark:ring-white border-white'
+                                  : 'border-black/20 dark:border-white/20'
                               }`}
                             />
                           ))}
@@ -925,7 +1630,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                       </div>
 
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-[10px] text-slate-400">
+                        <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                           Background Fill
                         </span>
                         <div className="flex items-center gap-2">
@@ -942,7 +1647,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                                 eraseOriginal: el.isUserAdded ? false : true,
                               })
                             }
-                            className="w-9 h-9 rounded border border-slate-300 dark:border-slate-700 bg-transparent cursor-pointer"
+                            className="w-9 h-9 rounded-lg border border-black/15 dark:border-white/15 bg-transparent cursor-pointer"
                           />
                           <button
                             type="button"
@@ -951,7 +1656,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                                 backgroundColor: 'transparent',
                               })
                             }
-                            className={`px-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 ${btnHeightClass}`}
+                            className={`px-2.5 py-1 rounded-lg border border-black/15 dark:border-white/15 text-[11px] text-[#555555] dark:text-[#B5B5B5] hover:bg-black/[0.05] dark:hover:bg-white/[0.08] transition-colors ${btnHeightClass}`}
                           >
                             Transparent
                           </button>
@@ -961,16 +1666,16 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
 
                     {/* Saved Asset Text Styles & Brand Palettes */}
                     {(savedTextStyles.length > 0 || savedPalettes.length > 0 || onSaveAsTextStyle) && (
-                      <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-2">
+                      <div className="pt-2 border-t border-black/10 dark:border-white/10 space-y-2">
                         <div className="flex items-center justify-between">
-                          <span className="text-[10px] font-medium text-slate-500">
+                          <span className="text-[10px] font-medium text-[#555555] dark:text-[#B5B5B5]">
                             Saved Library Styles
                           </span>
                           {onSaveAsTextStyle && (
                             <button
                               type="button"
                               onClick={() => onSaveAsTextStyle(el)}
-                              className="text-[10px] text-blue-600 dark:text-blue-400 hover:underline font-medium"
+                              className="text-[10px] text-[#101010] dark:text-white hover:underline font-medium"
                             >
                               + Save Current Style
                             </button>
@@ -993,7 +1698,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                                     eraseOriginal: el.isUserAdded ? false : true,
                                   })
                                 }
-                                className="px-2 py-1 rounded border border-slate-300 dark:border-slate-700 hover:border-blue-500 text-[10px] font-medium"
+                                className="px-2 py-1 rounded-lg border border-black/15 dark:border-white/15 hover:border-black/40 dark:hover:border-white/40 text-[10px] font-medium text-[#101010] dark:text-white transition-colors"
                               >
                                 {st.name}
                               </button>
@@ -1004,7 +1709,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                           <div className="space-y-1">
                             {savedPalettes.map((pal) => (
                               <div key={pal.id} className="flex items-center gap-1.5">
-                                <span className="text-[10px] text-slate-400 truncate w-20">
+                                <span className="text-[10px] text-[#888888] dark:text-[#858585] truncate w-20">
                                   {pal.name}
                                 </span>
                                 <div className="flex items-center gap-1">
@@ -1020,7 +1725,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                                         })
                                       }
                                       style={{ backgroundColor: hex }}
-                                      className="w-5 h-5 rounded border border-slate-300 dark:border-slate-700"
+                                      className="w-5 h-5 rounded border border-black/20 dark:border-white/20"
                                     />
                                   ))}
                                 </div>
@@ -1034,12 +1739,12 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                 )}
 
                 {/* Dynamic Field Mapping & Block Grouping */}
-                <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2.5">
-                  <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                <div className="pt-3 border-t border-black/10 dark:border-white/10 space-y-2.5">
+                  <div className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5]">
                     Bulk & Data Mapping
                   </div>
                   <label className="block">
-                    <span className="text-[10px] text-slate-400">
+                    <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                       Mapped Field Key (for Serial / CSV)
                     </span>
                     <input
@@ -1051,7 +1756,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                       onChange={(e) =>
                         onUpdateElement(el.id, { fieldKey: e.target.value || undefined })
                       }
-                      className={`mt-0.5 w-full px-2 rounded border border-slate-300 dark:border-slate-700 bg-transparent ${inputHeightClass}`}
+                      className={`mt-0.5 w-full px-2 rounded-lg border studio-input ${inputHeightClass}`}
                     />
                     <datalist id="studio-field-keys">
                       <option value="invoice_number" />
@@ -1062,7 +1767,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                     </datalist>
                   </label>
                   <label className="block">
-                    <span className="text-[10px] text-slate-400">
+                    <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                       Document Block ID
                     </span>
                     <input
@@ -1073,7 +1778,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                       onChange={(e) =>
                         onUpdateElement(el.id, { blockId: e.target.value || undefined })
                       }
-                      className={`mt-0.5 w-full px-2 rounded border border-slate-300 dark:border-slate-700 bg-transparent ${inputHeightClass}`}
+                      className={`mt-0.5 w-full px-2 rounded-lg border studio-input ${inputHeightClass}`}
                     />
                   </label>
                 </div>
@@ -1088,7 +1793,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
               <button
                 type="button"
                 onClick={onOpenPageSetup}
-                className="w-full py-2 px-3 rounded border border-blue-600/40 bg-blue-600/10 text-blue-600 dark:text-blue-400 hover:bg-blue-600/15 font-medium flex items-center justify-center gap-1.5"
+                className="w-full py-2 px-3 rounded-xl border border-black/15 dark:border-white/15 bg-black/[0.04] dark:bg-white/[0.06] text-[#101010] dark:text-white hover:bg-black/[0.08] dark:hover:bg-white/[0.12] font-medium flex items-center justify-center gap-1.5 transition-colors"
               >
                 <Maximize2 className="w-3.5 h-3.5" />
                 Custom Paper & Presets...
@@ -1096,7 +1801,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
             )}
 
             <label className="block">
-              <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+              <span className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5]">
                 Page Size {pageConfig.customPresetName ? `(${pageConfig.customPresetName})` : ''}
               </span>
               <select
@@ -1130,7 +1835,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                     customPresetName: undefined,
                   });
                 }}
-                className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#111827]"
+                className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-select"
               >
                 {(Object.keys(PAGE_PRESETS_PT) as Array<Exclude<PageSizePreset, 'Custom'>>).map(
                   (key) => (
@@ -1144,7 +1849,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
             </label>
 
             <div>
-              <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+              <span className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5]">
                 Orientation
               </span>
               <div className="mt-1 grid grid-cols-3 gap-1.5">
@@ -1166,10 +1871,10 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                         heightPt: Number(swapped.heightPt.toFixed(2)),
                       });
                     }}
-                    className={`py-1.5 rounded border font-medium text-[11px] ${
+                    className={`py-1.5 rounded-lg border font-medium text-[11px] transition-colors ${
                       pageConfig.orientation === ori
-                        ? 'border-blue-600 bg-blue-600/10 text-blue-600 dark:text-blue-400'
-                        : 'border-slate-300 dark:border-slate-700'
+                        ? 'studio-active-surface font-semibold'
+                        : 'border-black/15 dark:border-white/15 text-[#555555] dark:text-[#B5B5B5] hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
                     }`}
                   >
                     {label}
@@ -1179,7 +1884,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
             </div>
 
             <label className="block">
-              <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+              <span className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5]">
                 Measurement Unit
               </span>
               <select
@@ -1187,7 +1892,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                 onChange={(e) =>
                   onUpdatePageConfig({ unit: e.target.value as MeasurementUnit })
                 }
-                className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#111827]"
+                className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-select"
               >
                 <option value="mm">Millimeters (mm)</option>
                 <option value="cm">Centimeters (cm)</option>
@@ -1199,7 +1904,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
 
             <div className="grid grid-cols-2 gap-2">
               <label className="block">
-                <span className="text-[10px] text-slate-400">
+                <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                   Width ({unit})
                 </span>
                 <input
@@ -1220,11 +1925,11 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                       widthPt: Number(clamped.toFixed(2)),
                     });
                   }}
-                  className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                  className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
                 />
               </label>
               <label className="block">
-                <span className="text-[10px] text-slate-400">
+                <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                   Height ({unit})
                 </span>
                 <input
@@ -1245,7 +1950,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                       heightPt: Number(clamped.toFixed(2)),
                     });
                   }}
-                  className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                  className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
                 />
               </label>
             </div>
@@ -1254,7 +1959,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
               const dimCheck = validatePageConfigDimensions(pageConfig);
               if (dimCheck.valid && dimCheck.warnings.length === 0) return null;
               return (
-                <div className="p-2 rounded border border-amber-500/40 bg-amber-500/10 text-[11px] text-amber-700 dark:text-amber-300 flex items-start gap-1.5">
+                <div className="p-2 rounded-lg border border-amber-500/40 bg-amber-500/10 text-[11px] text-amber-700 dark:text-amber-300 flex items-start gap-1.5">
                   <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                   <span>
                     {[...dimCheck.errors, ...dimCheck.warnings].join(' ')}
@@ -1264,7 +1969,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
             })()}
 
             <div>
-              <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-1.5">
+              <div className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5] mb-1.5">
                 Page Margins ({unit})
               </div>
               <div className="grid grid-cols-2 gap-2">
@@ -1277,7 +1982,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                   ] as const
                 ).map(([label, key]) => (
                   <label key={key} className="block">
-                    <span className="text-[10px] text-slate-400">{label}</span>
+                    <span className="text-[10px] text-[#888888] dark:text-[#858585]">{label}</span>
                     <input
                       type="number"
                       step="0.5"
@@ -1288,7 +1993,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                           [key]: Math.max(0, unitToPt(Number(e.target.value) || 0, unit)),
                         })
                       }
-                      className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                      className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
                     />
                   </label>
                 ))}
@@ -1297,7 +2002,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
 
             <div className="grid grid-cols-2 gap-2">
               <label className="block">
-                <span className="text-[10px] text-slate-400">Bleed ({unit})</span>
+                <span className="text-[10px] text-[#888888] dark:text-[#858585]">Bleed ({unit})</span>
                 <input
                   type="number"
                   min="0"
@@ -1308,7 +2013,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                       bleedPt: Math.max(0, unitToPt(Number(e.target.value) || 0, unit)),
                     })
                   }
-                  className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                  className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
                 />
               </label>
               <label className="flex items-center gap-2 pt-4 cursor-pointer">
@@ -1318,9 +2023,9 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                   onChange={(e) =>
                     onUpdatePageConfig({ cropMarks: e.target.checked })
                   }
-                  className="rounded border-slate-400 text-blue-600"
+                  className="rounded border-black/30 dark:border-white/30 accent-[#101010] dark:accent-white"
                 />
-                <span className="text-[11px] text-slate-700 dark:text-slate-300">
+                <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                   Press Crop Marks
                 </span>
               </label>
@@ -1328,7 +2033,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
 
             <div className="grid grid-cols-2 gap-2">
               <label className="block">
-                <span className="text-[10px] text-slate-400">Background</span>
+                <span className="text-[10px] text-[#888888] dark:text-[#858585]">Background</span>
                 <div className="mt-0.5 flex items-center gap-2">
                   <input
                     type="color"
@@ -1336,15 +2041,15 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                     onChange={(e) =>
                       onUpdatePageConfig({ backgroundColor: e.target.value })
                     }
-                    className="w-7 h-6 rounded border border-slate-300 dark:border-slate-700 cursor-pointer"
+                    className="w-7 h-6 rounded border border-black/15 dark:border-white/15 cursor-pointer"
                   />
-                  <span className="font-mono text-[11px]">
+                  <span className="font-mono text-[11px] text-[#101010] dark:text-white">
                     {pageConfig.backgroundColor}
                   </span>
                 </div>
               </label>
               <label className="block">
-                <span className="text-[10px] text-slate-400">Page Rotation</span>
+                <span className="text-[10px] text-[#888888] dark:text-[#858585]">Page Rotation</span>
                 <select
                   value={pageConfig.rotation}
                   onChange={(e) =>
@@ -1352,13 +2057,44 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                       rotation: Number(e.target.value) as 0 | 90 | 180 | 270,
                     })
                   }
-                  className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#111827]"
+                  className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-select"
                 >
                   <option value={0}>0°</option>
                   <option value={90}>90° CW</option>
                   <option value={180}>180°</option>
                   <option value={270}>270° CW</option>
                 </select>
+              </label>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block">
+                <span className="text-[10px] text-[#888888] dark:text-[#858585]">
+                  Header Text ({'{page}'})
+                </span>
+                <input
+                  type="text"
+                  placeholder="Optional header..."
+                  value={pageConfig.headerText || ''}
+                  onChange={(e) =>
+                    onUpdatePageConfig({ headerText: e.target.value })
+                  }
+                  className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input text-[11px]"
+                />
+              </label>
+              <label className="block">
+                <span className="text-[10px] text-[#888888] dark:text-[#858585]">
+                  Footer Text ({'{page}'})
+                </span>
+                <input
+                  type="text"
+                  placeholder="Optional footer..."
+                  value={pageConfig.footerText || ''}
+                  onChange={(e) =>
+                    onUpdatePageConfig({ footerText: e.target.value })
+                  }
+                  className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input text-[11px]"
+                />
               </label>
             </div>
 
@@ -1384,26 +2120,26 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
               };
 
               return (
-                <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
+                <div className="pt-3 border-t border-black/10 dark:border-white/10 space-y-3">
                   {/* Independent Geometry Readout */}
-                  <div className="p-2.5 rounded border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#111827] space-y-1 text-[11px] tabular-nums">
-                    <div className="font-semibold text-slate-900 dark:text-slate-100">
+                  <div className="p-2.5 rounded-xl border border-black/10 dark:border-white/10 bg-[#F7F7F7] dark:bg-[#0B0B0B] space-y-1 text-[11px] tabular-nums">
+                    <div className="font-semibold text-[#101010] dark:text-white">
                       Separated Geometry Dimensions
                     </div>
-                    <div className="flex justify-between text-slate-600 dark:text-slate-400">
+                    <div className="flex justify-between text-[#555555] dark:text-[#B5B5B5]">
                       <span>Original PDF Page:</span>
                       <span>
                         {ptToUnit(origW, unit)} × {ptToUnit(origH, unit)} {unit}
                       </span>
                     </div>
-                    <div className="flex justify-between text-slate-600 dark:text-slate-400">
+                    <div className="flex justify-between text-[#555555] dark:text-[#B5B5B5]">
                       <span>Active Source Region:</span>
-                      <span className="text-emerald-600 dark:text-emerald-400 font-medium">
+                      <span className="text-[#101010] dark:text-white font-semibold">
                         {ptToUnit(activeSourceBox.width, unit)} ×{' '}
                         {ptToUnit(activeSourceBox.height, unit)} {unit}
                       </span>
                     </div>
-                    <div className="flex justify-between text-slate-600 dark:text-slate-400">
+                    <div className="flex justify-between text-[#555555] dark:text-[#B5B5B5]">
                       <span>Output Sheet Size:</span>
                       <span>
                         {ptToUnit(pageConfig.widthPt, unit)} ×{' '}
@@ -1411,7 +2147,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                       </span>
                     </div>
                     {insets && (
-                      <div className="text-[10px] text-slate-500 pt-0.5">
+                      <div className="text-[10px] text-[#888888] dark:text-[#858585] pt-0.5">
                         Outer whitespace detected — L:{ptToUnit(insets.left, unit)} R:
                         {ptToUnit(insets.right, unit)} T:{ptToUnit(insets.top, unit)} B:
                         {ptToUnit(insets.bottom, unit)} {unit}
@@ -1422,14 +2158,14 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                   {/* Source Boundary Mode */}
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                      <span className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5]">
                         Source Boundary Mode
                       </span>
                       <button
                         type="button"
                         disabled={redetectingBounds}
                         onClick={onRedetectBounds}
-                        className="text-[10px] text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 disabled:opacity-50"
+                        className="text-[10px] text-[#101010] dark:text-white hover:underline flex items-center gap-1 disabled:opacity-50 font-medium"
                       >
                         {redetectingBounds ? (
                           <Loader2 className="w-3 h-3 animate-spin" />
@@ -1466,10 +2202,10 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                               onUpdateFitConfig({ boundaryMode: mode });
                             }
                           }}
-                          className={`py-1.5 px-2 rounded border text-[11px] font-medium text-left truncate ${
+                          className={`py-1.5 px-2 rounded-lg border text-[11px] font-medium text-left truncate transition-colors ${
                             fitConfig.boundaryMode === mode
-                              ? 'border-emerald-600 bg-emerald-600/12 text-emerald-700 dark:text-emerald-400'
-                              : 'border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300'
+                              ? 'studio-active-surface font-semibold'
+                              : 'border-black/15 dark:border-white/15 text-[#555555] dark:text-[#B5B5B5] hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
                           }`}
                         >
                           {label}
@@ -1483,10 +2219,10 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                     <button
                       type="button"
                       onClick={onToggleCropMode}
-                      className={`flex-1 py-1.5 px-2.5 rounded border text-[11px] font-medium flex items-center justify-center gap-1.5 ${
+                      className={`flex-1 py-1.5 px-2.5 rounded-lg border text-[11px] font-medium flex items-center justify-center gap-1.5 transition-colors ${
                         cropMode
-                          ? 'border-emerald-600 bg-emerald-600 text-white'
-                          : 'border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                          ? 'border-[#101010] bg-[#101010] text-white dark:border-white dark:bg-white dark:text-[#050505]'
+                          : 'border-black/15 dark:border-white/15 text-[#101010] dark:text-white hover:bg-black/[0.05] dark:hover:bg-white/[0.08]'
                       }`}
                     >
                       <Crop className="w-3.5 h-3.5" />
@@ -1502,7 +2238,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                           manualBoundsRect: undefined,
                         })
                       }
-                      className="px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] flex items-center gap-1"
+                      className="px-2.5 py-1.5 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white text-[11px] flex items-center gap-1 transition-colors"
                     >
                       <RotateCcw className="w-3 h-3" />
                       Reset
@@ -1511,12 +2247,12 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
 
                   {/* Numerical Crop Region Inputs */}
                   <div>
-                    <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-1">
+                    <div className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5] mb-1">
                       Crop Region ({unit})
                     </div>
                     <div className="grid grid-cols-2 gap-2">
                       <label className="block">
-                        <span className="text-[10px] text-slate-400">Crop X</span>
+                        <span className="text-[10px] text-[#888888] dark:text-[#858585]">Crop X</span>
                         <input
                           type="number"
                           step="0.5"
@@ -1526,11 +2262,11 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                               x: unitToPt(Number(e.target.value) || 0, unit),
                             })
                           }
-                          className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                          className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
                         />
                       </label>
                       <label className="block">
-                        <span className="text-[10px] text-slate-400">Crop Y</span>
+                        <span className="text-[10px] text-[#888888] dark:text-[#858585]">Crop Y</span>
                         <input
                           type="number"
                           step="0.5"
@@ -1540,11 +2276,11 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                               y: unitToPt(Number(e.target.value) || 0, unit),
                             })
                           }
-                          className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                          className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
                         />
                       </label>
                       <label className="block">
-                        <span className="text-[10px] text-slate-400">Crop Width</span>
+                        <span className="text-[10px] text-[#888888] dark:text-[#858585]">Crop Width</span>
                         <input
                           type="number"
                           step="0.5"
@@ -1557,11 +2293,11 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                               ),
                             })
                           }
-                          className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                          className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
                         />
                       </label>
                       <label className="block">
-                        <span className="text-[10px] text-slate-400">Crop Height</span>
+                        <span className="text-[10px] text-[#888888] dark:text-[#858585]">Crop Height</span>
                         <input
                           type="number"
                           step="0.5"
@@ -1574,7 +2310,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                               ),
                             })
                           }
-                          className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                          className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
                         />
                       </label>
                     </div>
@@ -1582,7 +2318,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
 
                   {fitConfig.boundaryMode === 'auto_content' && (
                     <label className="block">
-                      <span className="text-[10px] text-slate-400">
+                      <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                         Content Safety Padding ({unit})
                       </span>
                       <input
@@ -1598,7 +2334,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                             ),
                           })
                         }
-                        className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                        className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
                       />
                     </label>
                   )}
@@ -1606,7 +2342,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                   {/* Output Scaling & Proportional Fitting */}
                   <div className="space-y-2">
                     <label className="block">
-                      <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                      <span className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5]">
                         Output Scaling Mode (Aspect Locked)
                       </span>
                       <select
@@ -1616,7 +2352,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                             scalingMode: e.target.value as ScalingMode,
                           })
                         }
-                        className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#111827]"
+                        className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-select"
                       >
                         <option value="auto_fit_aspect">
                           Auto-Fit (Preserve Aspect Ratio)
@@ -1635,7 +2371,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
 
                     {fitConfig.scalingMode === 'custom_percent' && (
                       <label className="block">
-                        <span className="text-[10px] text-slate-400">
+                        <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                           Custom Scale (%)
                         </span>
                         <input
@@ -1651,7 +2387,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                               ),
                             })
                           }
-                          className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                          className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
                         />
                       </label>
                     )}
@@ -1665,14 +2401,14 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
         {activeTab === 'ai' && (
           <div className="space-y-4">
             {/* Scanning Mode Transparency & Optional AI-Enhanced Analysis */}
-            <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#111827] space-y-2.5">
+            <div className="p-3 rounded-xl border border-black/10 dark:border-white/12 bg-[#F7F7F7] dark:bg-[#0B0B0B] space-y-2.5">
               <div className="flex items-start gap-2">
-                <Cpu className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                <Cpu className="w-4 h-4 text-[#101010] dark:text-white shrink-0 mt-0.5" />
                 <div>
-                  <div className="text-[11px] font-semibold text-slate-900 dark:text-slate-100">
+                  <div className="text-[11px] font-semibold text-[#101010] dark:text-white">
                     Local PDF Scan — Active (No AI credits required)
                   </div>
-                  <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                  <p className="mt-0.5 text-[11px] text-[#555555] dark:text-[#B5B5B5] leading-relaxed">
                     {aiSummary ||
                       'Text, coordinates, fonts, borders, tables, and repeated blocks are extracted locally with PDF.js.'}
                   </p>
@@ -1680,9 +2416,9 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
               </div>
 
               {onRunAiEnhancedAnalysis && (
-                <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-2">
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                    <span className="font-semibold text-slate-700 dark:text-slate-200">
+                <div className="pt-2 border-t border-black/10 dark:border-white/10 space-y-2">
+                  <div className="text-[11px] text-[#555555] dark:text-[#B5B5B5] leading-relaxed">
+                    <span className="font-semibold text-[#101010] dark:text-white">
                       AI-Enhanced Analysis (Optional):
                     </span>{' '}
                     Requires Gemini API access and may consume AI quota to refine semantic field roles and layout relationships.
@@ -1691,7 +2427,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                     type="button"
                     disabled={aiEnhancing}
                     onClick={onRunAiEnhancedAnalysis}
-                    className="w-full py-2 px-3 rounded-md border border-blue-500/50 bg-blue-600/10 text-blue-600 dark:text-blue-400 hover:bg-blue-600/20 font-medium flex items-center justify-center gap-2 disabled:opacity-50"
+                    className="w-full py-2 px-3 rounded-lg border border-black/15 dark:border-white/15 bg-black/[0.04] dark:bg-white/[0.06] text-[#101010] dark:text-white hover:bg-black/[0.08] dark:hover:bg-white/[0.12] font-medium flex items-center justify-center gap-2 disabled:opacity-50 transition-colors"
                   >
                     {aiEnhancing ? (
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -1702,26 +2438,33 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                       ? 'Running AI-Enhanced Analysis...'
                       : 'AI-Enhanced Analysis'}
                   </button>
-                  {aiEnhanceNotice && (
-                    <div
-                      className={`p-2 rounded border text-[11px] leading-relaxed ${
-                        aiEnhanceNotice.kind === 'warning'
-                          ? 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300'
-                          : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-                      }`}
-                    >
-                      {aiEnhanceNotice.message}
-                    </div>
-                  )}
+                  <AnimatePresence>
+                    {aiEnhanceNotice && (
+                      <motion.div
+                        key="ai-enhance-notice"
+                        variants={popoverVariants}
+                        initial="initial"
+                        animate="animate"
+                        exit="exit"
+                        className={`p-2 rounded-lg border text-[11px] leading-relaxed ${
+                          aiEnhanceNotice.kind === 'warning'
+                            ? 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                            : 'border-black/15 dark:border-white/15 bg-black/[0.04] dark:bg-white/[0.06] text-[#101010] dark:text-white'
+                        }`}
+                      >
+                        {aiEnhanceNotice.message}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </div>
               )}
             </div>
 
-            <div className="pt-1 border-t border-slate-200 dark:border-slate-800 space-y-3">
-              <div className="font-semibold text-slate-900 dark:text-slate-100">
+            <div className="pt-1 border-t border-black/10 dark:border-white/10 space-y-3">
+              <div className="font-semibold text-[#101010] dark:text-white">
                 AI Editing Assistant (Optional)
               </div>
-              <p className="text-slate-500 dark:text-slate-400 leading-relaxed">
+              <p className="text-[#555555] dark:text-[#B5B5B5] leading-relaxed">
                 Issue natural-language instructions to edit document elements directly. Requires Gemini API access; significant changes show an exact preview diff before applying.
               </p>
             </div>
@@ -1738,12 +2481,12 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                 placeholder="e.g. Make all receipt numbers bold, or move the heading 5pt left..."
                 value={aiPrompt}
                 onChange={(e) => setAiPrompt(e.target.value)}
-                className="w-full p-2.5 rounded-md border border-slate-300 dark:border-slate-700 bg-transparent text-slate-900 dark:text-slate-100 focus:outline-none focus:border-blue-500"
+                className="w-full p-2.5 rounded-lg border studio-input focus:outline-none"
               />
               <button
                 type="submit"
                 disabled={aiLoading || !aiPrompt.trim()}
-                className="w-full py-2 rounded-md bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                className="w-full py-2 rounded-lg bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] font-semibold disabled:opacity-50 flex items-center justify-center gap-2 transition-colors active:scale-[0.98]"
               >
                 {aiLoading ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -1754,61 +2497,79 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
               </button>
             </form>
 
-            {aiError && (
-              <div className="p-2.5 rounded border border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-300">
-                {aiError}
-              </div>
-            )}
+            <AnimatePresence>
+              {aiError && (
+                <motion.div
+                  key="ai-error"
+                  variants={popoverVariants}
+                  initial="initial"
+                  animate="animate"
+                  exit="exit"
+                  className="p-2.5 rounded-lg border border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-300"
+                >
+                  {aiError}
+                </motion.div>
+              )}
+            </AnimatePresence>
 
-            {pendingPlan && (
-              <div className="p-3 rounded-md border border-blue-500/50 bg-blue-500/5 space-y-2.5">
-                <div className="font-semibold text-slate-900 dark:text-slate-100">
-                  Preview Proposed Changes
-                </div>
-                <div className="text-slate-600 dark:text-slate-300">
-                  {pendingPlan.summary}
-                </div>
-                <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                  {pendingPlan.impactDescription}
-                </div>
-                <div className="max-h-40 overflow-y-auto space-y-1 border-t border-slate-200 dark:border-slate-800 pt-2">
-                  {pendingPlan.operations.map((op, i) => (
-                    <div
-                      key={i}
-                      className="text-[11px] text-slate-700 dark:text-slate-300"
+            <AnimatePresence>
+              {pendingPlan && (
+                <motion.div
+                  key="ai-pending-plan"
+                  variants={popoverVariants}
+                  initial="initial"
+                  animate="animate"
+                  exit="exit"
+                  className="p-3 rounded-xl border border-black/25 dark:border-white/25 bg-black/[0.03] dark:bg-white/[0.04] space-y-2.5"
+                >
+                  <div className="font-semibold text-[#101010] dark:text-white">
+                    Preview Proposed Changes
+                  </div>
+                  <div className="text-[#555555] dark:text-[#B5B5B5]">
+                    {pendingPlan.summary}
+                  </div>
+                  <div className="text-[11px] text-[#888888] dark:text-[#858585]">
+                    {pendingPlan.impactDescription}
+                  </div>
+                  <div className="max-h-40 overflow-y-auto space-y-1 border-t border-black/10 dark:border-white/10 pt-2">
+                    {pendingPlan.operations.map((op, i) => (
+                      <div
+                        key={i}
+                        className="text-[11px] text-[#101010] dark:text-white"
+                      >
+                        <span className="font-mono uppercase font-semibold text-[#101010] dark:text-white">
+                          {op.action}
+                        </span>{' '}
+                        — {op.reason}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onApplyAiPlan(pendingPlan);
+                        setPendingPlan(null);
+                        setAiPrompt('');
+                      }}
+                      className="flex-1 py-1.5 rounded-lg bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] font-semibold transition-colors active:scale-[0.98]"
                     >
-                      <span className="font-mono uppercase text-blue-600 dark:text-blue-400">
-                        {op.action}
-                      </span>{' '}
-                      — {op.reason}
-                    </div>
-                  ))}
-                </div>
-                <div className="flex gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onApplyAiPlan(pendingPlan);
-                      setPendingPlan(null);
-                      setAiPrompt('');
-                    }}
-                    className="flex-1 py-1.5 rounded bg-blue-600 text-white font-medium hover:bg-blue-700"
-                  >
-                    Apply Changes
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPendingPlan(null)}
-                    className="px-3 py-1.5 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
+                      Apply Changes
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPendingPlan(null)}
+                      className="px-3 py-1.5 rounded-lg border border-black/15 dark:border-white/15 hover:bg-black/[0.05] dark:hover:bg-white/[0.08] text-[#101010] dark:text-white transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
-            <div className="pt-2 border-t border-slate-200 dark:border-slate-800 space-y-1.5">
-              <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+            <div className="pt-2 border-t border-black/10 dark:border-white/10 space-y-1.5">
+              <div className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5]">
                 Suggested Commands
               </div>
               {QUICK_AI_PROMPTS.map((q) => (
@@ -1820,7 +2581,7 @@ export const PropertiesInspector: React.FC<PropertiesInspectorProps> = ({
                     setAiPrompt(q);
                     void handleRunAiCommand(q);
                   }}
-                  className="w-full text-left p-2 rounded border border-slate-200 dark:border-slate-800 hover:border-blue-500/50 text-[11px] text-slate-600 dark:text-slate-300 transition-colors"
+                  className="w-full text-left p-2 rounded-lg border border-black/10 dark:border-white/12 hover:border-black/30 dark:hover:border-white/30 hover:bg-black/[0.03] dark:hover:bg-white/[0.04] text-[11px] text-[#555555] dark:text-[#B5B5B5] transition-colors"
                 >
                   {q}
                 </button>

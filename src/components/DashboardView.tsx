@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
   Download,
@@ -15,6 +15,15 @@ import {
   Table2,
   Trash2,
 } from 'lucide-react';
+import { motion, useReducedMotion } from 'motion/react';
+import {
+  MOTION_DURATION,
+  MOTION_EASE,
+  hasPlayedDashboardIntro,
+  markDashboardIntroPlayed,
+  staggerContainerVariants,
+  staggerItemVariants,
+} from '../config/motionSystem';
 import { BatchJob, NavSection, PDFProject } from '../types/pdfStudio';
 import {
   estimateStorageUsage,
@@ -56,6 +65,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 }) => {
   const [storageInfo, setStorageInfo] = useState<StorageUsageInfo | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const prefersReduced = useReducedMotion();
+  const shouldPlayIntroRef = useRef<boolean>(!hasPlayedDashboardIntro());
+
+  useEffect(() => {
+    markDashboardIntroPlayed();
+  }, []);
 
   useEffect(() => {
     void estimateStorageUsage(projects).then(setStorageInfo);
@@ -101,18 +116,28 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const totalRecords = projects.reduce((acc, p) => acc + p.dataRows.length, 0);
   const storagePercent = storageInfo?.percentUsed ?? 0;
 
+  const animateIntro = shouldPlayIntroRef.current && !prefersReduced;
+
   return (
-    <div className="flex-1 overflow-y-auto p-4 tablet:p-6 desktop:p-8 max-w-6xl mx-auto w-full space-y-5 tablet:space-y-6">
+    <motion.div
+      variants={staggerContainerVariants}
+      initial={animateIntro ? 'hidden' : false}
+      animate="visible"
+      className="flex-1 overflow-y-auto p-4 tablet:p-6 desktop:p-8 max-w-6xl mx-auto w-full space-y-5 tablet:space-y-6"
+    >
       {/* Greeting & Primary Create Header */}
-      <div className="flex flex-col tablet:flex-row tablet:items-center tablet:justify-between gap-4 pb-5 border-b border-slate-200/70 dark:border-white/10">
+      <motion.div
+        variants={staggerItemVariants}
+        className="flex flex-col tablet:flex-row tablet:items-center tablet:justify-between gap-4 pb-5 border-b border-black/10 dark:border-white/12"
+      >
         <div>
-          <div className="text-xs font-medium text-blue-600 dark:text-blue-400">
+          <div className="text-xs font-medium tracking-wide uppercase text-[#888888] dark:text-[#858585]">
             {getGreeting()} · Lazy Editor Studio
           </div>
-          <h1 className="mt-0.5 text-xl tablet:text-2xl font-display font-semibold tracking-tight text-slate-900 dark:text-slate-100">
+          <h1 className="mt-1 text-xl tablet:text-2xl font-display font-semibold tracking-tight text-[#101010] dark:text-white">
             PDF Studio AI Workspace
           </h1>
-          <p className="mt-1 text-xs tablet:text-sm text-slate-600 dark:text-slate-400">
+          <p className="mt-1 text-xs tablet:text-sm text-[#555555] dark:text-[#B5B5B5]">
             Scan PDFs locally with zero AI credits required, edit exact layouts, impose multi-copy grids, and export bulk serials.
           </p>
         </div>
@@ -123,7 +148,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               variant="glass"
               onClick={() => onNavigate('editor')}
             >
-              <PenTool className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+              <PenTool className="w-3.5 h-3.5 text-[#101010] dark:text-white" />
               Resume Editor
             </GlassButton>
           )}
@@ -134,23 +159,28 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             onClick={() => onNavigate('new-project')}
           />
         </div>
-      </div>
+      </motion.div>
 
       {/* Floating Glass Search Bar */}
-      <GlassSearchBar
-        value={searchQuery}
-        onChange={setSearchQuery}
-        placeholder="Search projects, templates, or recent exports..."
-      />
+      <motion.div variants={staggerItemVariants}>
+        <GlassSearchBar
+          value={searchQuery}
+          onChange={setSearchQuery}
+          placeholder="Search projects, templates, or recent exports..."
+        />
+      </motion.div>
 
       {/* Quick Actions Strip */}
-      <div className="flex gap-2.5 overflow-x-auto pb-1 no-scrollbar snap-x">
+      <motion.div
+        variants={staggerItemVariants}
+        className="flex gap-2.5 overflow-x-auto pb-1 no-scrollbar snap-x"
+      >
         <GlassButton
           variant="glass"
           className="snap-start shrink-0"
           onClick={() => onNavigate('new-project')}
         >
-          <FilePlus2 className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+          <FilePlus2 className="w-3.5 h-3.5 text-[#101010] dark:text-white" />
           Scan & Upload PDF
         </GlassButton>
         <GlassButton
@@ -162,7 +192,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               : onNavigate('new-project')
           }
         >
-          <Printer className="w-3.5 h-3.5 text-indigo-500" />
+          <Printer className="w-3.5 h-3.5 text-[#555555] dark:text-[#B5B5B5]" />
           Bulk & Multi-Copy
         </GlassButton>
         <GlassButton
@@ -174,7 +204,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               : onNavigate('new-project')
           }
         >
-          <Table2 className="w-3.5 h-3.5 text-emerald-500" />
+          <Table2 className="w-3.5 h-3.5 text-[#555555] dark:text-[#B5B5B5]" />
           Data Merge
         </GlassButton>
         <GlassButton
@@ -182,7 +212,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           className="snap-start shrink-0"
           onClick={() => onNavigate('batch-center')}
         >
-          <ListChecks className="w-3.5 h-3.5 text-amber-500" />
+          <ListChecks className="w-3.5 h-3.5 text-[#555555] dark:text-[#B5B5B5]" />
           Batch Center
         </GlassButton>
         <GlassButton
@@ -190,82 +220,87 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           className="snap-start shrink-0"
           onClick={() => onNavigate('asset-library')}
         >
-          <FolderHeart className="w-3.5 h-3.5 text-violet-500" />
+          <FolderHeart className="w-3.5 h-3.5 text-[#555555] dark:text-[#B5B5B5]" />
           Asset Library
         </GlassButton>
-      </div>
+      </motion.div>
 
       {/* Responsive Metrics & Storage Usage Indicator */}
-      <div className="grid grid-cols-2 desktop:grid-cols-4 gap-3 tablet:gap-4">
+      <motion.div
+        variants={staggerItemVariants}
+        className="grid grid-cols-2 desktop:grid-cols-4 gap-3 tablet:gap-4"
+      >
         <GlassCard level={3} padding="md">
-          <div className="text-[11px] tablet:text-xs text-slate-500 dark:text-slate-400">
+          <div className="text-[11px] tablet:text-xs text-[#555555] dark:text-[#B5B5B5]">
             Projects
           </div>
-          <div className="mt-1 text-xl tablet:text-2xl font-display font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
+          <div className="mt-1 text-xl tablet:text-2xl font-display font-semibold text-[#101010] dark:text-white tabular-nums">
             {projects.length}
           </div>
-          <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400 tabular-nums">
+          <div className="mt-0.5 text-[11px] text-[#888888] dark:text-[#858585] tabular-nums">
             {favoritesCount} starred
           </div>
         </GlassCard>
 
         <GlassCard level={3} padding="md">
-          <div className="text-[11px] tablet:text-xs text-slate-500 dark:text-slate-400">
+          <div className="text-[11px] tablet:text-xs text-[#555555] dark:text-[#B5B5B5]">
             Templates
           </div>
-          <div className="mt-1 text-xl tablet:text-2xl font-display font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
+          <div className="mt-1 text-xl tablet:text-2xl font-display font-semibold text-[#101010] dark:text-white tabular-nums">
             {templatesCount}
           </div>
-          <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400 tabular-nums">
+          <div className="mt-0.5 text-[11px] text-[#888888] dark:text-[#858585] tabular-nums">
             Reusable layouts
           </div>
         </GlassCard>
 
         <GlassCard level={3} padding="md">
-          <div className="text-[11px] tablet:text-xs text-slate-500 dark:text-slate-400">
+          <div className="text-[11px] tablet:text-xs text-[#555555] dark:text-[#B5B5B5]">
             Dataset Rows
           </div>
-          <div className="mt-1 text-xl tablet:text-2xl font-display font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
+          <div className="mt-1 text-xl tablet:text-2xl font-display font-semibold text-[#101010] dark:text-white tabular-nums">
             {totalRecords}
           </div>
-          <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400 tabular-nums">
+          <div className="mt-0.5 text-[11px] text-[#888888] dark:text-[#858585] tabular-nums">
             CSV / XLSX ready
           </div>
         </GlassCard>
 
         <GlassCard level={3} padding="md">
-          <div className="flex items-center justify-between text-[11px] tablet:text-xs text-slate-500 dark:text-slate-400">
+          <div className="flex items-center justify-between text-[11px] tablet:text-xs text-[#555555] dark:text-[#B5B5B5]">
             <span>Local Storage</span>
-            <HardDrive className="w-3.5 h-3.5 text-slate-400" />
+            <HardDrive className="w-3.5 h-3.5 text-[#888888] dark:text-[#858585]" />
           </div>
-          <div className="mt-1 text-xl tablet:text-2xl font-display font-semibold text-slate-900 dark:text-slate-100 tabular-nums">
+          <div className="mt-1 text-xl tablet:text-2xl font-display font-semibold text-[#101010] dark:text-white tabular-nums">
             {storageInfo ? storageInfo.formattedUsed : '0 KB'}
           </div>
-          <div className="mt-2 h-1.5 w-full rounded-full bg-slate-200/80 dark:bg-white/10 overflow-hidden">
-            <div
-              className="h-full rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 transition-[width] duration-300"
-              style={{ width: `${Math.max(4, Math.min(100, storagePercent || 6))}%` }}
+          <div className="mt-2 h-1.5 w-full rounded-full bg-black/10 dark:bg-white/12 overflow-hidden">
+            <motion.div
+              className="h-full rounded-full bg-[#101010] dark:bg-white"
+              initial={false}
+              animate={{ width: `${Math.max(4, Math.min(100, storagePercent || 6))}%` }}
+              transition={{ duration: MOTION_DURATION.slow, ease: MOTION_EASE.liquid }}
             />
           </div>
           {storageInfo?.formattedQuota && (
-            <div className="mt-1 text-[10px] text-slate-500 dark:text-slate-400 tabular-nums truncate">
+            <div className="mt-1 text-[10px] text-[#888888] dark:text-[#858585] tabular-nums truncate">
               {storagePercent}% of {storageInfo.formattedQuota}
             </div>
           )}
         </GlassCard>
-      </div>
+      </motion.div>
 
-      {/* Horizontal Smooth-Scroll Recent Projects Carousel (Mobile & Quick Visual Access) */}
+      {/* Horizontal Smooth-Scroll Recent Projects Carousel */}
       {filteredProjects.length > 0 && (
         <section className="space-y-2.5">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-display font-semibold text-slate-900 dark:text-slate-100">
+            <h2 className="text-sm font-display font-semibold text-[#101010] dark:text-white">
               Recent Projects
             </h2>
             <button
               type="button"
               onClick={() => onNavigate('templates')}
-              className="text-xs font-medium text-blue-600 dark:text-blue-400 py-1 px-2 flex items-center gap-1"
+              className="text-xs font-medium text-[#555555] dark:text-[#B5B5B5] hover:text-[#101010] dark:hover:text-white py-1 px-2 flex items-center gap-1 transition-colors"
             >
               Manage All
               <ArrowRight className="w-3.5 h-3.5" />
@@ -286,7 +321,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     onNavigate('editor');
                   }}
                 >
-                  <div className="relative h-28 rounded-xl bg-white border border-slate-200/70 dark:border-white/10 flex items-center justify-center overflow-hidden">
+                  <div className="relative h-28 rounded-xl bg-white border border-black/10 dark:border-white/12 flex items-center justify-center overflow-hidden">
                     {thumb ? (
                       <img
                         src={thumb}
@@ -295,7 +330,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                         className="max-h-full max-w-full object-contain"
                       />
                     ) : (
-                      <Layers className="w-6 h-6 text-slate-400" />
+                      <Layers className="w-6 h-6 text-[#888888]" />
                     )}
                     {onToggleFavorite && (
                       <button
@@ -309,12 +344,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                           e.stopPropagation();
                           onToggleFavorite(project);
                         }}
-                        className="absolute top-1.5 right-1.5 min-w-[34px] min-h-[34px] rounded-xl bg-white/85 dark:bg-slate-900/80 border border-slate-200/70 dark:border-white/15 flex items-center justify-center text-slate-500 hover:text-amber-500 transition-colors"
+                        className="absolute top-1.5 right-1.5 min-w-[34px] min-h-[34px] rounded-xl bg-white/90 dark:bg-[#111111]/85 border border-black/10 dark:border-white/15 flex items-center justify-center text-[#555555] dark:text-[#B5B5B5] hover:text-[#101010] dark:hover:text-white transition-colors"
                       >
                         <Star
                           className={`w-3.5 h-3.5 ${
                             project.isFavorite
-                              ? 'fill-amber-400 text-amber-400'
+                              ? 'fill-[#101010] text-[#101010] dark:fill-white dark:text-white'
                               : ''
                           }`}
                         />
@@ -322,10 +357,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     )}
                   </div>
                   <div className="min-w-0">
-                    <div className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
+                    <div className="text-xs font-semibold text-[#101010] dark:text-white truncate">
                       {project.name}
                     </div>
-                    <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400 tabular-nums truncate">
+                    <div className="mt-0.5 text-[11px] text-[#888888] dark:text-[#858585] tabular-nums truncate">
                       {project.pageCount} pg · {project.elements.length} el ·{' '}
                       {project.pageConfig.sizePreset}
                     </div>
@@ -341,13 +376,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       {favoriteAndTemplates.length > 0 && (
         <section className="space-y-2.5">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-display font-semibold text-slate-900 dark:text-slate-100">
+            <h2 className="text-sm font-display font-semibold text-[#101010] dark:text-white">
               Favorite & Saved Templates
             </h2>
             <button
               type="button"
               onClick={() => onNavigate('templates')}
-              className="text-xs font-medium text-blue-600 dark:text-blue-400 py-1 px-2"
+              className="text-xs font-medium text-[#555555] dark:text-[#B5B5B5] hover:text-[#101010] dark:hover:text-white py-1 px-2 transition-colors"
             >
               View Library
             </button>
@@ -365,7 +400,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   }}
                   className="snap-start shrink-0 w-44 rounded-2xl border glass-level-3 glass-interactive p-2.5 text-left"
                 >
-                  <div className="h-22 rounded-xl bg-white flex items-center justify-center overflow-hidden mb-2 border border-slate-200/70">
+                  <div className="h-22 rounded-xl bg-white flex items-center justify-center overflow-hidden mb-2 border border-black/10">
                     {thumb ? (
                       <img
                         src={thumb}
@@ -374,18 +409,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                         className="max-h-full max-w-full object-contain"
                       />
                     ) : (
-                      <Layers className="w-6 h-6 text-slate-400" />
+                      <Layers className="w-6 h-6 text-[#888888]" />
                     )}
                   </div>
                   <div className="flex items-center justify-between gap-1">
-                    <span className="text-xs font-semibold text-slate-900 dark:text-slate-100 truncate">
+                    <span className="text-xs font-semibold text-[#101010] dark:text-white truncate">
                       {tpl.name}
                     </span>
                     {tpl.isFavorite && (
-                      <Star className="w-3 h-3 fill-amber-400 text-amber-400 shrink-0" />
+                      <Star className="w-3 h-3 fill-[#101010] text-[#101010] dark:fill-white dark:text-white shrink-0" />
                     )}
                   </div>
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400 tabular-nums">
+                  <div className="text-[11px] text-[#888888] dark:text-[#858585] tabular-nums">
                     {tpl.pageCount} pg · v{tpl.version}
                   </div>
                 </button>
@@ -396,29 +431,32 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       )}
 
       {/* Two-Column Desktop Split: All Projects List + Recent Export Activity */}
-      <div className="grid grid-cols-1 desktop:grid-cols-12 gap-4 tablet:gap-5">
+      <motion.div
+        variants={staggerItemVariants}
+        className="grid grid-cols-1 desktop:grid-cols-12 gap-4 tablet:gap-5"
+      >
         {/* Recent Projects Directory */}
         <GlassCard
           level={3}
           padding="none"
           className="desktop:col-span-8 overflow-hidden"
         >
-          <div className="px-4 tablet:px-5 py-3.5 border-b border-slate-200/70 dark:border-white/10 flex items-center justify-between">
-            <h2 className="text-sm font-display font-semibold text-slate-900 dark:text-slate-100">
+          <div className="px-4 tablet:px-5 py-3.5 border-b border-black/10 dark:border-white/12 flex items-center justify-between">
+            <h2 className="text-sm font-display font-semibold text-[#101010] dark:text-white">
               All Projects
             </h2>
-            <span className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+            <span className="text-xs text-[#888888] dark:text-[#858585] tabular-nums">
               {filteredProjects.length} shown
             </span>
           </div>
 
           {filteredProjects.length === 0 ? (
             <div className="p-8 tablet:p-10 text-center">
-              <FolderOpen className="w-8 h-8 text-slate-400 mx-auto mb-3" />
-              <div className="text-sm font-medium text-slate-800 dark:text-slate-200">
+              <FolderOpen className="w-8 h-8 text-[#888888] dark:text-[#858585] mx-auto mb-3" />
+              <div className="text-sm font-medium text-[#101010] dark:text-white">
                 {query ? 'No matching projects found' : 'No PDF projects yet'}
               </div>
-              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
+              <p className="mt-1 text-xs text-[#555555] dark:text-[#B5B5B5] max-w-sm mx-auto">
                 {query
                   ? 'Try clearing or refining your search query.'
                   : 'Upload an existing PDF document or create a blank/sample invoice or receipt document to begin editing.'}
@@ -437,7 +475,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           ) : (
             <>
               {/* Mobile Tap List */}
-              <div className="divide-y divide-slate-200/70 dark:divide-white/10 tablet:hidden">
+              <div className="divide-y divide-black/10 dark:divide-white/10 tablet:hidden">
                 {filteredProjects.slice(0, 10).map((project) => (
                   <div
                     key={project.id}
@@ -451,10 +489,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       }}
                       className="min-w-0 flex-1 text-left"
                     >
-                      <div className="text-sm font-medium text-slate-900 dark:text-slate-100 truncate">
+                      <div className="text-sm font-medium text-[#101010] dark:text-white truncate">
                         {project.name}
                       </div>
-                      <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+                      <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-[#888888] dark:text-[#858585] tabular-nums">
                         <span>{project.pageCount} pg</span>
                         <span aria-hidden="true">·</span>
                         <span>{project.elements.length} el</span>
@@ -469,7 +507,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                           onOpenProject(project);
                           onNavigate('editor');
                         }}
-                        className="min-h-[44px] px-3 rounded-xl text-xs font-medium bg-blue-600/14 text-blue-600 dark:text-blue-400"
+                        className="min-h-[44px] px-3 rounded-xl text-xs font-medium bg-[#101010] text-white dark:bg-white dark:text-[#050505]"
                       >
                         Open
                       </button>
@@ -477,7 +515,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                         type="button"
                         onClick={() => onDeleteProject(project.id)}
                         aria-label={`Delete ${project.name}`}
-                        className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl text-slate-400 hover:text-red-500"
+                        className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl text-[#888888] hover:text-[#101010] dark:text-[#858585] dark:hover:text-white"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -490,7 +528,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <div className="hidden tablet:block overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
-                    <tr className="border-b border-slate-200/70 dark:border-white/10 text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                    <tr className="border-b border-black/10 dark:border-white/12 text-[11px] font-medium text-[#888888] dark:text-[#858585]">
                       <th className="py-2.5 px-4 w-8" aria-label="Favorite" />
                       <th className="py-2.5 px-3">Project Name</th>
                       <th className="py-2.5 px-3 text-right">Pages</th>
@@ -499,11 +537,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       <th className="py-2.5 px-4 text-right">Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-200/60 dark:divide-white/8 text-xs">
+                  <tbody className="divide-y divide-black/8 dark:divide-white/8 text-xs">
                     {filteredProjects.slice(0, 12).map((project) => (
                       <tr
                         key={project.id}
-                        className="hover:bg-slate-200/35 dark:hover:bg-white/5 transition-colors"
+                        className="hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition-colors"
                       >
                         <td className="py-2.5 pl-4 pr-1">
                           {onToggleFavorite && (
@@ -511,41 +549,41 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                               type="button"
                               onClick={() => onToggleFavorite(project)}
                               aria-label="Toggle favorite"
-                              className="p-1 text-slate-400 hover:text-amber-500"
+                              className="p-1 text-[#888888] hover:text-[#101010] dark:text-[#858585] dark:hover:text-white"
                             >
                               <Star
                                 className={`w-3.5 h-3.5 ${
                                   project.isFavorite
-                                    ? 'fill-amber-400 text-amber-400'
+                                    ? 'fill-[#101010] text-[#101010] dark:fill-white dark:text-white'
                                     : ''
                                 }`}
                               />
                             </button>
                           )}
                         </td>
-                        <td className="py-2.5 px-3 font-medium text-slate-900 dark:text-slate-100">
+                        <td className="py-2.5 px-3 font-medium text-[#101010] dark:text-white">
                           <button
                             type="button"
                             onClick={() => {
                               onOpenProject(project);
                               onNavigate('editor');
                             }}
-                            className="hover:text-blue-600 dark:hover:text-blue-400 text-left truncate max-w-[220px] block"
+                            className="hover:underline text-left truncate max-w-[220px] block"
                           >
                             {project.name}
                           </button>
-                          <div className="text-[11px] font-normal text-slate-500 dark:text-slate-400 truncate max-w-[220px]">
+                          <div className="text-[11px] font-normal text-[#888888] dark:text-[#858585] truncate max-w-[220px]">
                             {project.sourcePdfName}
                             {project.isTemplate ? ' · Template' : ''}
                           </div>
                         </td>
-                        <td className="py-2.5 px-3 text-right text-slate-600 dark:text-slate-300 tabular-nums">
+                        <td className="py-2.5 px-3 text-right text-[#555555] dark:text-[#B5B5B5] tabular-nums">
                           {project.pageCount}
                         </td>
-                        <td className="py-2.5 px-3 text-right text-slate-600 dark:text-slate-300 tabular-nums">
+                        <td className="py-2.5 px-3 text-right text-[#555555] dark:text-[#B5B5B5] tabular-nums">
                           {project.elements.length}
                         </td>
-                        <td className="py-2.5 px-3 text-slate-500 dark:text-slate-400 tabular-nums whitespace-nowrap">
+                        <td className="py-2.5 px-3 text-[#888888] dark:text-[#858585] tabular-nums whitespace-nowrap">
                           {new Date(project.updatedAt).toLocaleDateString()}
                         </td>
                         <td className="py-2.5 px-4 text-right whitespace-nowrap">
@@ -556,7 +594,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                                 onOpenProject(project);
                                 onNavigate('editor');
                               }}
-                              className="px-2.5 py-1 rounded-lg text-xs font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-500/12"
+                              className="px-2.5 py-1 rounded-lg text-xs font-medium border border-black/15 dark:border-white/15 text-[#101010] dark:text-white hover:bg-[#101010] hover:text-white dark:hover:bg-white dark:hover:text-[#050505] transition-colors"
                             >
                               Open
                             </button>
@@ -564,7 +602,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                               type="button"
                               onClick={() => onDeleteProject(project.id)}
                               aria-label={`Delete ${project.name}`}
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-500/12"
+                              className="p-1.5 rounded-lg text-[#888888] hover:text-[#101010] dark:text-[#858585] dark:hover:text-white hover:bg-black/[0.06] dark:hover:bg-white/[0.08] transition-colors"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
@@ -585,39 +623,39 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           padding="none"
           className="desktop:col-span-4 overflow-hidden flex flex-col"
         >
-          <div className="px-4 tablet:px-5 py-3.5 border-b border-slate-200/70 dark:border-white/10 flex items-center justify-between">
-            <h2 className="text-sm font-display font-semibold text-slate-900 dark:text-slate-100">
+          <div className="px-4 tablet:px-5 py-3.5 border-b border-black/10 dark:border-white/12 flex items-center justify-between">
+            <h2 className="text-sm font-display font-semibold text-[#101010] dark:text-white">
               Recent Export Activity
             </h2>
             <button
               type="button"
               onClick={() => onNavigate('batch-center')}
-              className="text-xs font-medium text-blue-600 dark:text-blue-400"
+              className="text-xs font-medium text-[#555555] dark:text-[#B5B5B5] hover:text-[#101010] dark:hover:text-white transition-colors"
             >
               Queue
             </button>
           </div>
 
           {recentExportActivity.length === 0 ? (
-            <div className="p-6 text-center text-xs text-slate-500 dark:text-slate-400 flex-1 flex flex-col items-center justify-center">
-              <Download className="w-6 h-6 text-slate-400 mb-2" />
-              <div>No exports recorded yet</div>
-              <div className="mt-1 text-[11px] text-slate-400">
+            <div className="p-6 text-center text-xs text-[#888888] dark:text-[#858585] flex-1 flex flex-col items-center justify-center">
+              <Download className="w-6 h-6 text-[#888888] dark:text-[#858585] mb-2" />
+              <div className="text-[#555555] dark:text-[#B5B5B5]">No exports recorded yet</div>
+              <div className="mt-1 text-[11px] text-[#888888] dark:text-[#858585]">
                 Exported PDFs and batch jobs appear here automatically.
               </div>
             </div>
           ) : (
-            <div className="divide-y divide-slate-200/60 dark:divide-white/8">
+            <div className="divide-y divide-black/8 dark:divide-white/8">
               {recentExportActivity.map((job) => (
                 <div
                   key={job.id}
                   className="px-4 py-3 flex items-start justify-between gap-2 text-xs"
                 >
                   <div className="min-w-0">
-                    <div className="font-medium text-slate-900 dark:text-slate-100 truncate">
+                    <div className="font-medium text-[#101010] dark:text-white truncate">
                       {job.outputFileName || job.projectName}
                     </div>
-                    <div className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400 tabular-nums truncate">
+                    <div className="mt-0.5 text-[11px] text-[#888888] dark:text-[#858585] tabular-nums truncate">
                       {job.status}
                       {job.outputSizeBytes
                         ? ` · ${formatBytesCompact(job.outputSizeBytes)}`
@@ -628,11 +666,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   </div>
                   <span
                     className={`text-[11px] font-medium capitalize shrink-0 ${
-                      job.status === 'completed'
-                        ? 'text-emerald-600 dark:text-emerald-400'
-                        : job.status === 'failed'
-                        ? 'text-red-500'
-                        : 'text-blue-600 dark:text-blue-400'
+                      job.status === 'failed'
+                        ? 'text-[#101010] dark:text-white underline decoration-dotted'
+                        : 'text-[#555555] dark:text-[#B5B5B5]'
                     }`}
                   >
                     {job.status}
@@ -642,7 +678,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           )}
         </GlassCard>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 };

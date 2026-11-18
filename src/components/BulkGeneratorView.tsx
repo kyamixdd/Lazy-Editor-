@@ -1,4 +1,5 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useId, useMemo, useRef, useState } from 'react';
+import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'motion/react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -9,6 +10,12 @@ import {
   Trash2,
   Upload,
 } from 'lucide-react';
+import {
+  BUTTON_TAP,
+  MOTION_DURATION,
+  MOTION_EASE,
+  MOTION_SPRING,
+} from '../config/motionSystem';
 import {
   BoundaryMode,
   BulkConfig,
@@ -46,6 +53,8 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
   onUpdateProject,
   onGoToExport,
 }) => {
+  const shouldReduceMotion = useReducedMotion();
+  const subTabGroupId = useId();
   const viewport = useViewport();
   const csvInputRef = useRef<HTMLInputElement>(null);
   const [subTab, setSubTab] = useState<'copies' | 'bulk' | 'serial' | 'preview'>('copies');
@@ -228,13 +237,13 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
   return (
     <div className="flex-1 flex flex-col desktop:flex-row min-h-full desktop:h-screen desktop:overflow-hidden">
       {/* Left Configuration Column */}
-      <div className="w-full desktop:w-[540px] shrink-0 border-b desktop:border-b-0 desktop:border-r border-slate-200/80 dark:border-white/10 glass-level-2 flex flex-col desktop:overflow-hidden">
-        <div className="px-4 tablet:px-5 py-3.5 tablet:py-4 border-b border-slate-200/75 dark:border-white/10 flex flex-wrap items-center justify-between gap-2.5">
+      <div className="w-full desktop:w-[540px] shrink-0 border-b desktop:border-b-0 desktop:border-r border-black/10 dark:border-white/12 glass-level-2 flex flex-col desktop:overflow-hidden">
+        <div className="px-4 tablet:px-5 py-3.5 tablet:py-4 border-b border-black/10 dark:border-white/12 flex flex-wrap items-center justify-between gap-2.5">
           <div className="min-w-0">
-            <h1 className="text-sm tablet:text-base font-display font-semibold text-slate-900 dark:text-slate-100 truncate">
+            <h1 className="text-sm tablet:text-base font-display font-semibold text-[#101010] dark:text-white truncate">
               Bulk & Multi-Copy Engine
             </h1>
-            <p className="text-[11px] tablet:text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+            <p className="text-[11px] tablet:text-xs text-[#555555] dark:text-[#B5B5B5] tabular-nums">
               {bulkConfig.totalOutputPages} pages × {copiesPerPage} copies ={' '}
               {bulkConfig.totalOutputPages * copiesPerPage} documents
             </p>
@@ -260,38 +269,59 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
         </div>
 
         {/* Sub-tabs */}
-        <div
-          className={`grid ${
-            availableTabs.length === 4 ? 'grid-cols-4' : 'grid-cols-3'
-          } border-b border-slate-200 dark:border-slate-800 text-xs font-medium shrink-0`}
-        >
-          {availableTabs.map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setSubTab(id)}
-              className={`min-h-[44px] desktop:min-h-0 py-2.5 px-1 text-center border-b-2 transition-colors flex items-center justify-center gap-1 touch-manipulation ${
-                effectiveSubTab === id
-                  ? 'border-blue-600 text-blue-600 dark:text-blue-400'
-                  : 'border-transparent text-slate-500 hover:text-slate-900 dark:hover:text-slate-100'
-              }`}
-            >
-              {id === 'preview' && <Eye className="w-3.5 h-3.5" />}
-              <span className="truncate">{label}</span>
-            </button>
-          ))}
-        </div>
+        <LayoutGroup id={`bulk-tabs-${subTabGroupId}`}>
+          <div
+            className={`grid ${
+              availableTabs.length === 4 ? 'grid-cols-4' : 'grid-cols-3'
+            } border-b border-black/10 dark:border-white/12 text-xs font-medium shrink-0`}
+          >
+            {availableTabs.map(([id, label]) => {
+              const active = effectiveSubTab === id;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setSubTab(id)}
+                  className={`relative min-h-[44px] desktop:min-h-0 py-2.5 px-1 text-center transition-colors flex items-center justify-center gap-1 touch-manipulation ${
+                    active
+                      ? 'text-[#101010] dark:text-white bg-black/[0.04] dark:bg-white/[0.06]'
+                      : 'text-[#888888] dark:text-[#858585] hover:text-[#101010] dark:hover:text-white'
+                  }`}
+                >
+                  {id === 'preview' && <Eye className="w-3.5 h-3.5" />}
+                  <span className="truncate">{label}</span>
+                  {active && (
+                    <motion.span
+                      layoutId={`bulk-tab-underline-${subTabGroupId}`}
+                      transition={shouldReduceMotion ? { duration: 0.08 } : MOTION_SPRING.nav}
+                      className="absolute bottom-0 left-0 right-0 h-0.5 bg-[#101010] dark:bg-white"
+                    />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </LayoutGroup>
 
         {effectiveSubTab !== 'preview' && (
-        <div className="flex-1 desktop:overflow-y-auto p-4 tablet:p-5 space-y-5 text-xs">
+        <div className="flex-1 desktop:overflow-y-auto p-4 tablet:p-5 text-xs">
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={effectiveSubTab}
+              initial={shouldReduceMotion ? { opacity: 1 } : { opacity: 0, y: 5 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, y: -4 }}
+              transition={{ duration: MOTION_DURATION.fast, ease: MOTION_EASE.liquid }}
+              className="space-y-5"
+            >
           {effectiveSubTab === 'copies' && (
             <>
-              <label className="flex items-center justify-between p-3 rounded-lg border border-slate-200 dark:border-slate-800 cursor-pointer">
+              <label className="flex items-center justify-between p-3 rounded-xl border border-black/10 dark:border-white/12 bg-black/[0.02] dark:bg-white/[0.02] cursor-pointer">
                 <div>
-                  <div className="font-semibold text-slate-900 dark:text-slate-100">
+                  <div className="font-semibold text-[#101010] dark:text-white">
                     Enable Multiple Copies Per Page
                   </div>
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                  <div className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                     Place 2, 4, 6, 8, 9, 12 or custom grid copies on every output sheet
                   </div>
                 </div>
@@ -299,21 +329,23 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                   type="checkbox"
                   checked={copiesConfig.enabled}
                   onChange={(e) => updateCopies({ enabled: e.target.checked })}
-                  className="rounded border-slate-400 text-blue-600"
+                  className="rounded border-black/30 dark:border-white/30 accent-[#101010] dark:accent-white"
                 />
               </label>
 
               {/* Presets */}
               <div>
-                <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400 mb-2">
+                <div className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5] mb-2">
                   Copies Per Page Preset
                 </div>
                 <div className="grid grid-cols-3 tablet:grid-cols-5 gap-1.5">
                   {([1, 2, 3, 4, 6, 8, 9, 12, 'custom'] as const).map(
                     (preset) => (
-                      <button
+                      <motion.button
                         key={String(preset)}
                         type="button"
+                        whileTap={shouldReduceMotion ? undefined : BUTTON_TAP}
+                        transition={MOTION_SPRING.snappy}
                         onClick={() => {
                           const grid =
                             preset === 'custom'
@@ -337,14 +369,14 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                             rows: grid.rows,
                           });
                         }}
-                        className={`min-h-[40px] desktop:min-h-0 py-1.5 rounded border font-medium tabular-nums touch-manipulation ${
+                        className={`min-h-[40px] desktop:min-h-0 py-1.5 rounded-lg border font-medium tabular-nums touch-manipulation transition-colors ${
                           copiesConfig.copiesPreset === preset
-                            ? 'border-blue-600 bg-blue-600/15 text-blue-600 dark:text-blue-400'
-                            : 'border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300'
+                            ? 'studio-active-surface font-semibold'
+                            : 'border-black/15 dark:border-white/15 text-[#555555] dark:text-[#B5B5B5] hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
                         }`}
                       >
                         {preset === 'custom' ? 'Custom' : `${preset}×`}
-                      </button>
+                      </motion.button>
                     )
                   )}
                 </div>
@@ -353,7 +385,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
               {/* Grid Columns & Rows */}
               <div className="grid grid-cols-2 gap-3">
                 <label className="block">
-                  <span className="text-[11px] text-slate-500">Columns</span>
+                  <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">Columns</span>
                   <input
                     type="number"
                     min="1"
@@ -365,11 +397,11 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                         columns: Math.max(1, Number(e.target.value) || 1),
                       })
                     }
-                    className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                    className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
                   />
                 </label>
                 <label className="block">
-                  <span className="text-[11px] text-slate-500">Rows</span>
+                  <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">Rows</span>
                   <input
                     type="number"
                     min="1"
@@ -381,7 +413,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                         rows: Math.max(1, Number(e.target.value) || 1),
                       })
                     }
-                    className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                    className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
                   />
                 </label>
               </div>
@@ -389,7 +421,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
               {/* Spacing & Outer Margins */}
               <div className="grid grid-cols-2 gap-3">
                 <label className="block">
-                  <span className="text-[11px] text-slate-500">
+                  <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                     Horizontal Spacing ({unit})
                   </span>
                   <input
@@ -405,11 +437,11 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                         ),
                       })
                     }
-                    className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                    className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
                   />
                 </label>
                 <label className="block">
-                  <span className="text-[11px] text-slate-500">
+                  <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                     Vertical Spacing ({unit})
                   </span>
                   <input
@@ -425,13 +457,13 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                         ),
                       })
                     }
-                    className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                    className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
                   />
                 </label>
               </div>
 
               <div>
-                <div className="text-[11px] font-medium text-slate-500 mb-1.5">
+                <div className="text-[11px] font-medium text-[#555555] dark:text-[#B5B5B5] mb-1.5">
                   Outer Page Margins ({unit})
                 </div>
                 <div className="grid grid-cols-2 tablet:grid-cols-4 gap-2">
@@ -444,7 +476,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                     ] as const
                   ).map(([lbl, key]) => (
                     <label key={key} className="block">
-                      <span className="text-[10px] text-slate-400">{lbl}</span>
+                      <span className="text-[10px] text-[#888888] dark:text-[#858585]">{lbl}</span>
                       <input
                         type="number"
                         min="0"
@@ -458,7 +490,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                             ),
                           })
                         }
-                        className="mt-0.5 w-full min-h-[40px] desktop:min-h-0 px-2 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                        className="mt-0.5 w-full min-h-[40px] desktop:min-h-0 px-2 py-1.5 rounded-lg border studio-input tabular-nums"
                       />
                     </label>
                   ))}
@@ -468,7 +500,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
               {/* Scaling, Rotation, Source Scope */}
               <div className="grid grid-cols-2 gap-3">
                 <label className="block">
-                  <span className="text-[11px] text-slate-500">
+                  <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                     Individual Copy Scale (%)
                   </span>
                   <input
@@ -485,11 +517,11 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                         ),
                       })
                     }
-                    className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent disabled:opacity-45 tabular-nums"
+                    className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input disabled:opacity-45 tabular-nums"
                   />
                 </label>
                 <label className="block">
-                  <span className="text-[11px] text-slate-500">
+                  <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                     Copy Rotation
                   </span>
                   <select
@@ -503,7 +535,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                           | 270,
                       })
                     }
-                    className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#111827]"
+                    className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-select"
                   >
                     <option value={0}>0°</option>
                     <option value={90}>90°</option>
@@ -516,7 +548,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
               {availableBlockIds.length > 0 && (
                 <div className="grid grid-cols-2 gap-3">
                   <label className="block">
-                    <span className="text-[11px] text-slate-500">
+                    <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                       Copy Source Scope
                     </span>
                     <select
@@ -528,7 +560,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                             | 'selected_block',
                         })
                       }
-                      className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#111827]"
+                      className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-select"
                     >
                       <option value="full_page">Full Template Page</option>
                       <option value="selected_block">Selected Block Only</option>
@@ -536,7 +568,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                   </label>
                   {copiesConfig.sourceScope === 'selected_block' && (
                     <label className="block">
-                      <span className="text-[11px] text-slate-500">
+                      <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                         Target Block
                       </span>
                       <select
@@ -544,7 +576,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                         onChange={(e) =>
                           updateCopies({ selectedBlockId: e.target.value })
                         }
-                        className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#111827]"
+                        className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-select"
                       >
                         <option value="">Choose block...</option>
                         {availableBlockIds.map((id) => (
@@ -559,7 +591,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
               )}
 
               {/* Checkboxes */}
-              <div className="grid grid-cols-2 gap-2.5 pt-2 border-t border-slate-200 dark:border-slate-800">
+              <div className="grid grid-cols-2 gap-2.5 pt-2 border-t border-black/10 dark:border-white/10">
                 {(
                   [
                     ['fitToPage', 'Auto Fit-to-Page'],
@@ -571,7 +603,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                 ).map(([key, label]) => (
                   <label
                     key={key}
-                    className="flex items-center gap-2 cursor-pointer text-slate-700 dark:text-slate-300"
+                    className="flex items-center gap-2 cursor-pointer text-[#555555] dark:text-[#B5B5B5]"
                   >
                     <input
                       type="checkbox"
@@ -587,7 +619,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                           updateCopies({ [key]: checked });
                         }
                       }}
-                      className="rounded border-slate-400 text-blue-600"
+                      className="rounded border-black/30 dark:border-white/30 accent-[#101010] dark:accent-white"
                     />
                     <span>{label}</span>
                   </label>
@@ -595,9 +627,9 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
               </div>
 
               {/* Source Boundaries & Intelligent Scaling */}
-              <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
+              <div className="pt-3 border-t border-black/10 dark:border-white/10 space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="font-semibold text-slate-900 dark:text-slate-100">
+                  <span className="font-semibold text-[#101010] dark:text-white">
                     Content Boundaries & Fitting
                   </span>
                   <button
@@ -621,7 +653,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                         fitToPage: true,
                       });
                     }}
-                    className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline font-medium"
+                    className="text-[11px] text-[#101010] dark:text-white hover:underline font-medium"
                   >
                     Optimize Grid for Paper
                   </button>
@@ -629,7 +661,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
 
                 <div className="grid grid-cols-2 gap-3">
                   <label className="block">
-                    <span className="text-[11px] text-slate-500">
+                    <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                       Source Boundaries
                     </span>
                     <select
@@ -639,7 +671,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                           boundaryMode: e.target.value as BoundaryMode,
                         })
                       }
-                      className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#111827]"
+                      className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-select"
                     >
                       <option value="original_page">Original Page</option>
                       <option value="auto_content">Auto Content (Trim Margins)</option>
@@ -648,7 +680,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                     </select>
                   </label>
                   <label className="block">
-                    <span className="text-[11px] text-slate-500">
+                    <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                       Scaling Mode
                     </span>
                     <select
@@ -660,7 +692,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                           updateCopies({ fitToPage: true });
                         }
                       }}
-                      className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#111827]"
+                      className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-select"
                     >
                       <option value="auto_fit_aspect">Auto-Fit (Aspect)</option>
                       <option value="fit_to_page">Fit to Page</option>
@@ -676,7 +708,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
 
                 {fitConfig.scalingMode === 'custom_percent' && (
                   <label className="block">
-                    <span className="text-[11px] text-slate-500">
+                    <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                       Custom Scale (%)
                     </span>
                     <input
@@ -689,12 +721,12 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                           customPercent: Math.max(10, Number(e.target.value) || 100),
                         })
                       }
-                      className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                      className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
                     />
                   </label>
                 )}
 
-                <div className="p-2.5 rounded border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#111827] text-[11px] tabular-nums space-y-1 text-slate-600 dark:text-slate-400">
+                <div className="p-2.5 rounded-xl border border-black/10 dark:border-white/10 bg-[#F7F7F7] dark:bg-[#0B0B0B] text-[11px] tabular-nums space-y-1 text-[#555555] dark:text-[#B5B5B5]">
                   <div className="flex justify-between">
                     <span>Source Content Box:</span>
                     <span>
@@ -705,7 +737,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                   {layout.slots[0] && (
                     <div className="flex justify-between">
                       <span>Placed Copy #1 Size:</span>
-                      <span className="text-slate-900 dark:text-slate-100 font-medium">
+                      <span className="text-[#101010] dark:text-white font-medium">
                         {ptToUnit(layout.slots[0].placedWidthPt, unit)} ×{' '}
                         {ptToUnit(layout.slots[0].placedHeightPt, unit)} {unit} (
                         {Math.round(layout.slots[0].scale * 100)}%)
@@ -717,9 +749,9 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
 
               {/* Independent Per-Slot Scale, Rotation & Placement Overrides */}
               {layout.slots.length > 0 && (
-                <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2.5">
+                <div className="pt-3 border-t border-black/10 dark:border-white/10 space-y-2.5">
                   <div className="flex items-center justify-between">
-                    <span className="font-semibold text-slate-900 dark:text-slate-100">
+                    <span className="font-semibold text-[#101010] dark:text-white">
                       Per-Slot Placement & Overrides
                     </span>
                     {copiesConfig.slotOverrides &&
@@ -727,7 +759,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                         <button
                           type="button"
                           onClick={() => updateCopies({ slotOverrides: {} })}
-                          className="text-[11px] text-slate-500 hover:text-slate-900 dark:hover:text-slate-100"
+                          className="text-[11px] text-[#555555] hover:text-[#101010] dark:text-[#B5B5B5] dark:hover:text-white"
                         >
                           Reset All Slots
                         </button>
@@ -736,11 +768,11 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
 
                   <div className="grid grid-cols-2 gap-2">
                     <label className="block">
-                      <span className="text-[10px] text-slate-400">Target Copy Slot</span>
+                      <span className="text-[10px] text-[#888888] dark:text-[#858585]">Target Copy Slot</span>
                       <select
                         value={Math.min(selectedSlotIdx, layout.slots.length - 1)}
                         onChange={(e) => setSelectedSlotIdx(Number(e.target.value))}
-                        className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#111827]"
+                        className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-select"
                       >
                         {layout.slots.map((s) => (
                           <option key={s.slotIndex} value={s.slotIndex}>
@@ -750,7 +782,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                       </select>
                     </label>
                     <label className="block">
-                      <span className="text-[10px] text-slate-400">Slot Rotation</span>
+                      <span className="text-[10px] text-[#888888] dark:text-[#858585]">Slot Rotation</span>
                       <select
                         value={
                           copiesConfig.slotOverrides?.[
@@ -765,7 +797,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                             }
                           )
                         }
-                        className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#111827]"
+                        className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-select"
                       >
                         <option value={0}>0°</option>
                         <option value={90}>90°</option>
@@ -782,7 +814,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                     return (
                       <div className="grid grid-cols-3 gap-2">
                         <label className="block">
-                          <span className="text-[10px] text-slate-400">
+                          <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                             Scale (%)
                           </span>
                           <input
@@ -800,11 +832,11 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                                 ),
                               })
                             }
-                            className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                            className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
                           />
                         </label>
                         <label className="block">
-                          <span className="text-[10px] text-slate-400">
+                          <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                             X Offset ({unit})
                           </span>
                           <input
@@ -816,11 +848,11 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                                 xOffsetPt: unitToPt(Number(e.target.value) || 0, unit),
                               })
                             }
-                            className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                            className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
                           />
                         </label>
                         <label className="block">
-                          <span className="text-[10px] text-slate-400">
+                          <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                             Y Offset ({unit})
                           </span>
                           <input
@@ -832,7 +864,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                                 yOffsetPt: unitToPt(Number(e.target.value) || 0, unit),
                               })
                             }
-                            className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                            className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
                           />
                         </label>
                       </div>
@@ -845,12 +877,12 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
 
           {effectiveSubTab === 'bulk' && (
             <div className="space-y-4">
-              <label className="flex items-center justify-between p-3 rounded-lg border border-slate-200 dark:border-slate-800 cursor-pointer">
+              <label className="flex items-center justify-between p-3 rounded-xl border border-black/10 dark:border-white/12 bg-black/[0.02] dark:bg-white/[0.02] cursor-pointer">
                 <div>
-                  <div className="font-semibold text-slate-900 dark:text-slate-100">
+                  <div className="font-semibold text-[#101010] dark:text-white">
                     Enable Bulk Multi-Page Generation
                   </div>
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                  <div className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                     When off, Export Center outputs the exact pages edited in the Editor
                   </div>
                 </div>
@@ -858,13 +890,13 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                   type="checkbox"
                   checked={bulkConfig.enabled}
                   onChange={(e) => updateBulk({ enabled: e.target.checked })}
-                  className="rounded border-slate-400 text-blue-600"
+                  className="rounded border-black/30 dark:border-white/30 accent-[#101010] dark:accent-white"
                 />
               </label>
 
               <div className="grid grid-cols-2 gap-3">
                 <label className="block">
-                  <span className="text-[11px] text-slate-500">
+                  <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                     Total Output Pages
                   </span>
                   <input
@@ -880,25 +912,25 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                         ),
                       })
                     }
-                    className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                    className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
                   />
                 </label>
                 <label className="block">
-                  <span className="text-[11px] text-slate-500">
+                  <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                     Copies Per Page
                   </span>
                   <input
                     type="number"
                     disabled
                     value={copiesPerPage}
-                    className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-800/50 tabular-nums"
+                    className="mt-1 w-full px-2.5 py-1.5 rounded-lg border border-black/10 dark:border-white/10 bg-[#F7F7F7] dark:bg-[#0B0B0B] text-[#555555] dark:text-[#B5B5B5] tabular-nums"
                   />
                 </label>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <label className="block">
-                  <span className="text-[11px] text-slate-500">
+                  <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                     Starting Page Number
                   </span>
                   <input
@@ -913,11 +945,11 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                         ),
                       })
                     }
-                    className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                    className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
                   />
                 </label>
                 <label className="block">
-                  <span className="text-[11px] text-slate-500">
+                  <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                     Ending Page Number
                   </span>
                   <input
@@ -934,14 +966,14 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                         totalOutputPages: end - bulkConfig.startPageNumber + 1,
                       });
                     }}
-                    className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                    className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
                   />
                 </label>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <label className="block">
-                  <span className="text-[11px] text-slate-500">
+                  <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                     Document Blocks Per Sheet
                   </span>
                   <input
@@ -957,11 +989,11 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                         ),
                       })
                     }
-                    className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                    className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
                   />
                 </label>
                 <label className="block">
-                  <span className="text-[11px] text-slate-500">
+                  <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                     Copies Per Document
                   </span>
                   <input
@@ -977,13 +1009,13 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                         ),
                       })
                     }
-                    className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                    className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-input tabular-nums"
                   />
                 </label>
               </div>
 
               <label className="block">
-                <span className="text-[11px] text-slate-500">
+                <span className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                   Dynamic Data Source Mode
                 </span>
                 <select
@@ -993,7 +1025,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                       dataSourceMode: e.target.value as BulkConfig['dataSourceMode'],
                     })
                   }
-                  className="mt-1 w-full px-2.5 py-1.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#111827]"
+                  className="mt-1 w-full px-2.5 py-1.5 rounded-lg border studio-select"
                 >
                   <option value="hybrid">
                     Hybrid (Serial Numbering + Data Manager Rows)
@@ -1003,9 +1035,9 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                 </select>
               </label>
 
-              <div className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-[#111827] space-y-1.5 tabular-nums">
+              <div className="p-3.5 rounded-xl border border-black/10 dark:border-white/10 bg-[#F7F7F7] dark:bg-[#0B0B0B] space-y-1.5 tabular-nums">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="font-semibold text-slate-900 dark:text-slate-100">
+                  <div className="font-semibold text-[#101010] dark:text-white">
                     Bulk Output Summary
                   </div>
                   <div>
@@ -1019,7 +1051,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                     <button
                       type="button"
                       onClick={() => csvInputRef.current?.click()}
-                      className="min-h-[36px] px-2.5 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#0E131D] hover:bg-slate-100 dark:hover:bg-slate-800 font-medium flex items-center gap-1.5"
+                      className="min-h-[36px] px-2.5 py-1 rounded-lg border border-black/15 dark:border-white/15 bg-white/80 dark:bg-white/[0.06] text-[#101010] dark:text-white hover:bg-black/[0.04] dark:hover:bg-white/[0.12] font-medium flex items-center gap-1.5 transition-colors"
                     >
                       <Upload className="w-3.5 h-3.5" />
                       Import CSV / Excel
@@ -1027,25 +1059,25 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                   </div>
                 </div>
                 {csvImportStatus && (
-                  <div className="text-[11px] text-blue-600 dark:text-blue-400 font-medium">
+                  <div className="text-[11px] text-[#101010] dark:text-white font-medium">
                     {csvImportStatus}
                   </div>
                 )}
-                <div className="flex justify-between text-slate-600 dark:text-slate-400">
+                <div className="flex justify-between text-[#555555] dark:text-[#B5B5B5]">
                   <span>Pages to Generate:</span>
-                  <span className="font-medium text-slate-900 dark:text-slate-100">
+                  <span className="font-medium text-[#101010] dark:text-white">
                     {bulkConfig.totalOutputPages}
                   </span>
                 </div>
-                <div className="flex justify-between text-slate-600 dark:text-slate-400">
+                <div className="flex justify-between text-[#555555] dark:text-[#B5B5B5]">
                   <span>Total Individual Receipts / Copies:</span>
-                  <span className="font-medium text-slate-900 dark:text-slate-100">
+                  <span className="font-medium text-[#101010] dark:text-white">
                     {bulkConfig.totalOutputPages * copiesPerPage}
                   </span>
                 </div>
-                <div className="flex justify-between text-slate-600 dark:text-slate-400">
+                <div className="flex justify-between text-[#555555] dark:text-[#B5B5B5]">
                   <span>Dataset Rows Available:</span>
-                  <span className="font-medium text-slate-900 dark:text-slate-100">
+                  <span className="font-medium text-[#101010] dark:text-white">
                     {dataRows.length}
                   </span>
                 </div>
@@ -1054,7 +1086,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
               <button
                 type="button"
                 onClick={onGoToExport}
-                className="w-full min-h-[44px] px-4 py-2.5 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-700 flex items-center justify-center gap-2 touch-manipulation"
+                className="w-full min-h-[44px] px-4 py-2.5 rounded-xl bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] font-semibold flex items-center justify-center gap-2 touch-manipulation transition-colors"
               >
                 <Download className="w-4 h-4" />
                 Generate & Export {bulkConfig.totalOutputPages} Pages
@@ -1066,17 +1098,17 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
             <div className="space-y-4">
               <div className="flex items-center justify-between gap-2">
                 <div>
-                  <div className="font-semibold text-slate-900 dark:text-slate-100">
+                  <div className="font-semibold text-[#101010] dark:text-white">
                     Independent Serial Sequences
                   </div>
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                  <div className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">
                     Configure one rule per field, or separate sequences per Block (e.g. Block A: 0001–0250, Block B: 0251–0500).
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={addSerialRule}
-                  className="min-h-[40px] desktop:min-h-0 px-2.5 py-1.5 rounded bg-blue-600 text-white font-medium hover:bg-blue-700 flex items-center gap-1 whitespace-nowrap shrink-0 touch-manipulation"
+                  className="min-h-[40px] desktop:min-h-0 px-3 py-1.5 rounded-lg bg-[#101010] text-white hover:bg-[#262626] dark:bg-white dark:text-[#050505] dark:hover:bg-[#E6E6E6] font-semibold flex items-center gap-1 whitespace-nowrap shrink-0 touch-manipulation transition-colors"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   Add Rule
@@ -1084,7 +1116,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
               </div>
 
               {serialRules.length === 0 ? (
-                <div className="p-6 text-center rounded-lg border border-dashed border-slate-300 dark:border-slate-700 text-slate-500">
+                <div className="p-6 text-center rounded-xl border border-dashed border-black/15 dark:border-white/15 text-[#888888] dark:text-[#858585]">
                   No serial rules configured. Click "Add Rule" to assign sequential numbering to a detected field.
                 </div>
               ) : (
@@ -1092,7 +1124,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                   {serialRules.map((rule, idx) => (
                     <div
                       key={rule.id}
-                      className="p-3.5 rounded-lg border border-slate-200 dark:border-slate-800 space-y-2.5"
+                      className="p-3.5 rounded-xl border border-black/10 dark:border-white/12 bg-black/[0.015] dark:bg-white/[0.02] space-y-2.5"
                     >
                       <div className="flex items-center justify-between gap-2">
                         <input
@@ -1103,7 +1135,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                             copy[idx] = { ...rule, name: e.target.value };
                             updateRules(copy);
                           }}
-                          className="font-semibold text-slate-900 dark:text-slate-100 bg-transparent border-b border-transparent focus:border-blue-500 focus:outline-none min-h-[36px]"
+                          className="font-semibold text-[#101010] dark:text-white bg-transparent border-b border-transparent focus:border-black/40 dark:focus:border-white/40 focus:outline-none min-h-[36px]"
                         />
                         <button
                           type="button"
@@ -1112,7 +1144,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                               serialRules.filter((r) => r.id !== rule.id)
                             )
                           }
-                          className="p-2 text-slate-400 hover:text-red-500 touch-manipulation"
+                          className="p-2 text-[#888888] hover:text-[#101010] dark:text-[#858585] dark:hover:text-white transition-colors touch-manipulation"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -1120,7 +1152,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
 
                       <div className="grid grid-cols-1 tablet:grid-cols-3 gap-2">
                         <label className="block">
-                          <span className="text-[10px] text-slate-400">
+                          <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                             Target Field
                           </span>
                           <select
@@ -1133,7 +1165,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                               };
                               updateRules(copy);
                             }}
-                            className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#111827]"
+                            className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-select"
                           >
                             {availableFieldKeys.map((k) => (
                               <option key={k} value={k}>
@@ -1143,7 +1175,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                           </select>
                         </label>
                         <label className="block">
-                          <span className="text-[10px] text-slate-400">
+                          <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                             Copy Slot / Block
                           </span>
                           <select
@@ -1156,7 +1188,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                               };
                               updateRules(copy);
                             }}
-                            className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#111827]"
+                            className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-select"
                           >
                             {Array.from({ length: Math.max(4, copiesPerPage) }).map(
                               (_, bi) => (
@@ -1168,7 +1200,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                           </select>
                         </label>
                         <label className="block">
-                          <span className="text-[10px] text-slate-400">
+                          <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                             Mode
                           </span>
                           <select
@@ -1181,7 +1213,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                               };
                               updateRules(copy);
                             }}
-                            className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#111827]"
+                            className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-select"
                           >
                             <option value="auto">Automatic</option>
                             <option value="repeating">Repeating</option>
@@ -1193,7 +1225,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
 
                       {rule.mode === 'csv' ? (
                         <label className="block">
-                          <span className="text-[10px] text-slate-400">
+                          <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                             CSV / Data Column
                           </span>
                           <select
@@ -1203,7 +1235,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                               copy[idx] = { ...rule, csvColumn: e.target.value };
                               updateRules(copy);
                             }}
-                            className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#111827]"
+                            className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-select"
                           >
                             <option value="">Select column...</option>
                             {project.dataColumns.map((c) => (
@@ -1215,7 +1247,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                         </label>
                       ) : rule.mode === 'manual' ? (
                         <label className="block">
-                          <span className="text-[10px] text-slate-400">
+                          <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                             Manual Values (comma-separated)
                           </span>
                           <input
@@ -1231,14 +1263,14 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                               };
                               updateRules(copy);
                             }}
-                            className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent"
+                            className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input"
                           />
                         </label>
                       ) : (
                         <>
                           <div className="grid grid-cols-2 tablet:grid-cols-4 gap-2">
                             <label className="block">
-                              <span className="text-[10px] text-slate-400">
+                              <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                                 Start
                               </span>
                               <input
@@ -1252,11 +1284,11 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                                   };
                                   updateRules(copy);
                                 }}
-                                className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                                className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
                               />
                             </label>
                             <label className="block">
-                              <span className="text-[10px] text-slate-400">
+                              <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                                 End
                               </span>
                               <input
@@ -1270,11 +1302,11 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                                   };
                                   updateRules(copy);
                                 }}
-                                className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                                className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
                               />
                             </label>
                             <label className="block">
-                              <span className="text-[10px] text-slate-400">
+                              <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                                 Step
                               </span>
                               <input
@@ -1288,11 +1320,11 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                                   };
                                   updateRules(copy);
                                 }}
-                                className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                                className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
                               />
                             </label>
                             <label className="block">
-                              <span className="text-[10px] text-slate-400">
+                              <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                                 Digits
                               </span>
                               <input
@@ -1311,14 +1343,14 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                                   };
                                   updateRules(copy);
                                 }}
-                                className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent tabular-nums"
+                                className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input tabular-nums"
                               />
                             </label>
                           </div>
 
                           <div className="grid grid-cols-3 gap-2">
                             <label className="block">
-                              <span className="text-[10px] text-slate-400">
+                              <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                                 Prefix
                               </span>
                               <input
@@ -1329,11 +1361,11 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                                   copy[idx] = { ...rule, prefix: e.target.value };
                                   updateRules(copy);
                                 }}
-                                className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent"
+                                className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input"
                               />
                             </label>
                             <label className="block">
-                              <span className="text-[10px] text-slate-400">
+                              <span className="text-[10px] text-[#888888] dark:text-[#858585]">
                                 Suffix
                               </span>
                               <input
@@ -1344,10 +1376,10 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                                   copy[idx] = { ...rule, suffix: e.target.value };
                                   updateRules(copy);
                                 }}
-                                className="mt-0.5 w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-transparent"
+                                className="mt-0.5 w-full px-2 py-1 rounded-lg border studio-input"
                               />
                             </label>
-                            <label className="flex items-center gap-1.5 pt-4 cursor-pointer">
+                            <label className="flex items-center gap-1.5 pt-4 cursor-pointer text-[#555555] dark:text-[#B5B5B5]">
                               <input
                                 type="checkbox"
                                 checked={rule.leadingZeros}
@@ -1359,7 +1391,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                                   };
                                   updateRules(copy);
                                 }}
-                                className="rounded border-slate-400 text-blue-600"
+                                className="rounded border-black/30 dark:border-white/30 accent-[#101010] dark:accent-white"
                               />
                               <span className="text-[11px]">Leading Zeros</span>
                             </label>
@@ -1373,19 +1405,19 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
 
               {/* Numbering Preview Table */}
               {serialRules.length > 0 && (
-                <div className="rounded-lg border border-slate-200 dark:border-slate-800 overflow-hidden">
-                  <div className="px-3 py-2 bg-slate-50 dark:bg-[#111827] border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
-                    <span className="font-semibold text-slate-900 dark:text-slate-100">
+                <div className="rounded-xl border border-black/10 dark:border-white/12 overflow-hidden">
+                  <div className="px-3 py-2 bg-[#F7F7F7] dark:bg-[#0B0B0B] border-b border-black/10 dark:border-white/10 flex items-center justify-between">
+                    <span className="font-semibold text-[#101010] dark:text-white">
                       Numbering Preview (First 5 Pages)
                     </span>
                     {serialSimulation.duplicates.length === 0 &&
                     serialSimulation.outOfRangeCount === 0 ? (
-                      <span className="text-[11px] text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                      <span className="text-[11px] text-[#101010] dark:text-white font-medium flex items-center gap-1">
                         <CheckCircle2 className="w-3 h-3" />
                         No overlaps
                       </span>
                     ) : (
-                      <span className="text-[11px] text-red-500 flex items-center gap-1">
+                      <span className="text-[11px] text-red-600 dark:text-red-400 flex items-center gap-1">
                         <AlertTriangle className="w-3 h-3" />
                         Check range
                       </span>
@@ -1394,26 +1426,26 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                   <div className="max-h-48 overflow-y-auto">
                     <table className="w-full text-left border-collapse text-[11px] tabular-nums">
                       <thead>
-                        <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500">
+                        <tr className="border-b border-black/10 dark:border-white/10 text-[#888888] dark:text-[#858585]">
                           <th className="py-1.5 px-3">Page</th>
                           <th className="py-1.5 px-3">Block</th>
                           <th className="py-1.5 px-3">Field</th>
                           <th className="py-1.5 px-3 text-right">Generated</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
+                      <tbody className="divide-y divide-black/10 dark:divide-white/10">
                         {serialSimulation.previewRows.slice(0, 24).map((row, ri) => (
                           <tr key={ri}>
-                            <td className="py-1.5 px-3">{row.pageNumber}</td>
-                            <td className="py-1.5 px-3">{row.blockLabel}</td>
-                            <td className="py-1.5 px-3 font-mono text-slate-500">
+                            <td className="py-1.5 px-3 text-[#101010] dark:text-white">{row.pageNumber}</td>
+                            <td className="py-1.5 px-3 text-[#555555] dark:text-[#B5B5B5]">{row.blockLabel}</td>
+                            <td className="py-1.5 px-3 font-mono text-[#888888] dark:text-[#858585]">
                               {row.fieldKey}
                             </td>
                             <td
                               className={`py-1.5 px-3 text-right font-mono font-medium ${
                                 row.outOfRange
-                                  ? 'text-red-500'
-                                  : 'text-slate-900 dark:text-slate-100'
+                                  ? 'text-red-600 dark:text-red-400'
+                                  : 'text-[#101010] dark:text-white'
                               }`}
                             >
                               {row.formattedValue}
@@ -1427,15 +1459,17 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
               )}
             </div>
           )}
+            </motion.div>
+          </AnimatePresence>
         </div>
         )}
       </div>
 
       {/* Right Live Imposition Preview */}
       {(viewport.isDesktop || effectiveSubTab === 'preview') && (
-      <div className="flex-1 overflow-auto glass-level-1 p-4 tablet:p-6 flex flex-col items-center justify-center min-h-[380px]">
-        <div className="mb-3 flex flex-wrap items-center justify-center gap-4 text-xs text-slate-600 dark:text-slate-400">
-          <span className="font-semibold text-slate-900 dark:text-slate-100">
+      <div className="flex-1 overflow-auto bg-[#EFEFEF] dark:bg-[#0B0B0B] p-4 tablet:p-6 flex flex-col items-center justify-center min-h-[380px]">
+        <div className="mb-3 flex flex-wrap items-center justify-center gap-4 text-xs text-[#555555] dark:text-[#B5B5B5]">
+          <span className="font-semibold text-[#101010] dark:text-white">
             Live Sheet Imposition Preview (Page 1)
           </span>
           <span className="tabular-nums">
@@ -1444,7 +1478,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
           </span>
           {(layout.hasOverlap || layout.hasClipping) &&
             !copiesConfig.allowOverlapOrOverflow && (
-              <span className="text-red-500 font-medium flex items-center gap-1">
+              <span className="text-red-600 dark:text-red-400 font-medium flex items-center gap-1">
                 <AlertTriangle className="w-3.5 h-3.5" />
                 {layout.hasOverlap
                   ? 'Overlapping copies detected'
@@ -1460,7 +1494,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
             height: layout.outputSheetHeightPt * previewScale,
             backgroundColor: pageConfig.backgroundColor || '#FFFFFF',
           }}
-          className="relative shadow-2xl border border-slate-300 dark:border-slate-700 overflow-hidden"
+          className="relative shadow-2xl border border-black/20 dark:border-white/15 overflow-hidden"
         >
           {layout.slots.map((slot) => {
             const slotIdx = slot.slotIndex;
@@ -1506,7 +1540,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                       width: slot.cellWidthPt * previewScale,
                       height: slot.cellHeightPt * previewScale,
                     }}
-                    className="pointer-events-none absolute border border-slate-400/20"
+                    className="pointer-events-none absolute border border-[#404040]/20"
                   />
                 )}
 
@@ -1522,14 +1556,14 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                     slot.clipsSheet || (slot.clipsCell && !copiesConfig.allowOverlapOrOverflow)
                       ? 'ring-1 ring-red-500'
                       : selectedSlotIdx === slotIdx && copiesConfig.enabled
-                      ? 'ring-1 ring-blue-500'
+                      ? 'ring-2 ring-[#101010]'
                       : ''
                   } ${
                     copiesConfig.cuttingGuides
-                      ? 'border border-dashed border-blue-500/70'
+                      ? 'border border-dashed border-[#404040]/70'
                       : copiesConfig.showBorders
-                      ? 'border border-slate-400'
-                      : 'border border-slate-300/60'
+                      ? 'border border-[#404040]/60'
+                      : 'border border-black/15'
                   }`}
                 >
                   {thumbUrl && (
@@ -1564,14 +1598,14 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                   {/* Crop Marks */}
                   {copiesConfig.cropMarks && (
                     <>
-                      <span className="pointer-events-none absolute top-0 left-0 w-2 h-2 border-t border-l border-slate-900 dark:border-slate-100" />
-                      <span className="pointer-events-none absolute top-0 right-0 w-2 h-2 border-t border-r border-slate-900 dark:border-slate-100" />
-                      <span className="pointer-events-none absolute bottom-0 left-0 w-2 h-2 border-b border-l border-slate-900 dark:border-slate-100" />
-                      <span className="pointer-events-none absolute bottom-0 right-0 w-2 h-2 border-b border-r border-slate-900 dark:border-slate-100" />
+                      <span className="pointer-events-none absolute top-0 left-0 w-2 h-2 border-t border-l border-[#101010]" />
+                      <span className="pointer-events-none absolute top-0 right-0 w-2 h-2 border-t border-r border-[#101010]" />
+                      <span className="pointer-events-none absolute bottom-0 left-0 w-2 h-2 border-b border-l border-[#101010]" />
+                      <span className="pointer-events-none absolute bottom-0 right-0 w-2 h-2 border-b border-r border-[#101010]" />
                     </>
                   )}
 
-                  <div className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-slate-900/85 text-white font-mono text-[10px] tabular-nums">
+                  <div className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-[#101010]/90 text-white font-mono text-[10px] tabular-nums">
                     #{slotIdx + 1}
                     {slotSerials[0] ? ` · ${slotSerials[0]}` : ''}
                   </div>

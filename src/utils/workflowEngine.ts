@@ -616,6 +616,18 @@ export async function executeWorkflowChain(
             verifiedPageCount: totalOutputPages,
             customFonts,
           });
+          if (control?.isCancelled()) {
+            passport = undefined;
+            overallStatus = 'cancelled';
+            res = {
+              stepId: step.id,
+              kind: step.kind,
+              label: step.label,
+              status: 'skipped',
+              summary: 'Cancellation requested during passport generation; passport was discarded.',
+            };
+            break;
+          }
           res = {
             stepId: step.id,
             kind: step.kind,

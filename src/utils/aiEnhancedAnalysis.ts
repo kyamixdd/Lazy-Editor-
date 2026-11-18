@@ -15,7 +15,7 @@ export function formatFriendlyAiError(
   status?: number,
   code?: string
 ): {
-  code: 'QUOTA_EXHAUSTED' | 'MISSING_API_KEY' | 'API_KEY_INVALID' | 'AI_UNAVAILABLE';
+  code: 'QUOTA_EXHAUSTED' | 'MISSING_API_KEY' | 'API_KEY_INVALID' | 'AI_REQUEST_INVALID' | 'AI_UNAVAILABLE';
   message: string;
 } {
   const lower = (rawMessage || '').toLowerCase();

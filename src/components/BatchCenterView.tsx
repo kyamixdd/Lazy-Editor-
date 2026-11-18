@@ -107,6 +107,24 @@ export const BatchCenterView: React.FC<BatchCenterViewProps> = ({
     );
   }, [projects]);
 
+  // Rebuild download URLs from IndexedDB-persisted Blobs after a reload or remount.
+  useEffect(() => {
+    batchJobs.forEach((job) => {
+      if (
+        job.status === 'completed' &&
+        job.outputBlob instanceof Blob &&
+        !sessionUrlsRef.current[job.id]
+      ) {
+        const url = URL.createObjectURL(job.outputBlob);
+        registerSessionDownload(job.id, {
+          url,
+          fileName: job.outputFileName || `${job.projectName}.pdf`,
+          sizeBytes: job.outputSizeBytes || job.outputBlob.size,
+        });
+      }
+    });
+  }, [batchJobs]);
+
   useEffect(() => {
     return () => {
       Object.values(sessionUrlsRef.current).forEach((u) => URL.revokeObjectURL(u));
@@ -228,6 +246,7 @@ export const BatchCenterView: React.FC<BatchCenterViewProps> = ({
       onSaveBatchJob({
         ...job,
         status: 'completed',
+        outputBlob: blob,
         progressCurrent: job.progressTotal,
         progressTotal: job.progressTotal,
         stage: 'Completed',

@@ -122,6 +122,28 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
+/** Repair older IndexedDB project records before they reach React components. */
+export function normalizeStoredProject(value: unknown): PDFProject | null {
+  if (!value || typeof value !== 'object') return null;
+  const project = value as Partial<PDFProject> & Record<string, unknown>;
+  if (typeof project.id !== 'string' || !project.id) return null;
+  return {
+    ...project,
+    name: typeof project.name === 'string' ? project.name : 'Untitled project',
+    description: typeof project.description === 'string' ? project.description : '',
+    sourcePdfName: typeof project.sourcePdfName === 'string' ? project.sourcePdfName : 'document.pdf',
+    pageCount: Number.isFinite(project.pageCount) ? Number(project.pageCount) : 1,
+    originalPages: Array.isArray(project.originalPages) ? project.originalPages : [],
+    elements: Array.isArray(project.elements) ? project.elements : [],
+    serialRules: Array.isArray(project.serialRules) ? project.serialRules : [],
+    dataColumns: Array.isArray(project.dataColumns) ? project.dataColumns : [],
+    dataRows: Array.isArray(project.dataRows) ? project.dataRows : [],
+    versions: Array.isArray(project.versions) ? project.versions : [],
+    operationLog: Array.isArray(project.operationLog) ? project.operationLog : [],
+    tags: Array.isArray(project.tags) ? project.tags : [],
+  } as PDFProject;
+}
+
 export async function listProjectsLocal(): Promise<PDFProject[]> {
   try {
     const db = await openDb();
@@ -130,7 +152,9 @@ export async function listProjectsLocal(): Promise<PDFProject[]> {
       const store = tx.objectStore(STORE_PROJECTS);
       const req = store.getAll();
       req.onsuccess = () => {
-        const items = (req.result as PDFProject[]) || [];
+        const items = ((req.result as unknown[]) || [])
+          .map(normalizeStoredProject)
+          .filter((item): item is PDFProject => item !== null);
         items.sort(
           (a, b) =>
             new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
@@ -151,7 +175,7 @@ export async function getProjectLocal(id: string): Promise<PDFProject | null> {
     return await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE_PROJECTS, 'readonly');
       const req = tx.objectStore(STORE_PROJECTS).get(id);
-      req.onsuccess = () => resolve((req.result as PDFProject) || null);
+      req.onsuccess = () => resolve(normalizeStoredProject(req.result));
       req.onerror = () => reject(req.error);
     });
   } catch {

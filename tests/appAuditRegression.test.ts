@@ -838,6 +838,11 @@ test('data import: JSON arrays and wrapped row collections import safely with un
   assert.equal(parsed.rows[1].amount, 240);
 });
 
+test('data import: identifies Scan Structure exports instead of treating them as datasets', async () => {
+  const scanExport = new File([JSON.stringify({ projectName: 'Example', scanReport: {}, pages: [{}], elements: [] })], 'scan.json', { type: 'application/json' });
+  await assert.rejects(() => parseSpreadsheetFile(scanExport), /Scan Structure export, not a CSV\/Excel dataset/);
+});
+
 test('data import: rejects malformed JSON and non-record rows with actionable errors', async () => {
   const malformed = new File(['{ invalid'], 'broken.json', { type: 'application/json' });
   await assert.rejects(() => parseSpreadsheetFile(malformed), /JSON file is invalid/);

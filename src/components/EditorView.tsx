@@ -288,6 +288,8 @@ export const EditorView: React.FC<EditorViewProps> = ({
   // Clamp currentPage and reset dirty baseline when switching projects
   useEffect(() => {
     setCurrentPage((p) => Math.max(1, Math.min(p, Math.max(1, project.pageCount))));
+    setThumbnails({});
+    setPageBgUrl(project.originalPages[0]?.previewImageDataUrl);
     lastAutoSnapHashRef.current = JSON.stringify(projectRef.current.elements);
     lastSavedDirtySigRef.current = computeProjectDirtySignature(projectRef.current);
     setSaveStatus('idle');
@@ -417,23 +419,29 @@ export const EditorView: React.FC<EditorViewProps> = ({
 
   // Sync page preview image when page changes (respecting duplicated sourcePdfPageNumber)
   useEffect(() => {
+    let cancelled = false;
     const meta = project.originalPages.find((p) => p.pageNumber === currentPage);
     if (meta?.previewImageDataUrl) {
       setPageBgUrl(meta.previewImageDataUrl);
-      return;
-    }
-    if (project.sourcePdfBase64) {
+    } else if (project.sourcePdfBase64) {
+      // Clear the previous page immediately so a slow render cannot leave the
+      // old page visible while the user is navigating.
+      setPageBgUrl(undefined);
       const targetPdfPage = meta?.sourcePdfPageNumber || currentPage;
       void renderSinglePagePreview(
         project.sourcePdfBase64,
         targetPdfPage,
         1.7
       ).then((url) => {
-        if (url) setPageBgUrl(url);
+        // Ignore out-of-order renders when the user changes page/project quickly.
+        if (!cancelled) setPageBgUrl(url || undefined);
       });
     } else {
       setPageBgUrl(undefined);
     }
+    return () => {
+      cancelled = true;
+    };
   }, [currentPage, project.id, project.originalPages, project.sourcePdfBase64]);
 
   const makeHistorySnapshot = (

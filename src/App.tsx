@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { RotateCcw, X } from 'lucide-react';
 import { AnimatePresence, MotionConfig, motion, useReducedMotion } from 'motion/react';
 import {
@@ -7,25 +7,28 @@ import {
   reducedScreenVariants,
   screenVariants,
 } from './config/motionSystem';
-import { AboutView } from './components/AboutView';
-import { AssetLibraryView } from './components/AssetLibraryView';
-import { BatchCenterView } from './components/BatchCenterView';
-import { BlueprintStudioView } from './components/BlueprintStudioView';
-import { BulkGeneratorView } from './components/BulkGeneratorView';
+// Load workspace modules on demand so the dashboard does not download the PDF
+// editor and every specialist tool before the user opens them.
+const AboutView = lazy(() => import('./components/AboutView').then((m) => ({ default: m.AboutView })));
+const AssetLibraryView = lazy(() => import('./components/AssetLibraryView').then((m) => ({ default: m.AssetLibraryView })));
+const BatchCenterView = lazy(() => import('./components/BatchCenterView').then((m) => ({ default: m.BatchCenterView })));
+const BlueprintStudioView = lazy(() => import('./components/BlueprintStudioView').then((m) => ({ default: m.BlueprintStudioView })));
+const BulkGeneratorView = lazy(() => import('./components/BulkGeneratorView').then((m) => ({ default: m.BulkGeneratorView })));
+const ComparisonView = lazy(() => import('./components/ComparisonView').then((m) => ({ default: m.ComparisonView })));
+const DashboardView = lazy(() => import('./components/DashboardView').then((m) => ({ default: m.DashboardView })));
+const DataManagerView = lazy(() => import('./components/DataManagerView').then((m) => ({ default: m.DataManagerView })));
+const EditorView = lazy(() => import('./components/EditorView').then((m) => ({ default: m.EditorView })));
+const ExportCenterView = lazy(() => import('./components/ExportCenterView').then((m) => ({ default: m.ExportCenterView })));
+const NewProjectView = lazy(() => import('./components/NewProjectView').then((m) => ({ default: m.NewProjectView })));
+const PdfUtilitiesView = lazy(() => import('./components/PdfUtilitiesView').then((m) => ({ default: m.PdfUtilitiesView })));
+const PreflightView = lazy(() => import('./components/PreflightView').then((m) => ({ default: m.PreflightView })));
+const ScanInspectorView = lazy(() => import('./components/ScanInspectorView').then((m) => ({ default: m.ScanInspectorView })));
+const SettingsView = lazy(() => import('./components/SettingsView').then((m) => ({ default: m.SettingsView })));
+const TemplatesView = lazy(() => import('./components/TemplatesView').then((m) => ({ default: m.TemplatesView })));
+const WorkflowStudioView = lazy(() => import('./components/WorkflowStudioView').then((m) => ({ default: m.WorkflowStudioView })));
+const UserManualView = lazy(() => import('./components/UserManualView').then((m) => ({ default: m.UserManualView })));
 import { CommandPaletteModal } from './components/CommandPaletteModal';
-import { ComparisonView } from './components/ComparisonView';
-import { DashboardView } from './components/DashboardView';
-import { DataManagerView } from './components/DataManagerView';
-import { EditorView } from './components/EditorView';
-import { ExportCenterView } from './components/ExportCenterView';
-import { NewProjectView } from './components/NewProjectView';
-import { PdfUtilitiesView } from './components/PdfUtilitiesView';
-import { PreflightView } from './components/PreflightView';
-import { ScanInspectorView } from './components/ScanInspectorView';
-import { SettingsView } from './components/SettingsView';
 import { SidebarNav } from './components/SidebarNav';
-import { TemplatesView } from './components/TemplatesView';
-import { WorkflowStudioView } from './components/WorkflowStudioView';
 import {
   AssetFontItem,
   AssetImageItem,
@@ -137,6 +140,8 @@ export default function App() {
   const [batchJobs, setBatchJobs] = useState<BatchJob[]>([]);
   const [batchCheckpoints, setBatchCheckpoints] = useState<BatchCheckpoint[]>([]);
   const [blueprints, setBlueprints] = useState<ProductionBlueprint[]>([]);
+  const [commandBlueprintId, setCommandBlueprintId] = useState<string | null>(null);
+  const [commandWorkflowId, setCommandWorkflowId] = useState<string | null>(null);
   const [serialBatches, setSerialBatches] = useState<SerialBatchRecord[]>([]);
   const [passports, setPassports] = useState<DocumentIntegrityPassport[]>([]);
   const [exportProfiles, setExportProfiles] = useState<ExportNamingProfile[]>([]);
@@ -237,11 +242,16 @@ export default function App() {
     }
   };
 
-  const handleProjectCreated = (
+  const handleProjectCreated = async (
     project: PDFProject,
     openImmediately: boolean
   ) => {
-    void handleSaveProject(project);
+    const saved = await handleSaveProject(project);
+    if (!saved.ok) {
+      setProjects((prev) => prev.filter((item) => item.id !== project.id));
+      console.error('Project was not opened because local persistence failed:', saved.error);
+      return;
+    }
     setActiveProjIdState(project.id);
     setActiveProjectId(project.id);
     if (openImmediately) {
@@ -720,7 +730,7 @@ export default function App() {
           </AnimatePresence>
 
           <AnimatePresence
-            mode="wait"
+            mode="sync"
             custom={navDirection}
             onExitComplete={() => {
               if (activeSection !== 'editor' && typeof window !== 'undefined') {
@@ -750,6 +760,7 @@ export default function App() {
                 activeSection === 'editor' ? 'h-full overflow-hidden' : ''
               }`}
             >
+              <Suspense fallback={null}>
               {activeSection === 'dashboard' && (
                 <DashboardView
                   projects={projects}
@@ -825,6 +836,7 @@ export default function App() {
                 <BlueprintStudioView
                   project={activeProject}
                   blueprints={blueprints}
+                  initialBlueprintId={commandBlueprintId}
                   onSaveBlueprint={handleSaveBlueprint}
                   onDeleteBlueprint={handleDeleteBlueprint}
                   onUpdateProject={handleSaveProject}
@@ -892,6 +904,7 @@ export default function App() {
                   profiles={automationProfiles}
                   serialBatches={serialBatches}
                   workflows={workflows}
+                  initialWorkflowId={commandWorkflowId}
                   onSaveWorkflow={handleSaveWorkflow}
                   onDeleteWorkflow={handleDeleteWorkflow}
                   onUpdateProject={handleSaveProject}
@@ -942,9 +955,14 @@ export default function App() {
                 />
               )}
 
+              {activeSection === 'user-manual' && (
+                <UserManualView onNavigate={setActiveSection} />
+              )}
+
               {activeSection === 'about' && (
                 <AboutView onNavigate={setActiveSection} />
               )}
+              </Suspense>
             </motion.div>
           </AnimatePresence>
         </main>
@@ -966,6 +984,15 @@ export default function App() {
           }
           onNavigate={setActiveSection}
           onOpenProject={handleOpenProject}
+          onSelectBlueprint={(blueprint) => {
+            setCommandBlueprintId(blueprint.id);
+            setActiveSection('blueprint-studio');
+          }}
+          onSelectWorkflow={(workflow) => {
+            setCommandWorkflowId(workflow.id);
+            setActiveSection('workflow-studio');
+          }}
+          onRunProfile={(profile) => handleRunProfile(profile)}
         />
       </div>
     </MotionConfig>

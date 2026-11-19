@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: lazy-editor
+    runtime: node
+    plan: free
+    region: singapore
+    branch: fix/lazy-editor-audit
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ENABLE_PROJECT_API
+        value: "false"

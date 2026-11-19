@@ -1,10 +1,11 @@
 import { DocumentElement, PDFProject } from '../types/pdfStudio';
 import { base64ToUint8Array, renderPdfPagesForStudio } from './pdfRenderer';
 import { appendOperationLog } from './projectStorage';
+import { getGeminiRequestHeaders } from './geminiKey';
 
 export interface AiAnalysisResponseResult {
   ok: boolean;
-  code?: 'QUOTA_EXHAUSTED' | 'MISSING_API_KEY' | 'API_KEY_INVALID' | 'AI_UNAVAILABLE';
+  code?: 'QUOTA_EXHAUSTED' | 'MISSING_API_KEY' | 'API_KEY_INVALID' | 'AI_REQUEST_INVALID' | 'AI_UNAVAILABLE';
   message: string;
   updatedProject?: PDFProject;
   addedOrUpdatedCount?: number;
@@ -15,7 +16,7 @@ export function formatFriendlyAiError(
   status?: number,
   code?: string
 ): {
-  code: 'QUOTA_EXHAUSTED' | 'MISSING_API_KEY' | 'API_KEY_INVALID' | 'AI_UNAVAILABLE';
+  code: 'QUOTA_EXHAUSTED' | 'MISSING_API_KEY' | 'API_KEY_INVALID' | 'AI_REQUEST_INVALID' | 'AI_UNAVAILABLE';
   message: string;
 } {
   const lower = (rawMessage || '').toLowerCase();
@@ -40,7 +41,13 @@ export function formatFriendlyAiError(
     return {
       code: 'MISSING_API_KEY',
       message:
-        'Gemini API key is not configured in Settings > Secrets. Local PDF Scan and all editing, bulk generation, and export features remain fully active.',
+        'Gemini API key is not configured in Settings > AI & Gemini. Local PDF Scan and all editing, bulk generation, and export features remain fully active.',
+    };
+  }
+  if (code === 'AI_REQUEST_INVALID' || status === 400) {
+    return {
+      code: 'AI_REQUEST_INVALID',
+      message: rawMessage || 'The AI provider rejected this request. Check the selected model and request format; your API key may still be valid.',
     };
   }
   if (
@@ -52,7 +59,7 @@ export function formatFriendlyAiError(
     return {
       code: 'API_KEY_INVALID',
       message:
-        'Gemini API key lacks permission or is invalid. Verify Settings > Secrets or continue editing using Local PDF Scan.',
+        'Gemini API key lacks permission or is invalid. Verify Settings > AI & Gemini or continue editing using Local PDF Scan.',
     };
   }
   return {
@@ -96,7 +103,7 @@ export async function runOptionalAiEnhancedAnalysis(
       const rendered = await renderPdfPagesForStudio(pdfBytes, {
         renderScale: 1.5,
         enableOcrFallback: false,
-        maxPagesForAi: 12,
+        maxPagesForAi: Math.max(1, project.pageCount),
       });
       pagesPayload = rendered.pages.map((p) => ({
         pageNumber: p.pageNumber,
@@ -116,7 +123,6 @@ export async function runOptionalAiEnhancedAnalysis(
     } else {
       pagesPayload = project.originalPages
         .filter((p) => Boolean(p.previewImageDataUrl))
-        .slice(0, 12)
         .map((p) => ({
           pageNumber: p.pageNumber,
           widthPt: p.widthPt,
@@ -146,7 +152,7 @@ export async function runOptionalAiEnhancedAnalysis(
 
     const response = await fetch('/api/ai/analyze-pdf', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getGeminiRequestHeaders() },
       body: JSON.stringify({
         fileName: project.sourcePdfName || project.name,
         pages: pagesPayload,

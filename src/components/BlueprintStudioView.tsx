@@ -41,6 +41,7 @@ import { NumericDraftInput } from './NumericDraftInput';
 interface BlueprintStudioViewProps {
   project: PDFProject | null;
   blueprints: ProductionBlueprint[];
+  initialBlueprintId?: string | null;
   onSaveBlueprint: (bp: ProductionBlueprint) => void;
   onDeleteBlueprint: (id: string) => void;
   onUpdateProject: (updated: PDFProject) => void;
@@ -68,6 +69,7 @@ type DragState =
 export const BlueprintStudioView: React.FC<BlueprintStudioViewProps> = ({
   project,
   blueprints,
+  initialBlueprintId,
   onSaveBlueprint,
   onDeleteBlueprint,
   onUpdateProject,
@@ -97,6 +99,16 @@ export const BlueprintStudioView: React.FC<BlueprintStudioViewProps> = ({
     setSelectedBlockId(nextBp.blocks[0]?.id || null);
     setStatusMessage(null);
   }, [project?.id]);
+
+  useEffect(() => {
+    if (!initialBlueprintId) return;
+    const selected = blueprints.find((bp) => bp.id === initialBlueprintId);
+    if (!selected) return;
+    const next = structuredClone(selected);
+    setDraftBlueprint(next);
+    setSelectedBlockId(next.blocks[0]?.id || null);
+    setStatusMessage(`Opened blueprint: ${selected.name}`);
+  }, [initialBlueprintId, blueprints]);
 
   useEffect(() => {
     const clearDrag = () => {

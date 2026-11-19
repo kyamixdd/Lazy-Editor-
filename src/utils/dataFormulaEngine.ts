@@ -358,27 +358,96 @@ export async function parseSpreadsheetFile(file: File): Promise<{
   columns: DataColumn[];
   rows: DataRow[];
 }> {
-  const buffer = await file.arrayBuffer();
-  const workbook = XLSX.read(buffer, { type: 'array' });
-  const firstSheet = workbook.SheetNames[0];
-  if (!firstSheet) {
-    throw new Error('Spreadsheet contains no sheets.');
-  }
-  const worksheet = workbook.Sheets[firstSheet];
-  const jsonRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, {
-    defval: '',
-  });
+  const MAX_IMPORT_BYTES = 20 * 1024 * 1024;
+  const MAX_IMPORT_ROWS = 50000;
+  const MAX_IMPORT_COLUMNS = 250;
 
-  if (jsonRows.length === 0) {
-    throw new Error('Spreadsheet contains no data rows.');
+  if (!file || typeof file.arrayBuffer !== 'function') {
+    throw new Error('Choose a valid CSV, Excel, or JSON file.');
+  }
+  if (file.size > MAX_IMPORT_BYTES) {
+    throw new Error('This file is larger than the 20 MB import limit. Split it into smaller files and try again.');
   }
 
-  const headers = Object.keys(jsonRows[0]);
+  let jsonRows: Record<string, unknown>[];
+  const isJson = file.name.toLowerCase().endsWith('.json') ||
+    file.type.toLowerCase().includes('json');
+
+  if (isJson) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch {
+      throw new Error('The JSON file is invalid. Check its syntax and try again.');
+    }
+
+    let candidate: unknown = parsed;
+    if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+      const root = candidate as Record<string, unknown>;
+      if (root.scanReport && Array.isArray(root.elements) && Array.isArray(root.pages)) {
+        throw new Error('This is a Lazy Editor Scan Structure export, not a CSV/Excel dataset. Import it through the Scan Inspector restore/import workflow (if available), or open the original PDF in New Project. The JSON contains image resource references, not the original PDF or embedded image files.');
+      }
+      candidate = Array.isArray(root.rows) ? root.rows
+        : Array.isArray(root.dataRows) ? root.dataRows
+        : Array.isArray(root.data) ? root.data
+        : candidate;
+    }
+    if (!Array.isArray(candidate)) {
+      throw new Error('JSON import expects an array of records, or an object containing a rows, dataRows, or data array.');
+    }
+    if (candidate.length === 0) {
+      throw new Error('JSON file contains no data rows.');
+    }
+    if (candidate.length > MAX_IMPORT_ROWS) {
+      throw new Error(`This import contains more than ${MAX_IMPORT_ROWS.toLocaleString()} rows. Split it into smaller files.`);
+    }
+    jsonRows = candidate.map((item, index) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        throw new Error(`JSON row ${index + 1} is not an object. Each row must be a record of named fields.`);
+      }
+      return item as Record<string, unknown>;
+    });
+  } else {
+    const buffer = await file.arrayBuffer();
+    let workbook: XLSX.WorkBook;
+    try {
+      workbook = XLSX.read(buffer, { type: 'array' });
+    } catch {
+      throw new Error('Could not read this file. Supported formats are CSV, XLS, XLSX, and JSON.');
+    }
+    const firstSheet = workbook.SheetNames[0];
+    if (!firstSheet) throw new Error('Spreadsheet contains no sheets.');
+    const worksheet = workbook.Sheets[firstSheet];
+    jsonRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(worksheet, { defval: '' });
+  }
+
+  if (jsonRows.length === 0) throw new Error('File contains no data rows.');
+
+  // Build a union of headers so fields appearing after the first JSON record are not lost.
+  const seen = new Set<string>();
+  const headers: string[] = [];
+  for (const raw of jsonRows) {
+    for (const key of Object.keys(raw)) {
+      const safe = key.trim() && !['__proto__', 'prototype', 'constructor', '_rowId'].includes(key.trim())
+        ? key.trim()
+        : '';
+      if (safe && !seen.has(safe)) {
+        seen.add(safe);
+        headers.push(safe);
+      }
+    }
+  }
+  if (headers.length === 0) throw new Error('No usable column names were found in the imported file.');
+  if (headers.length > MAX_IMPORT_COLUMNS) {
+    throw new Error(`This import contains more than ${MAX_IMPORT_COLUMNS} columns. Reduce the number of fields and try again.`);
+  }
+
   const columns: DataColumn[] = headers.map((header, idx) => {
-    const sample = jsonRows[0][header];
-    const isNum =
-      typeof sample === 'number' ||
-      (typeof sample === 'string' && /^-?\d+(\.\d+)?$/.test(sample.trim()));
+    const values = jsonRows.map((row) => row[header]).filter((value) => value !== '' && value !== null && value !== undefined);
+    const isNum = values.length > 0 && values.every((value) =>
+      typeof value === 'number' ||
+      (typeof value === 'string' && /^-?\\d+(\\.\\d+)?$/.test(value.trim()))
+    );
     return {
       id: `col-${idx}-${Math.random().toString(36).slice(2, 6)}`,
       name: header,
@@ -391,12 +460,12 @@ export async function parseSpreadsheetFile(file: File): Promise<{
     const row: DataRow = {
       _rowId: `row-${idx}-${Math.random().toString(36).slice(2, 6)}`,
     };
-    for (const h of headers) {
-      const val = raw[h];
-      row[h] =
-        typeof val === 'number' || typeof val === 'string'
-          ? val
-          : String(val ?? '');
+    for (const header of headers) {
+      const value = raw[header];
+      row[header] = value === null || value === undefined ? ''
+        : typeof value === 'string' || typeof value === 'number' ? value
+        : typeof value === 'boolean' ? String(value)
+        : JSON.stringify(value);
     }
     return row;
   });

@@ -1,6 +1,6 @@
 {
-  "name": "PDF Studio AI",
-  "description": "Professional AI-powered PDF template analyzer, visual editor, multi-copy imposition engine, and bulk document generator.",
+  "name": "Lazy Editor",
+  "description": "Document template analyzer, visual editor, multi-copy imposition engine, and bulk PDF generator.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

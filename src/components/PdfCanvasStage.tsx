@@ -296,13 +296,24 @@ export const PdfCanvasStage: React.FC<PdfCanvasStageProps> = ({
 
   // Load background PDF page image
   useEffect(() => {
+    let cancelled = false;
     if (!backgroundImageUrl) {
       setBgImgObj(null);
       return;
     }
     const img = new Image();
-    img.onload = () => setBgImgObj(img);
+    img.onload = () => {
+      if (!cancelled) setBgImgObj(img);
+    };
+    img.onerror = () => {
+      if (!cancelled) setBgImgObj(null);
+    };
     img.src = backgroundImageUrl;
+    return () => {
+      cancelled = true;
+      img.onload = null;
+      img.onerror = null;
+    };
   }, [backgroundImageUrl]);
 
   // Load any added element images & signatures (reloads cleanly on image replacement)

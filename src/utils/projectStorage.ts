@@ -15,6 +15,7 @@ import {
   UnsavedDraftRecord,
   WorkflowChain,
 } from '../types/pdfStudio';
+import { createDefaultPageConfig } from './units';
 
 const DB_NAME = 'pdf_studio_ai_db';
 const DB_VERSION = 6;
@@ -122,6 +123,40 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
+/** Repair older IndexedDB project records before they reach React components. */
+export function normalizeStoredProject(value: unknown): PDFProject | null {
+  if (!value || typeof value !== 'object') return null;
+  const project = value as Partial<PDFProject> & Record<string, unknown>;
+  if (typeof project.id !== 'string' || !project.id) return null;
+  const storedPageConfig = project.pageConfig && typeof project.pageConfig === 'object'
+    ? project.pageConfig as Partial<PDFProject['pageConfig']>
+    : {};
+  const pageConfig = {
+    ...createDefaultPageConfig(),
+    ...storedPageConfig,
+    sizePreset: storedPageConfig.sizePreset || 'A4',
+    widthPt: Number.isFinite(storedPageConfig.widthPt) ? storedPageConfig.widthPt! : 595.28,
+    heightPt: Number.isFinite(storedPageConfig.heightPt) ? storedPageConfig.heightPt! : 841.89,
+    unit: storedPageConfig.unit || 'mm',
+  };
+  return {
+    ...project,
+    pageConfig,
+    name: typeof project.name === 'string' ? project.name : 'Untitled project',
+    description: typeof project.description === 'string' ? project.description : '',
+    sourcePdfName: typeof project.sourcePdfName === 'string' ? project.sourcePdfName : 'document.pdf',
+    pageCount: Number.isFinite(project.pageCount) ? Number(project.pageCount) : 1,
+    originalPages: Array.isArray(project.originalPages) ? project.originalPages : [],
+    elements: Array.isArray(project.elements) ? project.elements : [],
+    serialRules: Array.isArray(project.serialRules) ? project.serialRules : [],
+    dataColumns: Array.isArray(project.dataColumns) ? project.dataColumns : [],
+    dataRows: Array.isArray(project.dataRows) ? project.dataRows : [],
+    versions: Array.isArray(project.versions) ? project.versions : [],
+    operationLog: Array.isArray(project.operationLog) ? project.operationLog : [],
+    tags: Array.isArray(project.tags) ? project.tags : [],
+  } as PDFProject;
+}
+
 export async function listProjectsLocal(): Promise<PDFProject[]> {
   try {
     const db = await openDb();
@@ -130,7 +165,9 @@ export async function listProjectsLocal(): Promise<PDFProject[]> {
       const store = tx.objectStore(STORE_PROJECTS);
       const req = store.getAll();
       req.onsuccess = () => {
-        const items = (req.result as PDFProject[]) || [];
+        const items = ((req.result as unknown[]) || [])
+          .map(normalizeStoredProject)
+          .filter((item): item is PDFProject => item !== null);
         items.sort(
           (a, b) =>
             new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
@@ -151,7 +188,7 @@ export async function getProjectLocal(id: string): Promise<PDFProject | null> {
     return await new Promise((resolve, reject) => {
       const tx = db.transaction(STORE_PROJECTS, 'readonly');
       const req = tx.objectStore(STORE_PROJECTS).get(id);
-      req.onsuccess = () => resolve((req.result as PDFProject) || null);
+      req.onsuccess = () => resolve(normalizeStoredProject(req.result));
       req.onerror = () => reject(req.error);
     });
   } catch {
@@ -169,39 +206,8 @@ export async function saveProjectLocal(project: PDFProject): Promise<void> {
     tx.onabort = () => reject(tx.error || new Error('IndexedDB save aborted'));
   });
 
-  // Sync lightweight project metadata + JSON layout to server persistence
-  try {
-    const payload = {
-      ...project,
-      originalPages: project.originalPages.map((p) => ({
-        pageNumber: p.pageNumber,
-        sourcePdfPageNumber: p.sourcePdfPageNumber,
-        widthPt: p.widthPt,
-        heightPt: p.heightPt,
-        orientation: p.orientation,
-      })),
-      versions: (project.versions || []).slice(0, 12).map((v) => ({
-        ...v,
-        elementsSnapshot: v.elementsSnapshot.map((el) =>
-          el.imageDataUrl && el.imageDataUrl.length > 4096
-            ? { ...el, imageDataUrl: undefined }
-            : el
-        ),
-      })),
-      sourcePdfBase64: undefined,
-      imageResources: undefined,
-    };
-    const res = await fetch('/api/projects', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      console.warn('Server project sync responded with', res.status);
-    }
-  } catch {
-    // Offline or server sync fallback silently continues with IndexedDB
-  }
+  // IndexedDB is the authoritative local store. Server-side project sync is
+  // intentionally not attempted until authenticated per-user persistence exists.
 }
 
 export async function deleteProjectLocal(id: string): Promise<void> {
@@ -213,11 +219,6 @@ export async function deleteProjectLocal(id: string): Promise<void> {
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
-  try {
-    await fetch(`/api/projects/${encodeURIComponent(id)}`, { method: 'DELETE' });
-  } catch {
-    // Ignore network errors on local delete
-  }
 }
 
 export async function clearAllProjectsLocal(): Promise<void> {

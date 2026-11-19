@@ -27,6 +27,7 @@ import {
   analyzeDataQuality,
   evaluateFormula,
   formatCellValue,
+  parseSpreadsheetFile,
 } from '../src/utils/dataFormulaEngine';
 import {
   alignSelectedElements,
@@ -47,6 +48,7 @@ import {
   inspectPendingRedactions,
 } from '../src/utils/redactionEngine';
 import { validateProject } from '../src/utils/validationEngine';
+import { normalizeStoredProject } from '../src/utils/projectStorage';
 import { generateExportBytes } from '../src/utils/pdfExporter';
 import {
   createDefaultBulkConfig,
@@ -133,6 +135,16 @@ function makeTestProject(overrides: Partial<PDFProject> = {}): PDFProject {
 // ---------------------------------------------------------------------------
 // 1. Editor Interaction Helpers (Toggles, Escape Stack, Numeric Commit)
 // ---------------------------------------------------------------------------
+
+test('projectStorage: legacy projects receive safe page configuration defaults', () => {
+  const legacy = normalizeStoredProject({ id: 'legacy-project', name: 'Legacy', pageConfig: undefined });
+  assert.ok(legacy);
+  assert.equal(legacy.pageConfig.sizePreset, 'A4');
+  assert.equal(legacy.pageConfig.widthPt, 595.28);
+  assert.equal(legacy.pageConfig.heightPt, 841.89);
+  assert.deepEqual(legacy.dataRows, []);
+  assert.deepEqual(legacy.elements, []);
+});
 
 test('editorInteractions: toggleEditorTool activates, deactivates on repeat, and switches cleanly', () => {
   const first = toggleEditorTool('select', 'rect', false);
@@ -806,3 +818,35 @@ test('editorInteractions: computeProjectDirtySignature ignores version increment
   assert.notEqual(computeProjectDirtySignature(afterEdit), sigInitial);
 });
 
+
+
+test('data import: JSON arrays and wrapped row collections import safely with unioned columns', async () => {
+  const file = new File(
+    [JSON.stringify({ rows: [
+      { customer: 'Northwind', amount: 125, active: true },
+      { customer: 'Contoso', amount: 240, note: 'late', active: false },
+    ] })],
+    'customers.json',
+    { type: 'application/json' }
+  );
+  const parsed = await parseSpreadsheetFile(file);
+  assert.deepEqual(parsed.columns.map((column) => column.name), ['customer', 'amount', 'active', 'note']);
+  assert.equal(parsed.rows.length, 2);
+  assert.equal(parsed.rows[0].customer, 'Northwind');
+  assert.equal(parsed.rows[1].note, 'late');
+  assert.equal(parsed.rows[0].active, 'true');
+  assert.equal(parsed.rows[1].amount, 240);
+});
+
+test('data import: identifies Scan Structure exports instead of treating them as datasets', async () => {
+  const scanExport = new File([JSON.stringify({ projectName: 'Example', scanReport: {}, pages: [{}], elements: [] })], 'scan.json', { type: 'application/json' });
+  await assert.rejects(() => parseSpreadsheetFile(scanExport), /Scan Structure export, not a CSV\/Excel dataset/);
+});
+
+test('data import: rejects malformed JSON and non-record rows with actionable errors', async () => {
+  const malformed = new File(['{ invalid'], 'broken.json', { type: 'application/json' });
+  await assert.rejects(() => parseSpreadsheetFile(malformed), /JSON file is invalid/);
+
+  const invalidRows = new File(['[1,2,3]'], 'numbers.json', { type: 'application/json' });
+  await assert.rejects(() => parseSpreadsheetFile(invalidRows), /row 1 is not an object/);
+});

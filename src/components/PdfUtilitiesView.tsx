@@ -85,8 +85,8 @@ export const PdfUtilitiesView: React.FC<PdfUtilitiesViewProps> = ({
     author: '',
     subject: '',
     keywords: '',
-    creator: 'PDF Studio AI',
-    producer: 'PDF Studio AI',
+    creator: 'Lazy Editor',
+    producer: 'Lazy Editor',
     pageCount: activeProject?.pageCount || 0,
   });
 
@@ -123,7 +123,7 @@ export const PdfUtilitiesView: React.FC<PdfUtilitiesViewProps> = ({
   const [imageFormat, setImageFormat] = useState<'png' | 'jpeg' | 'webp'>('png');
   const [convertPageNum, setConvertPageNum] = useState(1);
   const [markdownInput, setMarkdownInput] = useState(
-    '# Invoice Cover Sheet\n## Summary\nGenerated locally by PDF Studio AI.'
+    '# Invoice Cover Sheet\n## Summary\nGenerated locally by Lazy Editor.'
   );
   const [markdownTitle, setMarkdownTitle] = useState('Converted Document');
 
@@ -753,10 +753,10 @@ export const PdfUtilitiesView: React.FC<PdfUtilitiesViewProps> = ({
         <div className="grid grid-cols-1 tablet:grid-cols-2 gap-4 text-xs">
           <GlassCard level={3} padding="md" className="space-y-3">
             <h2 className="text-sm font-semibold text-[#101010] dark:text-white">
-              PDF/A-1b XMP Tagging &amp; Font Embedding Audit
+              PDF/A Metadata Tagging &amp; Font Embedding Audit
             </h2>
             <p className="text-[#555555] dark:text-[#B5B5B5] leading-relaxed">
-              Attaches an ISO PDF/A-1b XMP metadata stream and inspects every font resource in the PDF to verify whether font binaries are embedded.
+              Adds PDF/A-1b XMP metadata and inspects font embedding. This is an audit/tagging aid only: it does not convert the file into a compliant PDF/A document or certify conformance with ISO requirements.
             </p>
             {archivalNote && (
               <div className="p-2.5 rounded-lg border border-black/15 dark:border-white/15 bg-black/[0.03] dark:bg-white/[0.04]">
@@ -791,7 +791,7 @@ export const PdfUtilitiesView: React.FC<PdfUtilitiesViewProps> = ({
               Security &amp; Sanitization Disclosure
             </h2>
             <p className="text-[#555555] dark:text-[#B5B5B5] leading-relaxed">
-              Standard client-side <code className="font-mono">pdf-lib</code> does not write RC4/AES-256 PDF encryption streams, so PDF Studio AI never stamps fake password flags. Use Metadata Scrubbing, True Rasterized Redaction in the Editor, and SHA-256 Integrity Passports for verifiable protection.
+              Standard client-side <code className="font-mono">pdf-lib</code> does not write RC4/AES-256 PDF encryption streams, so Lazy Editor never stamps fake password flags. Use Metadata Scrubbing, True Rasterized Redaction in the Editor, and SHA-256 Integrity Passports for verifiable protection.
             </p>
           </GlassCard>
         </div>

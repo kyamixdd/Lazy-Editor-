@@ -3,12 +3,14 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
+import { resolveGeminiModel } from './src/utils/geminiModel';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
+const PROJECT_API_ENABLED = process.env.ENABLE_PROJECT_API === 'true';
 
 app.use(express.json({ limit: '60mb' }));
 
@@ -41,11 +43,14 @@ function writeStoredProjects(projects: Record<string, unknown>[]) {
   fs.writeFileSync(PROJECTS_FILE, JSON.stringify(projects, null, 2), 'utf-8');
 }
 
-function getGeminiClient(): GoogleGenAI {
-  const apiKey = process.env.GEMINI_API_KEY;
+function getGeminiClient(req?: express.Request): GoogleGenAI {
+  // A user-provided key is accepted per request and never persisted by this server.
+  // The server environment key remains available as an optional operator fallback.
+  const headerKey = req?.get('x-gemini-api-key');
+  const apiKey = (typeof headerKey === 'string' ? headerKey.trim() : '') || process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
     const err = new Error(
-      'GEMINI_API_KEY is not configured. Please add your Gemini API key in Settings > Secrets.'
+      'No Gemini API key is configured. Add your own key in Settings > AI & Gemini.'
     ) as Error & { code?: string };
     err.code = 'MISSING_API_KEY';
     throw err;
@@ -75,7 +80,7 @@ function classifyGeminiHttpError(err: unknown): {
       status: 503,
       code: 'MISSING_API_KEY',
       error:
-        'GEMINI_API_KEY is not configured. Local PDF Scan and all editing/export tools remain active.',
+        'No Gemini API key was supplied. Add your Gemini key in Settings > AI & Gemini. Local scanning and PDF editing remain available.',
     };
   }
   if (
@@ -93,7 +98,6 @@ function classifyGeminiHttpError(err: unknown): {
   }
   if (
     errObj?.status === 403 ||
-    errObj?.status === 400 ||
     lower.includes('permission_denied') ||
     lower.includes('api_key_invalid')
   ) {
@@ -101,7 +105,15 @@ function classifyGeminiHttpError(err: unknown): {
       status: 403,
       code: 'API_KEY_INVALID',
       error:
-        'Gemini API key was rejected or lacks permission. Please verify Settings > Secrets.',
+        'Gemini API key was rejected or lacks permission. Verify your Gemini API key in Settings > AI & Gemini.',
+    };
+  }
+  if (errObj?.status === 400 || lower.includes('invalid_argument')) {
+    return {
+      status: 400,
+      code: 'AI_REQUEST_INVALID',
+      error:
+        'Gemini rejected the request. Check the selected model, request format, and supported input limits; this does not necessarily indicate an invalid API key.',
     };
   }
   return {
@@ -113,7 +125,21 @@ function classifyGeminiHttpError(err: unknown): {
 
 // Health endpoint
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, service: 'pdf-studio-ai' });
+  res.json({ ok: true, service: 'lazy-editor' });
+});
+
+// Project persistence is disabled by default because these endpoints do not yet
+// implement user authentication or per-user ownership isolation. Enable only in a
+// trusted, single-user environment behind an authenticated reverse proxy.
+app.use('/api/projects', (_req, res, next) => {
+  if (!PROJECT_API_ENABLED) {
+    res.status(503).json({
+      error: 'Server project persistence is disabled until authenticated access is configured. Local browser storage remains available.',
+      code: 'PROJECT_API_DISABLED',
+    });
+    return;
+  }
+  next();
 });
 
 // Project & template persistence endpoints
@@ -368,6 +394,27 @@ app.post('/api/pdf/create-starter', async (req, res) => {
   }
 });
 
+// Validate a user-supplied Gemini key without storing or logging it.
+app.post('/api/ai/validate-key', async (req, res) => {
+  try {
+    const key = req.get('x-gemini-api-key')?.trim();
+    if (!key || key.length < 20 || key.length > 512) {
+      res.status(400).json({ ok: false, error: 'Enter a valid Gemini API key.' });
+      return;
+    }
+    const ai = getGeminiClient(req);
+    await ai.models.generateContent({
+      model: resolveGeminiModel(process.env.GEMINI_MODEL),
+      contents: 'Reply with the single word OK.',
+      config: { maxOutputTokens: 8 },
+    });
+    res.json({ ok: true, message: 'Gemini API key verified successfully.' });
+  } catch (err) {
+    const classified = classifyGeminiHttpError(err);
+    res.status(classified.status).json({ ok: false, error: classified.error, code: classified.code });
+  }
+});
+
 // Gemini Multimodal PDF Analysis Endpoint
 app.post('/api/ai/analyze-pdf', async (req, res) => {
   try {
@@ -395,13 +442,15 @@ app.post('/api/ai/analyze-pdf', async (req, res) => {
       return;
     }
 
-    const ai = getGeminiClient();
+    const ai = getGeminiClient(req);
     const allElements: Record<string, unknown>[] = [];
     const pageSummaries: string[] = [];
 
     // Analyze pages in batches (page-by-page ensures high precision & avoids token truncation on large PDFs)
     for (const page of pages) {
-      const compactTextItems = (page.extractedTextItems || []).slice(0, 220);
+      const compactTextItems = page.extractedTextItems || [];
+      // Preserve every extracted text item; arbitrary per-page truncation caused
+      // dense forms and receipts to lose fields before AI analysis.
       const mimeMatch = page.imageBase64.match(/^data:(image\/\w+);base64,/);
       const imageMimeType = mimeMatch ? mimeMatch[1] : 'image/png';
       const imageBase64Clean = page.imageBase64.replace(
@@ -409,7 +458,7 @@ app.post('/api/ai/analyze-pdf', async (req, res) => {
         ''
       );
 
-      const promptText = `You are a precision document layout analyzer for PDF Studio AI.
+      const promptText = `You are a precision document layout analyzer for Lazy Editor.
 Analyze Page ${page.pageNumber} of "${fileName}" (page size: ${page.widthPt.toFixed(2)}pt x ${page.heightPt.toFixed(2)}pt, top-left origin).
 
 Extracted text coordinates from PDF.js / OCR (in PDF points, top-left origin):
@@ -434,7 +483,7 @@ Instructions:
 6. Suggest a clean 'fieldKey' for dynamic/data-mappable fields (like "invoice_number", "receipt_number", "customer_name", "date", "total_amount").`;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
+        model: resolveGeminiModel(process.env.GEMINI_MODEL),
         contents: {
           parts: [
             {
@@ -586,8 +635,8 @@ Instructions:
       elements: allElements,
     });
   } catch (err) {
-    console.error('AI analyze-pdf error:', err);
     const classified = classifyGeminiHttpError(err);
+    console.warn('AI analyze-pdf request failed:', classified.code);
     res.status(classified.status).json({ error: classified.error, code: classified.code });
   }
 });
@@ -608,7 +657,7 @@ app.post('/api/ai/edit-command', async (req, res) => {
       return;
     }
 
-    const ai = getGeminiClient();
+    const ai = getGeminiClient(req);
 
     const compactElements = (currentElements || []).map(
       (el: Record<string, unknown>) => ({
@@ -631,7 +680,7 @@ app.post('/api/ai/edit-command', async (req, res) => {
       })
     );
 
-    const prompt = `You are the AI Document Editing Assistant inside PDF Studio AI.
+    const prompt = `You are the AI Document Editing Assistant inside Lazy Editor.
 User instruction: "${instruction}"
 Current active page: ${currentPage}
 Page dimensions: ${pageConfig?.widthPt}pt x ${pageConfig?.heightPt}pt
@@ -651,7 +700,7 @@ Rules:
 - Never invent non-existent targetIds.`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-4-hydrogen',
+      model: resolveGeminiModel(process.env.GEMINI_MODEL),
       contents: prompt,
       config: {
         thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
@@ -724,8 +773,8 @@ Rules:
     const plan = JSON.parse((response.text || '{}').trim());
     res.json(plan);
   } catch (err) {
-    console.error('AI edit-command error:', err);
     const classified = classifyGeminiHttpError(err);
+    console.warn('AI edit-command request failed:', classified.code);
     res.status(classified.status).json({ error: classified.error, code: classified.code });
   }
 });
@@ -747,7 +796,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`PDF Studio AI server running on http://localhost:${PORT}`);
+    console.log(`Lazy Editor server running on http://localhost:${PORT}`);
   });
 }
 

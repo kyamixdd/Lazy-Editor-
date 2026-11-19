@@ -6,3 +6,8 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Local runtime data and generated user documents
+.studio_data/
+*.sqlite
+*.db

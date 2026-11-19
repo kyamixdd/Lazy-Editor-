@@ -288,6 +288,8 @@ export const EditorView: React.FC<EditorViewProps> = ({
   // Clamp currentPage and reset dirty baseline when switching projects
   useEffect(() => {
     setCurrentPage((p) => Math.max(1, Math.min(p, Math.max(1, project.pageCount))));
+    setThumbnails({});
+    setPageBgUrl(project.originalPages[0]?.previewImageDataUrl);
     lastAutoSnapHashRef.current = JSON.stringify(projectRef.current.elements);
     lastSavedDirtySigRef.current = computeProjectDirtySignature(projectRef.current);
     setSaveStatus('idle');
@@ -417,23 +419,29 @@ export const EditorView: React.FC<EditorViewProps> = ({
 
   // Sync page preview image when page changes (respecting duplicated sourcePdfPageNumber)
   useEffect(() => {
+    let cancelled = false;
     const meta = project.originalPages.find((p) => p.pageNumber === currentPage);
     if (meta?.previewImageDataUrl) {
       setPageBgUrl(meta.previewImageDataUrl);
-      return;
-    }
-    if (project.sourcePdfBase64) {
+    } else if (project.sourcePdfBase64) {
+      // Clear the previous page immediately so a slow render cannot leave the
+      // old page visible while the user is navigating.
+      setPageBgUrl(undefined);
       const targetPdfPage = meta?.sourcePdfPageNumber || currentPage;
       void renderSinglePagePreview(
         project.sourcePdfBase64,
         targetPdfPage,
         1.7
       ).then((url) => {
-        if (url) setPageBgUrl(url);
+        // Ignore out-of-order renders when the user changes page/project quickly.
+        if (!cancelled) setPageBgUrl(url || undefined);
       });
     } else {
       setPageBgUrl(undefined);
     }
+    return () => {
+      cancelled = true;
+    };
   }, [currentPage, project.id, project.originalPages, project.sourcePdfBase64]);
 
   const makeHistorySnapshot = (
@@ -1406,9 +1414,12 @@ export const EditorView: React.FC<EditorViewProps> = ({
             : el
         );
       } else if (op.action === 'delete' && op.targetId) {
-        next = next.filter((el) => el.id !== op.targetId);
+        const target = next.find((el) => el.id === op.targetId);
+        if (target && !target.locked) {
+          next = next.filter((el) => el.id !== op.targetId);
+        }
       } else if (op.action === 'duplicate' && op.targetId) {
-        const src = next.find((el) => el.id === op.targetId);
+        const src = next.find((el) => el.id === op.targetId && !el.locked);
         if (src) {
           next.push({
             ...structuredClone(src),
@@ -2023,6 +2034,34 @@ export const EditorView: React.FC<EditorViewProps> = ({
     }
     if (next.activeTool === 'select' && tool !== 'select') {
       setActiveCategory(defaultCategoryForTool(tool));
+    }
+  };
+
+  const handleRunFavoriteTool = (toolId: string) => {
+    if (isToolHidden(toolId)) return;
+    if (['text', 'rect', 'circle', 'line', 'table', 'qr_code', 'barcode'].includes(toolId)) {
+      addNewElement(toolId as 'text' | 'rect' | 'circle' | 'line' | 'table' | 'qr_code' | 'barcode');
+      return;
+    }
+    if (toolId === 'image') {
+      imageUploadRef.current?.click();
+      return;
+    }
+    if (toolId === 'signature') {
+      setSignatureModalInitialTab('signature');
+      setSignatureStampOpen(true);
+      return;
+    }
+    if (toolId === 'redact') {
+      setActiveCategory('annotate');
+      handleToggleTool('redact');
+      setToolbarExpanded(true);
+      return;
+    }
+    if (toolId === 'measure') {
+      setActiveCategory('measure');
+      handleToggleTool('measure');
+      setToolbarExpanded(true);
     }
   };
 
@@ -2817,6 +2856,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   <>
                     <button
                       type="button"
+                      hidden={isToolHidden('text')}
                       onClick={() => handleToggleTool('text')}
                       className={`px-2.5 py-1 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap ${
                         activeTool === 'text'
@@ -2829,6 +2869,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     </button>
                     <button
                       type="button"
+                      hidden={isToolHidden('text')}
                       onClick={() => addNewElement('text')}
                       className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
                     >
@@ -2854,6 +2895,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     </button>
                     <button
                       type="button"
+                      hidden={isToolHidden('search')}
                       onClick={() => {
                         setShowSearchBar((v) => !v);
                         onTrackRecentTool?.('search');
@@ -2893,13 +2935,14 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   <>
                     <button
                       type="button"
+                      hidden={isToolHidden('image')}
                       onClick={() => imageUploadRef.current?.click()}
                       className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
                     >
                       <ImageIcon className="w-3.5 h-3.5" />
                       Upload Image / Logo
                     </button>
-                    <div ref={assetMenuRef} className="relative">
+                    <div ref={assetMenuRef} className="relative" hidden={isToolHidden('assets')}>
                       <button
                         type="button"
                         onClick={() => setShowAssetInsertMenu((v) => !v)}
@@ -3003,7 +3046,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                         ['line', 'Line', Minus],
                         ['arrow', 'Arrow', ArrowUpRight],
                       ] as const
-                    ).map(([toolId, label, Icon]) => (
+                    ).filter(([toolId]) => !isToolHidden(toolId)).map(([toolId, label, Icon]) => (
                       <button
                         key={toolId}
                         type="button"
@@ -3021,6 +3064,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     <div className="h-4 w-px bg-black/15 dark:bg-white/15 mx-0.5" />
                     <button
                       type="button"
+                      hidden={isToolHidden('table')}
                       onClick={() => addNewElement('table')}
                       className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
                     >
@@ -3029,6 +3073,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     </button>
                     <button
                       type="button"
+                      hidden={isToolHidden('block')}
                       onClick={handleCreateDocumentBlock}
                       className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
                     >
@@ -3196,6 +3241,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     <div className="h-4 w-px bg-black/15 dark:bg-white/15 mx-0.5" />
                     <button
                       type="button"
+                      hidden={isToolHidden('rulers')}
                       onClick={() => setShowRulers((v) => !v)}
                       className={`px-2 py-1 rounded-lg flex items-center gap-1 whitespace-nowrap ${
                         showRulers ? 'studio-active-surface' : 'hover:bg-black/5 dark:hover:bg-white/10'
@@ -3206,6 +3252,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     </button>
                     <button
                       type="button"
+                      hidden={isToolHidden('grid')}
                       onClick={() => setShowGrid((v) => !v)}
                       className={`px-2 py-1 rounded-lg flex items-center gap-1 whitespace-nowrap ${
                         showGrid ? 'studio-active-surface' : 'hover:bg-black/5 dark:hover:bg-white/10'
@@ -3216,6 +3263,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     </button>
                     <button
                       type="button"
+                      hidden={isToolHidden('snap')}
                       onClick={handleToggleSnapAndGuides}
                       className={`px-2 py-1 rounded-lg flex items-center gap-1 whitespace-nowrap ${
                         snapToGrid && showGuides
@@ -3228,6 +3276,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     </button>
                     <button
                       type="button"
+                      hidden={isToolHidden('crop')}
                       onClick={() => {
                         setCropMode((v) => {
                           const next = !v;
@@ -3265,6 +3314,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     </button>
                     <button
                       type="button"
+                      hidden={isToolHidden('dupPage')}
                       onClick={handleDuplicatePage}
                       className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
                     >
@@ -3273,6 +3323,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                     </button>
                     <button
                       type="button"
+                      hidden={isToolHidden('history')}
                       onClick={() => setShowVersionModal(true)}
                       className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
                     >
@@ -3328,6 +3379,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                         </button>
                         <button
                           type="button"
+                          hidden={isToolHidden('qc')}
                           onClick={() => onNavigateSection('preflight')}
                           className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
                         >
@@ -3336,6 +3388,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                         </button>
                         <button
                           type="button"
+                          hidden={isToolHidden('qc')}
                           onClick={() => onNavigateSection('compare')}
                           className="px-2.5 py-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10 font-medium flex items-center gap-1 whitespace-nowrap"
                         >
@@ -3443,6 +3496,23 @@ export const EditorView: React.FC<EditorViewProps> = ({
         )}
       </AnimatePresence>
 
+      {/* Pinned favorite tools configured in Settings */}
+      {!viewport.isMobile && (settings.favoriteTools || ['text', 'rect', 'qr_code', 'barcode']).length > 0 && (
+        <div className="px-3 py-1 border-b border-black/10 dark:border-white/10 glass-level-1 flex items-center gap-1.5 text-[11px] shrink-0 overflow-x-auto no-scrollbar">
+          <span className="text-[#888888] dark:text-[#858585] shrink-0">Pinned:</span>
+          {(settings.favoriteTools || ['text', 'rect', 'qr_code', 'barcode']).filter((id) => !isToolHidden(id)).map((id) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => handleRunFavoriteTool(id)}
+              className="px-2 py-0.5 rounded-lg border border-black/10 dark:border-white/12 glass-level-3 text-[#555555] dark:text-[#B5B5B5] hover:border-black/40 dark:hover:border-white/40 hover:text-[#101010] dark:hover:text-white capitalize transition-colors"
+            >
+              {({ qr_code: 'QR Code', barcode: 'Barcode', image: 'Image', signature: 'Signature', redact: 'Redact', measure: 'Measure' } as Record<string, string>)[id] || id.replace(/_/g, ' ')}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Desktop Recent Tools Strip & Style Feedback */}
       {!viewport.isMobile &&
         ((settings.recentTools && settings.recentTools.length > 0 && !isToolHidden('recentBar')) ||
@@ -3460,6 +3530,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
                       t === 'rect' ||
                       t === 'circle' ||
                       t === 'line' ||
+                      t === 'border' ||
                       t === 'table' ||
                       t === 'qr_code' ||
                       t === 'barcode'
@@ -3469,12 +3540,18 @@ export const EditorView: React.FC<EditorViewProps> = ({
                       imageUploadRef.current?.click();
                     } else if (t === 'duplicate') {
                       handleDuplicateSelected();
+                    } else if (t === 'group') {
+                      handleGroupToggle();
                     } else if (t === 'crop') {
                       setCropMode((v) => !v);
                     } else if (t === 'search') {
                       setShowSearchBar((v) => !v);
                     } else if (t.startsWith('align_')) {
                       handleAlignSelected(t.replace('align_', '') as AlignMode);
+                    } else if (t.startsWith('distribute_')) {
+                      handleDistributeSelected(t.replace('distribute_', '') as 'horizontal' | 'vertical');
+                    } else if (t.startsWith('space_')) {
+                      handleEqualSpaceSelected(t.replace('space_', '') as 'horizontal' | 'vertical');
                     }
                   }}
                   className="px-2 py-0.5 rounded-lg border border-black/10 dark:border-white/12 glass-level-3 text-[#555555] dark:text-[#B5B5B5] hover:border-black/40 dark:hover:border-white/40 hover:text-[#101010] dark:hover:text-white capitalize transition-colors"

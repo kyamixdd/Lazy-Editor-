@@ -15,6 +15,7 @@ export type NavSection =
   | 'export-center'
   | 'pdf-utilities'
   | 'settings'
+  | 'user-manual'
   | 'about';
 
 export type MeasurementUnit = 'pt' | 'mm' | 'cm' | 'in' | 'px';
@@ -1010,6 +1011,8 @@ export interface BatchJob {
   outputFileName?: string;
   outputMimeType?: string;
   outputSizeBytes?: number;
+  /** IndexedDB-persisted export payload so completed jobs remain downloadable after reload. */
+  outputBlob?: Blob;
   error?: string;
   createdAt: string;
   startedAt?: string;

@@ -3,6 +3,10 @@ import {
   ArrowRight,
   Info,
   Keyboard,
+  Eye,
+  EyeOff,
+  Sparkles,
+  CheckCircle2,
   Plus,
   RotateCcw,
   Sliders,
@@ -12,7 +16,6 @@ import {
 import {
   APP_COPYRIGHT_YEAR,
   APP_PRODUCT_NAME,
-  APP_SUITE_NAME,
   APP_VERSION,
   DEVELOPER_PROFILE,
 } from '../config/appInfo';
@@ -30,6 +33,7 @@ import { PAGE_PRESETS_PT } from '../utils/units';
 import { BrandMark } from './BrandMark';
 import { GlassButton, GlassCard } from './glass';
 import { NumericDraftInput } from './NumericDraftInput';
+import { getGeminiApiKey, saveGeminiApiKey, removeGeminiApiKey } from '../utils/geminiKey';
 
 interface SettingsViewProps {
   settings: StudioSettings;
@@ -143,6 +147,32 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [capturingAction, setCapturingAction] =
     useState<ShortcutActionId | null>(null);
   const [presetNameInput, setPresetNameInput] = useState('');
+  const [geminiKey, setGeminiKey] = useState(() => getGeminiApiKey());
+  const [showGeminiKey, setShowGeminiKey] = useState(false);
+  const [geminiStatus, setGeminiStatus] = useState<{ kind: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [validatingGemini, setValidatingGemini] = useState(false);
+
+  const validateGeminiKey = async () => {
+    const key = geminiKey.trim();
+    if (!key) { setGeminiStatus({ kind: 'error', message: 'Enter your Gemini API key first.' }); return; }
+    setValidatingGemini(true);
+    setGeminiStatus(null);
+    try {
+      const response = await fetch('/api/ai/validate-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Gemini-Api-Key': key },
+        body: JSON.stringify({}),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) throw new Error(data.error || 'Gemini key validation failed.');
+      saveGeminiApiKey(key);
+      setGeminiKey(key);
+      setGeminiStatus({ kind: 'success', message: 'API key verified and saved in this browser.' });
+    } catch (error) {
+      setGeminiStatus({ kind: 'error', message: error instanceof Error ? error.message : 'Could not validate the API key.' });
+    } finally { setValidatingGemini(false); }
+  };
+
 
   const allPresets = [...BUILTIN_EDITING_PRESETS, ...(settings.editingPresets || [])];
   const favoriteTools = settings.favoriteTools || ['text', 'rect', 'qr_code', 'barcode'];
@@ -201,25 +231,72 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <BrandMark size="md" />
             <div className="min-w-0">
               <div className="text-sm font-display font-semibold text-[#101010] dark:text-white truncate">
-                {APP_PRODUCT_NAME} · {APP_SUITE_NAME}
+                {APP_PRODUCT_NAME}
               </div>
               <div className="mt-0.5 text-[#555555] dark:text-[#B5B5B5] truncate tabular-nums">
                 Version {APP_VERSION} · Developed by {DEVELOPER_PROFILE.name} · © {APP_COPYRIGHT_YEAR}
               </div>
             </div>
           </div>
-          <GlassButton
-            variant="glass"
-            size="md"
-            onClick={() => onNavigate('about')}
-            className="shrink-0"
-          >
-            <Info className="w-3.5 h-3.5 text-[#101010] dark:text-white" />
-            About Us
-            <ArrowRight className="w-3.5 h-3.5" />
-          </GlassButton>
+          <div className="flex flex-wrap gap-2 shrink-0">
+            <GlassButton variant="glass" size="md" onClick={() => onNavigate('user-manual')}>
+              <Keyboard className="w-3.5 h-3.5" /> User Manual <ArrowRight className="w-3.5 h-3.5" />
+            </GlassButton>
+            <GlassButton variant="glass" size="md" onClick={() => onNavigate('about')}>
+              <Info className="w-3.5 h-3.5 text-[#101010] dark:text-white" />
+              About Us
+              <ArrowRight className="w-3.5 h-3.5" />
+            </GlassButton>
+          </div>
         </GlassCard>
       )}
+
+      {/* Gemini API configuration */}
+      <GlassCard level={3} padding="md" className="space-y-4 text-xs">
+        <div className="flex items-center gap-2">
+          <Sparkles className="w-4 h-4 text-[#101010] dark:text-white" />
+          <div>
+            <h2 className="text-sm font-semibold text-[#101010] dark:text-white">AI & Gemini API</h2>
+            <p className="text-[11px] text-[#555555] dark:text-[#B5B5B5]">Use your own Google Gemini API key for AI document analysis and editing commands.</p>
+          </div>
+        </div>
+        <label className="block">
+          <span className="font-medium text-[#555555] dark:text-[#B5B5B5]">Gemini API key</span>
+          <div className="mt-1.5 flex gap-2">
+            <input
+              type={showGeminiKey ? 'text' : 'password'}
+              autoComplete="off"
+              spellCheck={false}
+              value={geminiKey}
+              onChange={(e) => { setGeminiKey(e.target.value); setGeminiStatus(null); }}
+              placeholder="Paste your Gemini API key"
+              className="min-w-0 flex-1 min-h-[44px] px-3 py-2 rounded-lg border studio-select font-mono"
+            />
+            <button type="button" onClick={() => setShowGeminiKey((v) => !v)} aria-label={showGeminiKey ? 'Hide API key' : 'Show API key'} className="px-3 rounded-lg border border-black/15 dark:border-white/15 text-[#101010] dark:text-white">
+              {showGeminiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
+          </div>
+        </label>
+        <div className="flex flex-wrap gap-2">
+          <GlassButton variant="primary" size="md" onClick={() => void validateGeminiKey()} disabled={validatingGemini || !geminiKey.trim()}>
+            {validatingGemini ? 'Checking key…' : 'Verify & Save Key'}
+          </GlassButton>
+          <GlassButton variant="glass" size="md" onClick={() => { removeGeminiApiKey(); setGeminiKey(''); setGeminiStatus({ kind: 'info', message: 'Saved Gemini key removed from this browser.' }); }}>
+            Remove Key
+          </GlassButton>
+        </div>
+        {geminiStatus && (
+          <p role="status" className={geminiStatus.kind === 'success' ? 'text-emerald-600 dark:text-emerald-400' : geminiStatus.kind === 'error' ? 'text-red-600 dark:text-red-400' : 'text-[#555555] dark:text-[#B5B5B5]'}>
+            {geminiStatus.kind === 'success' && <CheckCircle2 className="inline w-3.5 h-3.5 mr-1" />}
+            {geminiStatus.message}
+          </p>
+        )}
+        <div className="rounded-lg border border-black/10 dark:border-white/12 p-3 space-y-1 text-[#555555] dark:text-[#B5B5B5]">
+          <p><strong className="text-[#101010] dark:text-white">Privacy & security</strong></p>
+          <p>Your key is saved in this browser's local storage and sent to Lazy Editor's server only over HTTPS when you use AI. The server does not save it. Anyone with access to this browser profile may be able to use the key, so remove it on shared devices. Never share your key or paste it into project documents.</p>
+          <p>Get a key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="underline font-medium">Google AI Studio</a>. AI requests may consume your Google API quota and may incur charges under Google's terms.</p>
+        </div>
+      </GlassCard>
 
       {/* Appearance, Units & Workspace Layout */}
       <GlassCard level={3} padding="md" className="space-y-5 text-xs">

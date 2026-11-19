@@ -329,7 +329,7 @@ export const DataManagerView: React.FC<DataManagerViewProps> = ({
           <input
             ref={fileInputRef}
             type="file"
-            accept=".csv,.xlsx,.xls"
+            accept=".csv,.xlsx,.xls,.json,application/json"
             className="hidden"
             onChange={(e) => void handleImportFile(e.target.files?.[0])}
           />

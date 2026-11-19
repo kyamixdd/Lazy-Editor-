@@ -113,7 +113,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   const templatesCount = projects.filter((p) => p.isTemplate).length;
   const favoritesCount = projects.filter((p) => p.isFavorite).length;
-  const totalRecords = projects.reduce((acc, p) => acc + p.dataRows.length, 0);
+  const totalRecords = projects.reduce(
+    (acc, p) => acc + (Array.isArray(p.dataRows) ? p.dataRows.length : 0),
+    0
+  );
   const storagePercent = storageInfo?.percentUsed ?? 0;
 
   const animateIntro = shouldPlayIntroRef.current && !prefersReduced;

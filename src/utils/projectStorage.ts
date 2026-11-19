@@ -15,6 +15,7 @@ import {
   UnsavedDraftRecord,
   WorkflowChain,
 } from '../types/pdfStudio';
+import { createDefaultPageConfig } from './units';
 
 const DB_NAME = 'pdf_studio_ai_db';
 const DB_VERSION = 6;
@@ -127,8 +128,20 @@ export function normalizeStoredProject(value: unknown): PDFProject | null {
   if (!value || typeof value !== 'object') return null;
   const project = value as Partial<PDFProject> & Record<string, unknown>;
   if (typeof project.id !== 'string' || !project.id) return null;
+  const storedPageConfig = project.pageConfig && typeof project.pageConfig === 'object'
+    ? project.pageConfig as Partial<PDFProject['pageConfig']>
+    : {};
+  const pageConfig = {
+    ...createDefaultPageConfig(),
+    ...storedPageConfig,
+    sizePreset: storedPageConfig.sizePreset || 'A4',
+    widthPt: Number.isFinite(storedPageConfig.widthPt) ? storedPageConfig.widthPt! : 595.28,
+    heightPt: Number.isFinite(storedPageConfig.heightPt) ? storedPageConfig.heightPt! : 841.89,
+    unit: storedPageConfig.unit || 'mm',
+  };
   return {
     ...project,
+    pageConfig,
     name: typeof project.name === 'string' ? project.name : 'Untitled project',
     description: typeof project.description === 'string' ? project.description : '',
     sourcePdfName: typeof project.sourcePdfName === 'string' ? project.sourcePdfName : 'document.pdf',

@@ -93,13 +93,11 @@ export function getNavigationDirection(from: NavSection, to: NavSection): number
 export const screenVariants: Variants = {
   initial: (direction: number) => ({
     opacity: 0,
-    x: direction >= 0 ? 14 : -14,
-    scale: 0.994,
+    x: direction >= 0 ? 8 : -8,
   }),
   animate: {
     opacity: 1,
     x: 0,
-    scale: 1,
     transition: {
       duration: MOTION_DURATION.normal,
       ease: MOTION_EASE.liquid,
@@ -107,8 +105,7 @@ export const screenVariants: Variants = {
   },
   exit: (direction: number) => ({
     opacity: 0,
-    x: direction >= 0 ? -10 : 10,
-    scale: 0.996,
+    x: direction >= 0 ? -6 : 6,
     pointerEvents: 'none',
     transition: {
       duration: MOTION_DURATION.fast,

@@ -3,6 +3,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
+import { resolveGeminiModel } from './src/utils/geminiModel';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
 dotenv.config();

@@ -384,6 +384,9 @@ export async function parseSpreadsheetFile(file: File): Promise<{
     let candidate: unknown = parsed;
     if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
       const root = candidate as Record<string, unknown>;
+      if (root.scanReport && Array.isArray(root.elements) && Array.isArray(root.pages)) {
+        throw new Error('This is a Lazy Editor Scan Structure export, not a CSV/Excel dataset. Import it through the Scan Inspector restore/import workflow (if available), or open the original PDF in New Project. The JSON contains image resource references, not the original PDF or embedded image files.');
+      }
       candidate = Array.isArray(root.rows) ? root.rows
         : Array.isArray(root.dataRows) ? root.dataRows
         : Array.isArray(root.data) ? root.data

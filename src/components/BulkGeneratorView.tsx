@@ -1013,7 +1013,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                     <input
                       ref={csvInputRef}
                       type="file"
-                      accept=".csv,.xlsx,.xls"
+                      accept=".csv,.xlsx,.xls,.json,application/json"
                       className="hidden"
                       onChange={(e) => void handleImportCsv(e.target.files?.[0])}
                     />
@@ -1023,7 +1023,7 @@ export const BulkGeneratorView: React.FC<BulkGeneratorViewProps> = ({
                       className="min-h-[36px] px-2.5 py-1 rounded-lg border border-black/15 dark:border-white/15 bg-white/80 dark:bg-white/[0.06] text-[#101010] dark:text-white hover:bg-black/[0.04] dark:hover:bg-white/[0.12] font-medium flex items-center gap-1.5 transition-colors"
                     >
                       <Upload className="w-3.5 h-3.5" />
-                      Import CSV / Excel
+                      Import CSV / Excel / JSON
                     </button>
                   </div>
                 </div>

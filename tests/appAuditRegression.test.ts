@@ -48,6 +48,7 @@ import {
   inspectPendingRedactions,
 } from '../src/utils/redactionEngine';
 import { validateProject } from '../src/utils/validationEngine';
+import { normalizeStoredProject } from '../src/utils/projectStorage';
 import { generateExportBytes } from '../src/utils/pdfExporter';
 import {
   createDefaultBulkConfig,
@@ -134,6 +135,16 @@ function makeTestProject(overrides: Partial<PDFProject> = {}): PDFProject {
 // ---------------------------------------------------------------------------
 // 1. Editor Interaction Helpers (Toggles, Escape Stack, Numeric Commit)
 // ---------------------------------------------------------------------------
+
+test('projectStorage: legacy projects receive safe page configuration defaults', () => {
+  const legacy = normalizeStoredProject({ id: 'legacy-project', name: 'Legacy', pageConfig: undefined });
+  assert.ok(legacy);
+  assert.equal(legacy.pageConfig.sizePreset, 'A4');
+  assert.equal(legacy.pageConfig.widthPt, 595.28);
+  assert.equal(legacy.pageConfig.heightPt, 841.89);
+  assert.deepEqual(legacy.dataRows, []);
+  assert.deepEqual(legacy.elements, []);
+});
 
 test('editorInteractions: toggleEditorTool activates, deactivates on repeat, and switches cleanly', () => {
   const first = toggleEditorTool('select', 'rect', false);

@@ -77,7 +77,8 @@ export const SECTION_ORDER: Record<NavSection, number> = {
   'export-center': 13,
   'pdf-utilities': 14,
   settings: 15,
-  about: 16,
+  'user-manual': 16,
+  about: 17,
 };
 
 export function getNavigationDirection(from: NavSection, to: NavSection): number {

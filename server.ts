@@ -403,7 +403,7 @@ app.post('/api/ai/validate-key', async (req, res) => {
     }
     const ai = getGeminiClient(req);
     await ai.models.generateContent({
-      model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+      model: resolveGeminiModel(process.env.GEMINI_MODEL),
       contents: 'Reply with the single word OK.',
       config: { maxOutputTokens: 8 },
     });
@@ -482,7 +482,7 @@ Instructions:
 6. Suggest a clean 'fieldKey' for dynamic/data-mappable fields (like "invoice_number", "receipt_number", "customer_name", "date", "total_amount").`;
 
       const response = await ai.models.generateContent({
-        model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+        model: resolveGeminiModel(process.env.GEMINI_MODEL),
         contents: {
           parts: [
             {
@@ -699,7 +699,7 @@ Rules:
 - Never invent non-existent targetIds.`;
 
     const response = await ai.models.generateContent({
-      model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+      model: resolveGeminiModel(process.env.GEMINI_MODEL),
       contents: prompt,
       config: {
         thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },

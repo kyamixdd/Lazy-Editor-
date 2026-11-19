@@ -27,6 +27,7 @@ import {
   analyzeDataQuality,
   evaluateFormula,
   formatCellValue,
+  parseSpreadsheetFile,
 } from '../src/utils/dataFormulaEngine';
 import {
   alignSelectedElements,
@@ -806,3 +807,30 @@ test('editorInteractions: computeProjectDirtySignature ignores version increment
   assert.notEqual(computeProjectDirtySignature(afterEdit), sigInitial);
 });
 
+
+
+test('data import: JSON arrays and wrapped row collections import safely with unioned columns', async () => {
+  const file = new File(
+    [JSON.stringify({ rows: [
+      { customer: 'Northwind', amount: 125, active: true },
+      { customer: 'Contoso', amount: 240, note: 'late', active: false },
+    ] })],
+    'customers.json',
+    { type: 'application/json' }
+  );
+  const parsed = await parseSpreadsheetFile(file);
+  assert.deepEqual(parsed.columns.map((column) => column.name), ['customer', 'amount', 'active', 'note']);
+  assert.equal(parsed.rows.length, 2);
+  assert.equal(parsed.rows[0].customer, 'Northwind');
+  assert.equal(parsed.rows[1].note, 'late');
+  assert.equal(parsed.rows[0].active, 'true');
+  assert.equal(parsed.rows[1].amount, 240);
+});
+
+test('data import: rejects malformed JSON and non-record rows with actionable errors', async () => {
+  const malformed = new File(['{ invalid'], 'broken.json', { type: 'application/json' });
+  await assert.rejects(() => parseSpreadsheetFile(malformed), /JSON file is invalid/);
+
+  const invalidRows = new File(['[1,2,3]'], 'numbers.json', { type: 'application/json' });
+  await assert.rejects(() => parseSpreadsheetFile(invalidRows), /row 1 is not an object/);
+});

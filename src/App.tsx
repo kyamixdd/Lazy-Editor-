@@ -728,7 +728,7 @@ export default function App() {
           </AnimatePresence>
 
           <AnimatePresence
-            mode="wait"
+            mode="sync"
             custom={navDirection}
             onExitComplete={() => {
               if (activeSection !== 'editor' && typeof window !== 'undefined') {
